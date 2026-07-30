@@ -975,3 +975,61 @@ html[data-motion="off"] *::after {
     .auth-visual { display: none; }
     .auth-panel { min-height: 100vh; padding: 24px; border-left: 0; }
 }
+
+/* ── 多模态附件（P0）────────────────────────────────────────── */
+.pending-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    padding: 4px 2px 6px;
+}
+.pending-chip {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    max-width: 220px;
+    padding: 4px 6px 4px 10px;
+    border-radius: 999px;
+    border: 1px solid var(--line);
+    background: var(--soft);
+    color: var(--ink-2);
+    font-size: 12px;
+    line-height: 1.4;
+}
+.pending-chip > span,
+.pending-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-chip.failed { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
+.pending-chip-remove {
+    flex: 0 0 auto;
+    width: 18px; height: 18px;
+    border: 0; background: transparent;
+    border-radius: 50%;
+    color: var(--ink-3);
+    cursor: pointer;
+    font-size: 14px; line-height: 1;
+}
+.pending-chip-remove:hover { background: var(--soft-hover); color: var(--ink); }
+
+.attach-button { cursor: pointer; }
+.attach-button input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
+
+.msg-attachments {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 6px;
+    margin-top: 6px;
+}
+.attachment-card {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 5px 10px;
+    border-radius: 10px;
+    border: 1px solid var(--line);
+    background: var(--soft);
+    color: var(--ink-2);
+    font-size: 12px;
+    max-width: 240px;
+}
+.attachment-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.attachment-icon { font-size: 14px; }

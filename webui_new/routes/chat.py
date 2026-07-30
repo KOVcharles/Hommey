@@ -43,13 +43,15 @@ def create_chat_router(manager):
         if not instance or not instance.initialized:
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
 
-        if not data.message.strip():
-            raise BusinessError("EMPTY_MESSAGE", "请输入消息")
+        if not data.message.strip() and not data.attachment_ids:
+            raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         try:
             rid = request_id(request)
             logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(data.message))
-            result = await instance.process_message(data.message, request_id=rid)
+            result = await instance.process_message(
+                data.message, request_id=rid, attachment_ids=data.attachment_ids
+            )
             safe_response = redact_sensitive_text(result.get("response", ""))
             logger.info("[%s] ◀ %s...", user_id, safe_response[:80])
             return result
@@ -68,15 +70,19 @@ def create_chat_router(manager):
         if not instance or not instance.initialized:
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
 
-        if not data.message.strip():
-            raise BusinessError("EMPTY_MESSAGE", "请输入消息")
+        if not data.message.strip() and not data.attachment_ids:
+            raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         async def event_stream():
             """把 instance.stream_message() 的事件逐行编码为 NDJSON。"""
             started_at = time.perf_counter()
             try:
                 logger.info("[%s] -> %s", user_id, redact_sensitive_text(data.message))
-                async for event in instance.stream_message(data.message, request_id=request_id(request)):
+                async for event in instance.stream_message(
+                    data.message,
+                    request_id=request_id(request),
+                    attachment_ids=data.attachment_ids,
+                ):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except asyncio.CancelledError:
                 duration_ms = int((time.perf_counter() - started_at) * 1000)

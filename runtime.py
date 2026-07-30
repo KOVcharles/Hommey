@@ -26,6 +26,20 @@ class AgentRuntime:
     agent_registry: LazyAgentRegistry
     orchestrator: OrchestrationAgent
     agent_cache: Dict
+    attachment_service: Optional[object] = None  # 多模态附件服务（共享单例）
+
+
+# 多模态附件服务单例：跨用户共享（按 user_id/attachment_id 隔离），惰性构造。
+_shared_attachment_service = None
+
+
+def get_shared_attachment_service():
+    global _shared_attachment_service
+    if _shared_attachment_service is None:
+        from multimodal.service import AttachmentService
+
+        _shared_attachment_service = AttachmentService()
+    return _shared_attachment_service
 
 
 def create_agent_runtime(
@@ -87,6 +101,7 @@ def create_agent_runtime(
         agent_registry=agent_registry,
         orchestrator=orchestrator,
         agent_cache=cache,
+        attachment_service=get_shared_attachment_service(),
     )
 
 

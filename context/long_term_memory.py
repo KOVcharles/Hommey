@@ -137,7 +137,9 @@ class FileLongTermMemory:
         ):
             logger.info("Skipped duplicate chat message for request %s (%s)", request_id, role)
             return False
+        message_id = f"msg_{uuid.uuid4().hex}"
         self.data.setdefault("chat_history", []).append({
+            "id": message_id,
             "role": role,
             "content": content,
             "timestamp": _utc_now_iso(),
@@ -148,7 +150,7 @@ class FileLongTermMemory:
         stats["total_messages"] = int(stats.get("total_messages", 0)) + 1
         self._save()
         logger.debug(f"Added chat message to long-term memory: {role}")
-        return True
+        return message_id
 
     def get_chat_history(
         self,
@@ -449,6 +451,65 @@ class PostgresLongTermMemory:
                 );
                 """
             )
+            # 多模态附件（与迁移 0005_multimodal_attachments.sql 保持一致）
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT,
+                    request_id TEXT,
+                    filename TEXT NOT NULL,
+                    mime_type TEXT,
+                    kind TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    sha256 TEXT,
+                    object_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_code TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_attachments_user_created
+                ON attachments (user_id, created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachment_extractions (
+                    attachment_id TEXT PRIMARY KEY
+                        REFERENCES attachments(id) ON DELETE CASCADE,
+                    parser_version TEXT,
+                    language TEXT,
+                    content_text TEXT,
+                    structured JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_message_attachments (
+                    chat_history_id BIGINT NOT NULL
+                        REFERENCES chat_history(id) ON DELETE CASCADE,
+                    attachment_id TEXT NOT NULL
+                        REFERENCES attachments(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (chat_history_id, attachment_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_message_attachments_attachment
+                ON chat_message_attachments (attachment_id);
+                """
+            )
 
     def _ensure_user_stats_row(self):
         """确保用户统计行存在"""
@@ -583,7 +644,7 @@ class PostgresLongTermMemory:
                 (self.user_id,),
             )
         logger.debug(f"Added chat message to long-term memory: {role}")
-        return True
+        return inserted["id"]
 
     def get_chat_history(
         self,
@@ -603,7 +664,7 @@ class PostgresLongTermMemory:
             消息列表
         """
         sql = """
-            SELECT role, content, created_at, session_id, request_id
+            SELECT id, role, content, created_at, session_id, request_id
             FROM chat_history
             WHERE user_id = %s
         """
@@ -627,6 +688,7 @@ class PostgresLongTermMemory:
         rows.reverse()
         return [
             {
+                "id": row["id"],
                 "role": row["role"],
                 "content": row["content"],
                 "timestamp": row["created_at"].isoformat(),

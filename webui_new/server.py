@@ -29,6 +29,7 @@ from utils.structured_logging import configure_logging
 from webui_new.core.errors import register_error_handlers
 from webui_new.manager import WebHommeyManager
 from webui_new.routes.auth import create_auth_router
+from webui_new.routes.attachments import create_attachments_router
 from webui_new.routes.chat import create_chat_router
 from webui_new.routes.onboarding import create_onboarding_router
 from webui_new.routes.pages import create_pages_router
@@ -50,6 +51,11 @@ async def lifespan(_app):
 app = FastAPI(title="Hommey 商旅助手", version="3.0.0", lifespan=lifespan)
 manager = WebHommeyManager()
 skill_platform = SkillPlatformService()
+
+# 多模态附件服务（与 runtime 共享同一单例：路由用于上传，manager 用于 normalize/绑定）。
+from runtime import get_shared_attachment_service  # noqa: E402
+
+attachment_service = get_shared_attachment_service()
 
 static_dir = os.path.join(os.path.dirname(__file__), "static")
 templates_dir = os.path.join(os.path.dirname(__file__), "templates")
@@ -73,6 +79,7 @@ app.include_router(create_auth_router())
 app.include_router(create_users_router(manager))
 app.include_router(create_onboarding_router(manager))
 app.include_router(create_chat_router(manager))
+app.include_router(create_attachments_router(attachment_service))
 app.include_router(create_skill_admin_router(skill_platform))
 
 

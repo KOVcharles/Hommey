@@ -62,6 +62,7 @@ class HommeyWebInstance:
         self.memory_manager: Optional[MemoryManager] = None
         self.orchestrator: Optional[OrchestrationAgent] = None
         self.intention_agent: Optional[IntentionAgent] = None
+        self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
         self._agent_cache = {}
         self.circuit_breaker: Optional[CircuitBreaker] = None
@@ -88,6 +89,7 @@ class HommeyWebInstance:
             self.memory_manager = runtime.memory_manager
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
+            self.attachment_service = getattr(runtime, "attachment_service", None)
             self._agent_cache = runtime.agent_cache
             self.circuit_breaker = create_circuit_breaker()
 
@@ -176,8 +178,31 @@ class HommeyWebInstance:
         return {
             "session_id": session_id,
             "title": titles.get(session_id),
-            "messages": rows,
+            "messages": self._with_attachments(rows),
         }
+
+    def _with_attachments(self, rows: list[dict]) -> list[dict]:
+        """给历史消息附带其绑定的附件清单（供前端渲染附件卡片）。仅在附件服务可用时生效。"""
+        if not self.attachment_service or not rows:
+            return rows
+        repository = getattr(self.attachment_service, "repository", None)
+        if repository is None:
+            return rows
+        enriched = []
+        for row in rows:
+            message_id = row.get("id")
+            if row.get("role") == "user" and message_id is not None and not isinstance(message_id, bool):
+                try:
+                    attachments = repository.attachments_for_message(message_id)
+                    if attachments:
+                        row["attachments"] = [
+                            {"id": a.id, "filename": a.filename, "kind": a.kind}
+                            for a in attachments
+                        ]
+                except Exception as e:
+                    logger.warning("加载消息附件失败 message_id=%s: %s", message_id, sanitize_for_log(e))
+            enriched.append(row)
+        return enriched
 
     def start_new_chat_session(self) -> str:
         session_id = str(uuid.uuid4())[:8]
@@ -269,6 +294,23 @@ class HommeyWebInstance:
             return True
         return False
 
+    def _normalize_input(
+        self, message: str, attachment_ids: list[str] | None
+    ) -> tuple[str, str]:
+        """方案 §4.5：把附件规范化为 agent_query（喂 LLM）与 display_message（写记忆）。
+
+        无附件或附件服务未注入时，agent_query == display_message == message。
+        """
+        if attachment_ids and self.attachment_service is not None:
+            try:
+                normalized = self.attachment_service.normalize(message, attachment_ids, self.user_id)
+                return normalized.agent_query, normalized.display_message
+            except AppError:
+                raise
+            except Exception as e:
+                logger.warning("附件规范化失败，回退为纯文本: %s", sanitize_for_log(e))
+        return message, message
+
     async def _get_cached_summary(self) -> str:
         """Cache only query-independent memory; dynamic trip retrieval stays per request."""
         stats = self.memory_manager.short_term.get_statistics()
@@ -324,7 +366,12 @@ class HommeyWebInstance:
             return "已结束当前行程任务。" if completed else "当前没有进行中的行程任务。"
         return None
 
-    async def process_message(self, message: str, request_id: str | None = None) -> dict:
+    async def process_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+    ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
         rc = RESILIENCE_CONFIG
         budget = ExecutionBudget(
@@ -335,7 +382,9 @@ class HommeyWebInstance:
         try:
             with execution_budget_scope(budget):
                 return await asyncio.wait_for(
-                    self._process_message_impl(message, request_id=request_id),
+                    self._process_message_impl(
+                        message, request_id=request_id, attachment_ids=attachment_ids
+                    ),
                     timeout=rc.get("request_timeout_sec", 120.0),
                 )
         except ExecutionLimitExceeded as exc:
@@ -362,7 +411,12 @@ class HommeyWebInstance:
         finally:
             logger.info("Request execution budget user_id=%s budget=%s", self.user_id, budget.snapshot())
 
-    async def _process_message_impl(self, message: str, request_id: str | None = None) -> dict:
+    async def _process_message_impl(
+        self,
+        message: str,
+        request_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+    ) -> dict:
         """处理用户消息，返回响应"""
         from agentscope.message import Msg
 
@@ -387,25 +441,31 @@ class HommeyWebInstance:
         if self.memory_manager is not None:
             self.memory_manager.current_request_id = request_id
 
+        # 多模态输入规范化（方案 §4.5）：附件只进 agent_query，display_message 进记忆。
+        agent_query, display_message = self._normalize_input(message, attachment_ids)
+
         lifecycle_response = self._handle_task_lifecycle_command(message)
         if lifecycle_response:
-            self.memory_manager.add_message("user", message, metadata)
+            self.memory_manager.add_message("user", display_message, metadata)
             self.memory_manager.add_message("assistant", lifecycle_response, metadata)
             return {"response": lifecycle_response, "agents": [], "preferences_updated": False}
 
         # ═══ 优化 1: 简单闲聊直接处理，不经过 LLM ═══
-        if self._is_simple_chitchat(message):
-            self.memory_manager.add_message("user", message, metadata)
+        # 带附件时不走闲聊短路，避免附件问题被草率打发。
+        if self._is_simple_chitchat(message) and not attachment_ids:
+            self.memory_manager.add_message("user", display_message, metadata)
             response = await self._handle_chitchat(message)
             self.memory_manager.add_message("assistant", response, metadata)
             return {"response": response, "agents": [], "preferences_updated": False}
 
         rc = RESILIENCE_CONFIG
         agent_max_retries = rc.get("agent_max_retries", 1)
-        fast_route = self._route_without_context(message)
+        # 带附件时强制走完整意图链路（_build_context 会把 agent_query 含附件上下文喂给 LLM），
+        # 不走绕过上下文的 fast_route，避免附件文本无法到达模型。
+        fast_route = None if attachment_ids else self._route_without_context(message)
 
         if fast_route:
-            intention_data = fast_route.to_intention_data(message)
+            intention_data = fast_route.to_intention_data(agent_query)
             intention_result = Msg(
                 name="IntentionAgent",
                 content=json.dumps(intention_data, ensure_ascii=False),
@@ -416,7 +476,7 @@ class HommeyWebInstance:
         else:
             # ═══ 优化 2: 缓存长期记忆摘要，避免每次都 LLM 总结 ═══
             # 同时构建上下文和意图识别可以部分重叠
-            context_future = asyncio.ensure_future(self._build_context(message))
+            context_future = asyncio.ensure_future(self._build_context(agent_query))
 
             # 2. Intent recognition
             try:
@@ -470,7 +530,13 @@ class HommeyWebInstance:
             )
 
         self._total_messages += 1
-        self.memory_manager.add_message("user", message, metadata)
+        message_id = self.memory_manager.add_message("user", display_message, metadata)
+        # 把附件绑定到这条用户消息（方案 §4.4）；记忆只存 display_message，附件全文不进库。
+        if attachment_ids and self.attachment_service is not None and message_id is not False and message_id:
+            try:
+                self.attachment_service.bind(message_id, attachment_ids, self.user_id)
+            except Exception as e:
+                logger.warning("附件绑定失败 request_id=%s: %s", request_id, sanitize_for_log(e))
 
         # 3. Orchestration
         try:
@@ -509,7 +575,7 @@ class HommeyWebInstance:
                 response = result_data["message"]
                 self.memory_manager.add_message("assistant", response, metadata)
                 return {"response": response, "agents": [], "preferences_updated": False}
-            response = await self._handle_chitchat(message)
+            response = await self._handle_chitchat(agent_query)
             self.memory_manager.add_message("assistant", response, metadata)
             return {"response": response, "agents": [], "preferences_updated": False}
 
@@ -617,10 +683,17 @@ class HommeyWebInstance:
             return bool(data.get("answer") or data.get("content") or data.get("data", {}).get("answer"))
         return any(data.get(key) for key in ("answer", "content", "result", "message", "summary", "itinerary", "preferences"))
 
-    async def stream_message(self, message: str, request_id: str | None = None):
+    async def stream_message(
+        self,
+        message: str,
+        request_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+    ):
         """Yield JSON-serializable progress and response events for Web streaming."""
         yield {"type": "status", "message": "processing"}
-        result = await self.process_message(message, request_id=request_id)
+        result = await self.process_message(
+            message, request_id=request_id, attachment_ids=attachment_ids
+        )
 
         agents = result.get("agents", [])
         if agents:

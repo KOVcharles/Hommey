@@ -214,7 +214,9 @@ def test_current_session_overflow_is_included_in_summary_input(tmp_path):
 def test_file_message_and_trip_writes_are_idempotent_per_request(tmp_path):
     memory = FileLongTermMemory("u1", storage_path=str(tmp_path))
 
-    assert memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"}) is True
+    # add_chat_message 现返回新消息 id（truthy）；重复 request_id 仍返回 False。
+    first_id = memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"})
+    assert first_id and first_id is not False
     assert memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"}) is False
 
     first_trip = memory.save_trip_history({"destination": "杭州", "request_id": "r1"})

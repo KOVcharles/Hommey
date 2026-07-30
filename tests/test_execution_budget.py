@@ -75,7 +75,7 @@ def test_budgeted_model_counts_each_model_invocation():
 async def test_request_timeout_is_converted_to_public_error(monkeypatch):
     instance = HommeyWebInstance("u1")
 
-    async def slow_request(_message, request_id=None):
+    async def slow_request(_message, request_id=None, attachment_ids=None):
         await asyncio.sleep(0.05)
         return {}
 
@@ -93,7 +93,7 @@ async def test_request_timeout_is_converted_to_public_error(monkeypatch):
 async def test_request_budget_error_is_not_retryable(monkeypatch):
     instance = HommeyWebInstance("u1")
 
-    async def exhaust_budget(_message, request_id=None):
+    async def exhaust_budget(_message, request_id=None, attachment_ids=None):
         for _ in range(17):
             consume_external_call("weather")
         return {}

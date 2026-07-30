@@ -51,11 +51,16 @@
 
                 <form id="homeComposer" class="composer welcome-composer">
                     <textarea id="homeInput" rows="1" placeholder="今天想去哪儿？" aria-label="输入差旅需求" disabled></textarea>
+                    <div class="pending-attachments" style="display:none" aria-live="polite"></div>
                     <div class="composer-tools">
                         <span class="mode-badge">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/><path d="m9 12 2 2 4-4"/></svg>
                             <span>企业差旅</span>
                         </span>
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                        </label>
                         <span class="composer-spacer"></span>
                         <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -77,11 +82,16 @@
             <footer class="chat-composer-shell">
                 <div class="composer">
                     <textarea id="chatInput" rows="1" placeholder="继续问 Hommey" aria-label="继续提问" disabled></textarea>
+                    <div class="pending-attachments" style="display:none" aria-live="polite"></div>
                     <div class="composer-tools">
                         <span class="mode-badge">
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/></svg>
                             <span>企业差旅</span>
                         </span>
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                        </label>
                         <span class="composer-spacer"></span>
                         <button id="sendBtn" class="send-button" type="button" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>

@@ -51,6 +51,10 @@
     let rotationIndex = 0;
     let toastTimer;
 
+    // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
+    let pendingAttachments = [];
+    let currentRequestId = '';
+
     const rotatingPrompts = [
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
         { label: '查一下北京的住宿和交通标准', prompt: '北京出差的住宿和交通标准是什么' },
@@ -100,6 +104,20 @@
         homeComposer.addEventListener('submit', (event) => {
             event.preventDefault();
             submitHomeInput();
+        });
+
+        // 附件入口：每个 composer 的 .attach-button 内含一个隐藏 file input。
+        document.querySelectorAll('.attach-button').forEach((label) => {
+            const input = label.querySelector('input[type="file"]');
+            if (!input) return;
+            label.addEventListener('click', (e) => {
+                // 让 label 自身只触发一次（避免与 input 默认行为重复）。
+                if (e.target === input) return;
+            });
+            input.addEventListener('change', () => {
+                handleFilePick(input.files);
+                input.value = '';
+            });
         });
 
         document.getElementById('sidebarToggle').addEventListener('click', openSidebar);
@@ -386,7 +404,7 @@
             (data.messages || []).forEach((message) => {
                 const role = message.role === 'assistant' ? 'ai' : message.role;
                 if (role === 'ai' || role === 'user') {
-                    addMessage(role, message.content || '', message.timestamp);
+                    addMessage(role, message.content || '', message.timestamp, message.attachments);
                 }
             });
             enterChatView();
@@ -582,13 +600,131 @@
         loadSessions();
     }
 
+    function ensureRequestId() {
+        if (!currentRequestId) {
+            // 简单 uuid v4，无需依赖外部库。
+            currentRequestId = (crypto && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : 'xxxxxxxxxxxx4xxx'.replace(/x/g, (c) => ((Math.random() * 16) | 0).toString(16));
+        }
+        return currentRequestId;
+    }
+
+    function resetRequestId() {
+        currentRequestId = '';
+    }
+
+    async function uploadAttachment(file, onProgress) {
+        const requestId = ensureRequestId();
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `/api/${encodeURIComponent(userId)}/attachments`);
+            const token = getAccessToken();
+            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.setRequestHeader('X-Request-ID', requestId);
+            // 注意：不设置 Content-Type——FormData 会自动带 multipart boundary。
+            if (onProgress && xhr.upload) {
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) onProgress(e.loaded / e.total);
+                };
+            }
+            xhr.onload = async () => {
+                if (xhr.status === 401) {
+                    const refreshed = await refreshAccessToken();
+                    if (!refreshed) {
+                        reject(new Error('登录已过期，请重新登录'));
+                        return;
+                    }
+                    try { resolve(await uploadAttachment(file, onProgress)); } catch (e) { reject(e); }
+                    return;
+                }
+                let body = null;
+                try { body = JSON.parse(xhr.responseText); } catch (e) { body = null; }
+                if (xhr.status >= 200 && xhr.status < 300 && body) {
+                    resolve(body);
+                } else {
+                    const msg = (body && body.error && body.error.message) || '附件上传失败';
+                    reject(new Error(msg));
+                }
+            };
+            xhr.onerror = () => reject(new Error('网络错误，附件上传失败'));
+            const form = new FormData();
+            form.append('file', file);
+            xhr.send(form);
+        });
+    }
+
+    function pendingContainers() {
+        return Array.from(document.querySelectorAll('.pending-attachments'));
+    }
+
+    function renderPendingAttachments() {
+        const html = pendingAttachments.map((a) => {
+            const cls = a.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
+            return `<span class="${cls}" data-id="${a.id || ''}" title="${a.filename}">${escapeHtml(a.filename)}${a.status === 'failed' ? '（失败）' : ''}<button class="pending-chip-remove" aria-label="移除">×</button></span>`;
+        }).join('');
+        pendingContainers().forEach((c) => { c.innerHTML = html; c.style.display = html ? '' : 'none'; });
+        pendingContainers().forEach((c) => {
+            c.querySelectorAll('.pending-chip-remove').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const chip = e.target.closest('.pending-chip');
+                    const id = chip && chip.dataset.id;
+                    pendingAttachments = pendingAttachments.filter((a) => a.id !== id && a.tmpId !== chip.dataset.tmpid);
+                    renderPendingAttachments();
+                });
+            });
+        });
+    }
+
+    async function handleFilePick(fileList) {
+        const files = Array.from(fileList || []);
+        for (const file of files) {
+            const entry = { tmpId: 'tmp_' + Math.random().toString(36).slice(2), filename: file.name, status: 'uploading' };
+            pendingAttachments.push(entry);
+            renderPendingAttachments();
+            try {
+                const res = await uploadAttachment(file);
+                entry.id = res.id;
+                entry.filename = res.filename || file.name;
+                entry.kind = res.kind;
+                entry.status = res.status === 'ready' ? 'ready' : 'failed';
+            } catch (err) {
+                entry.status = 'failed';
+                showToast(formatDisplayError(err, '附件上传失败'));
+            }
+            renderPendingAttachments();
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function renderAttachmentCards(stack, attachments) {
+        if (!attachments || !attachments.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-attachments';
+        attachments.forEach((a) => {
+            const card = document.createElement('div');
+            card.className = 'attachment-card';
+            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">📎</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
+            wrap.appendChild(card);
+        });
+        stack.appendChild(wrap);
+    }
+
     async function sendMessage() {
         const text = chatInput.value.trim();
-        if (!text || isProcessing || isOnboarding) return;
+        const hasAttachments = pendingAttachments.some((a) => a.status === 'ready');
+        if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
+        const sendingAttachmentIds = pendingAttachments.filter((a) => a.status === 'ready').map((a) => a.id);
+        const sendingAttachments = pendingAttachments.filter((a) => a.status === 'ready').map((a) => ({ filename: a.filename, kind: a.kind }));
         enterChatView();
-        addMessage('user', text);
+        addMessage('user', text, undefined, sendingAttachments);
         chatInput.value = '';
         resizeInput(chatInput);
+        pendingAttachments = [];
+        renderPendingAttachments();
         isProcessing = true;
         sendBtn.disabled = true;
         chatInput.placeholder = 'Hommey 正在整理…';
@@ -598,8 +734,15 @@
         try {
             const response = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text }),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Request-ID': ensureRequestId(),
+                },
+                body: JSON.stringify({
+                    message: text,
+                    attachment_ids: sendingAttachmentIds,
+                    client_request_id: currentRequestId,
+                }),
             });
             if (!response.ok) {
                 const error = await response.json();
@@ -660,6 +803,7 @@
             sendBtn.disabled = false;
             setSendLoading(false);
             chatInput.placeholder = defaultPlaceholder;
+            resetRequestId();
             chatInput.focus();
         }
     }
@@ -675,13 +819,16 @@
         return row;
     }
 
-    function addMessage(role, text, timestamp) {
+    function addMessage(role, text, timestamp, attachments) {
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
         bubble.className = `msg-bubble ${role}`;
-        renderMessageInto(bubble, text);
+        if (text) renderMessageInto(bubble, text);
         stack.appendChild(bubble);
+        if (role === 'user' && attachments && attachments.length) {
+            renderAttachmentCards(stack, attachments);
+        }
         if (timestamp) stack.appendChild(createTime(timestamp));
         chatMessages.appendChild(row);
         scrollToBottom();

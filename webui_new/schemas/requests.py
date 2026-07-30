@@ -12,7 +12,10 @@ class LoginRequest(BaseModel):
 
 
 class ChatRequest(BaseModel):
-    message: str
+    # message 与 attachment_ids 不能同时为空（路由层校验）。默认值保证老客户端兼容。
+    message: str = ""
+    attachment_ids: list[str] = []
+    client_request_id: str | None = None
 
 
 class SessionRenameRequest(BaseModel):

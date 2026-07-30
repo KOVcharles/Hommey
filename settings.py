@@ -150,6 +150,27 @@ MEMORY_CONFIG = {
 }
 
 
+ATTACHMENT_CONFIG = {
+    # 附件原文件存储根目录（容器内挂载卷）。本地开发默认 data/uploads。
+    "storage_path": os.getenv("HOMMEY_UPLOADS_PATH", "data/uploads"),
+    # 单文件大小上限（字节），默认 25 MB。
+    "max_size_bytes": _int_env("HOMMEY_ATTACHMENT_MAX_BYTES", 25 * 1024 * 1024),
+    # 单条消息最多附件数。
+    "max_per_message": _int_env("HOMMEY_ATTACHMENT_MAX_PER_MESSAGE", 5),
+    # 允许的扩展名（小写、不含点）。P0 仅文档类。
+    "allowed_extensions": tuple(
+        ext.strip().lower().lstrip(".")
+        for ext in os.getenv(
+            "HOMMEY_ATTACHMENT_ALLOWED_EXTENSIONS",
+            "txt,md,docx,pdf",
+        ).split(",")
+        if ext.strip()
+    ),
+    # 注入 agent_query 的附件文本总字符预算（超出按来源优先级裁剪）。
+    "agent_query_char_budget": _int_env("HOMMEY_AGENT_QUERY_CHAR_BUDGET", 12000),
+}
+
+
 MCP_CONFIG = {
     "auto_connect": _bool_env("HOMMEY_MCP_AUTO_CONNECT", True),
     "connect_timeout": _float_env("HOMMEY_MCP_CONNECT_TIMEOUT", 10.0),

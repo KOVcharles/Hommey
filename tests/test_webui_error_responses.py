@@ -130,7 +130,7 @@ async def test_chat_not_initialized_error_contract(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_validation_error_contract(client):
-    response = await client.post("/api/u1/chat", json={}, headers={"X-Request-ID": "rid-validation"})
+    response = await client.post("/api/u1/chat", json={"message": 123}, headers={"X-Request-ID": "rid-validation"})
 
     assert response.status_code == 422
     assert response.json() == {
@@ -159,7 +159,7 @@ async def test_empty_message_error_contract(client, monkeypatch):
 
     assert response.status_code == 400
     assert _error(response.json())["code"] == "EMPTY_MESSAGE"
-    assert _error(response.json())["message"] == "请输入消息"
+    assert _error(response.json())["message"] == "请输入消息或添加附件"
     assert _error(response.json())["request_id"] == "rid-empty"
 
 
