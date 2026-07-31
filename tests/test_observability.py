@@ -122,7 +122,7 @@ async def test_error_log_contains_required_context_fields(caplog):
     app.dependency_overrides[require_path_user] = _bypass_auth
     try:
         async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
-            await client.post("/api/u1/chat", json={}, headers={"X-Request-ID": "rid-log"})
+            await client.post("/api/u1/chat", json={"message": 123}, headers={"X-Request-ID": "rid-log"})
     finally:
         app.dependency_overrides.clear()
 

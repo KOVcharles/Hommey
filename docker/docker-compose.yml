@@ -32,9 +32,11 @@ services:
       # ${VAR} 会解析为空，而 environment: 优先级高于 env_file，会把真值（尤其 API key）覆盖成空 → RAG 静默失效。
       HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
       HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
+      HOMMEY_UPLOADS_PATH: /app/data/uploads
     volumes:
       - ../data/documents:/app/data/documents:ro
       - ../data/rag_knowledge:/app/data/rag_knowledge
+      - ../data/uploads:/app/data/uploads
     depends_on:
       redis:
         condition: service_started

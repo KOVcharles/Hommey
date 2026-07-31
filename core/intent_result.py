@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List
+from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -27,6 +27,8 @@ class AgentScheduleItem(BaseModel):
     priority: int
     reason: str = ""
     expected_output: str = ""
+    on_failure: Literal["abort", "continue"] = "abort"
+    max_retries: int = Field(default=0, ge=0, le=2)
 
 
 class IntentResult(BaseModel):

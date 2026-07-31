@@ -22,25 +22,35 @@ execution:
   - skill: event-collection
     agent_name: event_collection
     priority: 1
+    on_failure: abort
+    max_retries: 1
     reason: 收集出差基础信息
     expected_output: 出发地、目的地、日期、工作地点和缺失信息
   - skill: ask-question
     agent_name: rag_knowledge
     priority: 2
+    on_failure: abort
+    max_retries: 1
     reason: 基于已收集的出差事项查询适用的公司差旅制度
     expected_output: 交通、住宿、补贴和报销政策证据
   - skill: query-info
     agent_name: information_query
     priority: 2
+    on_failure: continue
+    max_retries: 1
     reason: 基于已收集的出差事项查询目的地天气和公开交通信息
     expected_output: 带官方核验提醒的天气和路线级交通建议
   - skill: plan-trip
     agent_name: itinerary_planning
     priority: 3
+    on_failure: abort
+    max_retries: 1
     reason: 基于事项、制度和外部信息生成差旅行程
     expected_output: 结构化公司差旅行程建议
   - skill: check-trip-compliance
     agent_name: trip_compliance
     priority: 4
+    on_failure: continue
+    max_retries: 0
     reason: 依据知识库证据检查行程合规性
     expected_output: 合规结论、证据、风险和待确认事项

@@ -13,5 +13,7 @@ execution:
   - skill: ask-question
     agent_name: rag_knowledge
     priority: 1
+    on_failure: abort
+    max_retries: 1
     reason: 查询企业差旅制度与报销政策
     expected_output: 有来源依据的企业差旅答案

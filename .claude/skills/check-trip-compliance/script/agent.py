@@ -9,6 +9,7 @@ from agentscope.message import Msg
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.llm_response import extract_text_from_response
+from core.execution_budget import ExecutionLimitExceeded
 from core.intent_result import parse_json_object
 from utils.skill_loader import SkillLoader
 
@@ -85,6 +86,8 @@ class TripComplianceAgent(AgentBase):
             result.setdefault("missing_info", missing)
             result.setdefault("sources", sources)
             result = ComplianceOutput.model_validate(result).model_dump()
+        except ExecutionLimitExceeded:
+            raise
         except Exception:
             result = {
                 "status": "insufficient_evidence",

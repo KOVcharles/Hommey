@@ -25,6 +25,7 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from utils.memory_safety import wrap_untrusted_memory
+from core.execution_budget import ExecutionLimitExceeded
 
 logger = logging.getLogger(__name__)
 
@@ -210,6 +211,8 @@ class MemoryQueryAgent(AgentBase):
 
             return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
 
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Memory query failed: {e}")
             import traceback

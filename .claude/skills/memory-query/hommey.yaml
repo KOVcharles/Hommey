@@ -11,5 +11,7 @@ execution:
   - skill: memory-query
     agent_name: memory_query
     priority: 1
+    on_failure: abort
+    max_retries: 0
     reason: 查询用户差旅历史和偏好
     expected_output: 基于当前用户记忆的回答

@@ -95,6 +95,9 @@ class MemoryManager:
             role: 角色 (user/assistant)
             content: 消息内容
             metadata: 元数据
+
+        Returns:
+            新写入消息的 id（用于附件绑定等）；幂等冲突（重复 request_id）时返回 False。
         """
         safe_content = redact_sensitive_text(content)
 
@@ -107,7 +110,7 @@ class MemoryManager:
         )
         if persisted is not False:
             self.short_term.add_message(role, safe_content, metadata)
-        return persisted is not False
+        return persisted
 
     def get_recorded_response(self, request_id: str) -> str | None:
         """Return a completed assistant response for an idempotent retry."""

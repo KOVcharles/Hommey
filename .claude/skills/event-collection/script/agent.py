@@ -8,6 +8,7 @@
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
+from core.execution_budget import ExecutionLimitExceeded
 from typing import Optional, Union, List
 import json
 import logging
@@ -184,6 +185,8 @@ class EventCollectionAgent(AgentBase):
                     raise ValueError(f"Failed to parse JSON. Error: {e}")
             else:
                 raise ValueError("No JSON found in response")
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Event collection failed: {e}")
             result = {

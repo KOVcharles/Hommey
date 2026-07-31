@@ -13,5 +13,7 @@ execution:
   - skill: event-collection
     agent_name: event_collection
     priority: 1
+    on_failure: abort
+    max_retries: 1
     reason: 收集并更新当前出差事项
     expected_output: 结构化当前出差任务与缺失信息

@@ -22,6 +22,7 @@ if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from rag.retriever import KnowledgeRetriever
+from core.execution_budget import ExecutionLimitExceeded, consume_external_call
 from settings import RAG_CONFIG
 from utils.skill_loader import SkillLoader
 
@@ -63,6 +64,7 @@ class RAGKnowledgeAgent(AgentBase):
 
     def search_knowledge(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         """Search the RAG store through the shared retriever."""
+        consume_external_call("rag")
         return self.retriever.search(query, top_k=top_k)
 
     async def reply(self, x: Optional[Union[Msg, List[Msg]]] = None) -> Msg:
@@ -199,6 +201,8 @@ class RAGKnowledgeAgent(AgentBase):
             )
             answer = await self._extract_model_text(response) or "无法生成答案"
             return self._normalize_answer(answer)
+        except ExecutionLimitExceeded:
+            raise
         except Exception as exc:
             logger.error("Error generating RAG answer with LLM: %s", exc)
             return "知识库已检索到相关信息，但生成面向用户的总结回答时出错，请稍后重试。"

@@ -105,8 +105,13 @@ SKILL_CONFIG = {
 
 RESILIENCE_CONFIG = {
     "max_retries": _int_env("HOMMEY_MAX_RETRIES", 3),
+    "agent_max_retries": _int_env("HOMMEY_AGENT_MAX_RETRIES", 1),
     "retry_base_delay_sec": _float_env("HOMMEY_RETRY_BASE_DELAY_SEC", 1.0),
     "retry_max_delay_sec": _float_env("HOMMEY_RETRY_MAX_DELAY_SEC", 30.0),
+    "max_agent_calls_per_request": _int_env("HOMMEY_MAX_AGENT_CALLS_PER_REQUEST", 8),
+    "max_external_calls_per_request": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_REQUEST", 16),
+    "max_external_calls_per_type": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_TYPE", 6),
+    "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 120.0),
     "circuit_failure_threshold": _int_env("HOMMEY_CIRCUIT_FAILURE_THRESHOLD", 5),
     "circuit_recovery_timeout_sec": _float_env(
         "HOMMEY_CIRCUIT_RECOVERY_TIMEOUT_SEC",
@@ -142,6 +147,27 @@ MEMORY_CONFIG = {
         "dual_write": _bool_env("HOMMEY_MEMORY_V2_DUAL_WRITE", False),
         "read_mode": os.getenv("HOMMEY_MEMORY_V2_READ_MODE", "legacy").lower(),
     },
+}
+
+
+ATTACHMENT_CONFIG = {
+    # 附件原文件存储根目录（容器内挂载卷）。本地开发默认 data/uploads。
+    "storage_path": os.getenv("HOMMEY_UPLOADS_PATH", "data/uploads"),
+    # 单文件大小上限（字节），默认 25 MB。
+    "max_size_bytes": _int_env("HOMMEY_ATTACHMENT_MAX_BYTES", 25 * 1024 * 1024),
+    # 单条消息最多附件数。
+    "max_per_message": _int_env("HOMMEY_ATTACHMENT_MAX_PER_MESSAGE", 5),
+    # 允许的扩展名（小写、不含点）。P0 仅文档类。
+    "allowed_extensions": tuple(
+        ext.strip().lower().lstrip(".")
+        for ext in os.getenv(
+            "HOMMEY_ATTACHMENT_ALLOWED_EXTENSIONS",
+            "txt,md,docx,pdf",
+        ).split(",")
+        if ext.strip()
+    ),
+    # 注入 agent_query 的附件文本总字符预算（超出按来源优先级裁剪）。
+    "agent_query_char_budget": _int_env("HOMMEY_AGENT_QUERY_CHAR_BUDGET", 12000),
 }
 
 

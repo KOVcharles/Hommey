@@ -11,5 +11,7 @@ execution:
   - skill: preference
     agent_name: preference
     priority: 1
+    on_failure: abort
+    max_retries: 0
     reason: 更新用户差旅偏好
     expected_output: 结构化差旅偏好变更

@@ -18,15 +18,21 @@ execution:
   - skill: event-collection
     agent_name: event_collection
     priority: 1
+    on_failure: abort
+    max_retries: 1
     reason: 提取待检查的出差事项
     expected_output: 结构化出差事项
   - skill: ask-question
     agent_name: rag_knowledge
     priority: 1
+    on_failure: abort
+    max_retries: 1
     reason: 检索适用的公司差旅制度
     expected_output: 与待检查事项相关的制度证据
   - skill: check-trip-compliance
     agent_name: trip_compliance
     priority: 2
+    on_failure: abort
+    max_retries: 0
     reason: 基于制度证据执行合规检查
     expected_output: 合规结论、逐项结果、来源和待确认事项

@@ -169,6 +169,30 @@ def test_file_history_excludes_session_before_applying_limit(tmp_path):
     assert [row["content"] for row in rows] == ["old-1", "old-2"]
 
 
+def test_file_chat_sessions_can_be_renamed_deleted_and_cleared(tmp_path):
+    memory = FileLongTermMemory("u1", storage_path=str(tmp_path))
+    memory.add_chat_message("user", "上海出差", "s1")
+    memory.add_chat_message("assistant", "好的", "s1")
+    memory.add_chat_message("user", "北京标准", "s2")
+
+    memory.rename_chat_session("s1", " 上海安排 ")
+
+    assert memory.get_chat_session_titles() == {"s1": "上海安排"}
+
+    memory.delete_chat_session("s1")
+
+    assert [row["session_id"] for row in memory.get_chat_history()] == ["s2"]
+    assert memory.get_chat_session_titles() == {}
+    assert memory.get_statistics()["total_messages"] == 1
+
+    memory.rename_chat_session("s2", "北京标准")
+    memory.clear_chat_history()
+
+    assert memory.get_chat_history() == []
+    assert memory.get_chat_session_titles() == {}
+    assert memory.get_statistics()["total_messages"] == 0
+
+
 def test_current_session_overflow_is_included_in_summary_input(tmp_path):
     long_term = FileLongTermMemory("u1", storage_path=str(tmp_path))
     long_term.add_chat_message("user", "prior-session", "old")
@@ -190,7 +214,9 @@ def test_current_session_overflow_is_included_in_summary_input(tmp_path):
 def test_file_message_and_trip_writes_are_idempotent_per_request(tmp_path):
     memory = FileLongTermMemory("u1", storage_path=str(tmp_path))
 
-    assert memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"}) is True
+    # add_chat_message 现返回新消息 id（truthy）；重复 request_id 仍返回 False。
+    first_id = memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"})
+    assert first_id and first_id is not False
     assert memory.add_chat_message("user", "hello", "s1", {"request_id": "r1"}) is False
 
     first_trip = memory.save_trip_history({"destination": "杭州", "request_id": "r1"})

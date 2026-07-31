@@ -250,7 +250,7 @@ class HommeyCLI:
                 return
 
         rc = RESILIENCE_CONFIG
-        max_retries = rc.get("max_retries", 3)
+        max_retries = rc.get("agent_max_retries", 1)
 
         with self.console.status("思考中...", spinner="dots"):
             from agentscope.message import Msg
@@ -324,12 +324,7 @@ class HommeyCLI:
         # 5. 调度智能体
         orchestration_result = None
         try:
-            orchestration_result = await retry_with_backoff(
-                lambda: self.orchestrator.reply(intention_result),
-                max_retries=max_retries,
-                base_delay_sec=rc.get("retry_base_delay_sec", 1.0),
-                max_delay_sec=rc.get("retry_max_delay_sec", 30.0),
-            )
+            orchestration_result = await self.orchestrator.reply(intention_result)
             if self.circuit_breaker:
                 self.circuit_breaker.record_success()
         except CircuitOpenError:

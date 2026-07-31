@@ -11,5 +11,7 @@ execution:
   - skill: chitchat
     agent_name: chitchat
     priority: 1
+    on_failure: abort
+    max_retries: 0
     reason: 处理简短礼貌交互
     expected_output: 简短回复并引导回差旅能力

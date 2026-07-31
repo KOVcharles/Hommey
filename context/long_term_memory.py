@@ -42,6 +42,7 @@ class FileLongTermMemory:
             "user_id": self.user_id,
             "preferences": {},
             "chat_history": [],
+            "session_titles": {},
             "trip_history": [],
             "active_trip": None,
             "statistics": {
@@ -136,7 +137,9 @@ class FileLongTermMemory:
         ):
             logger.info("Skipped duplicate chat message for request %s (%s)", request_id, role)
             return False
+        message_id = f"msg_{uuid.uuid4().hex}"
         self.data.setdefault("chat_history", []).append({
+            "id": message_id,
             "role": role,
             "content": content,
             "timestamp": _utc_now_iso(),
@@ -147,7 +150,7 @@ class FileLongTermMemory:
         stats["total_messages"] = int(stats.get("total_messages", 0)) + 1
         self._save()
         logger.debug(f"Added chat message to long-term memory: {role}")
-        return True
+        return message_id
 
     def get_chat_history(
         self,
@@ -166,6 +169,33 @@ class FileLongTermMemory:
         if limit:
             rows = rows[-limit:]
         return [dict(row) for row in rows]
+
+    def get_chat_session_titles(self) -> Dict[str, str]:
+        return dict(self.data.setdefault("session_titles", {}))
+
+    def rename_chat_session(self, session_id: str, title: str) -> None:
+        clean_title = redact_sensitive_text(str(title or "").strip())[:80]
+        if not clean_title:
+            raise ValueError("Session title cannot be empty")
+        self.data.setdefault("session_titles", {})[session_id] = clean_title
+        self._save()
+
+    def delete_chat_session(self, session_id: str) -> None:
+        rows = self.data.setdefault("chat_history", [])
+        self.data["chat_history"] = [
+            row for row in rows if row.get("session_id") != session_id
+        ]
+        self.data.setdefault("session_titles", {}).pop(session_id, None)
+        self.data.setdefault("statistics", {})["total_messages"] = len(
+            self.data["chat_history"]
+        )
+        self._save()
+
+    def clear_chat_history(self) -> None:
+        self.data["chat_history"] = []
+        self.data["session_titles"] = {}
+        self.data.setdefault("statistics", {})["total_messages"] = 0
+        self._save()
 
     def save_trip_history(self, trip_info: Dict[str, Any]):
         trip_info = filter_safe_memory_mapping(trip_info)
@@ -253,6 +283,7 @@ class FileLongTermMemory:
 
     def clear_history(self):
         self.data["chat_history"] = []
+        self.data["session_titles"] = {}
         self.data["trip_history"] = []
         stats = self.data.setdefault("statistics", {})
         stats["total_trips"] = 0
@@ -343,6 +374,17 @@ class PostgresLongTermMemory:
             )
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS chat_session_titles (
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL,
+                    title TEXT NOT NULL,
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (user_id, session_id)
+                );
+                """
+            )
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS trip_history (
                     id BIGSERIAL PRIMARY KEY,
                     trip_id TEXT NOT NULL UNIQUE,
@@ -407,6 +449,65 @@ class PostgresLongTermMemory:
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     completed_at TIMESTAMPTZ
                 );
+                """
+            )
+            # 多模态附件（与迁移 0005_multimodal_attachments.sql 保持一致）
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachments (
+                    id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT,
+                    request_id TEXT,
+                    filename TEXT NOT NULL,
+                    mime_type TEXT,
+                    kind TEXT NOT NULL,
+                    size_bytes BIGINT NOT NULL,
+                    sha256 TEXT,
+                    object_key TEXT NOT NULL,
+                    status TEXT NOT NULL,
+                    error_code TEXT,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    expires_at TIMESTAMPTZ
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_attachments_user_created
+                ON attachments (user_id, created_at DESC);
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS attachment_extractions (
+                    attachment_id TEXT PRIMARY KEY
+                        REFERENCES attachments(id) ON DELETE CASCADE,
+                    parser_version TEXT,
+                    language TEXT,
+                    content_text TEXT,
+                    structured JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    char_count INTEGER NOT NULL DEFAULT 0,
+                    extracted_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE TABLE IF NOT EXISTS chat_message_attachments (
+                    chat_history_id BIGINT NOT NULL
+                        REFERENCES chat_history(id) ON DELETE CASCADE,
+                    attachment_id TEXT NOT NULL
+                        REFERENCES attachments(id) ON DELETE CASCADE,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    PRIMARY KEY (chat_history_id, attachment_id)
+                );
+                """
+            )
+            cur.execute(
+                """
+                CREATE INDEX IF NOT EXISTS idx_chat_message_attachments_attachment
+                ON chat_message_attachments (attachment_id);
                 """
             )
 
@@ -543,7 +644,7 @@ class PostgresLongTermMemory:
                 (self.user_id,),
             )
         logger.debug(f"Added chat message to long-term memory: {role}")
-        return True
+        return inserted["id"]
 
     def get_chat_history(
         self,
@@ -563,7 +664,7 @@ class PostgresLongTermMemory:
             消息列表
         """
         sql = """
-            SELECT role, content, created_at, session_id, request_id
+            SELECT id, role, content, created_at, session_id, request_id
             FROM chat_history
             WHERE user_id = %s
         """
@@ -587,6 +688,7 @@ class PostgresLongTermMemory:
         rows.reverse()
         return [
             {
+                "id": row["id"],
                 "role": row["role"],
                 "content": row["content"],
                 "timestamp": row["created_at"].isoformat(),
@@ -595,6 +697,68 @@ class PostgresLongTermMemory:
             }
             for row in rows
         ]
+
+    def get_chat_session_titles(self) -> Dict[str, str]:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT session_id, title
+                FROM chat_session_titles
+                WHERE user_id = %s;
+                """,
+                (self.user_id,),
+            )
+            rows = cur.fetchall()
+        return {row["session_id"]: row["title"] for row in rows}
+
+    def rename_chat_session(self, session_id: str, title: str) -> None:
+        clean_title = redact_sensitive_text(str(title or "").strip())[:80]
+        if not clean_title:
+            raise ValueError("Session title cannot be empty")
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                INSERT INTO chat_session_titles (user_id, session_id, title, updated_at)
+                VALUES (%s, %s, %s, NOW())
+                ON CONFLICT (user_id, session_id)
+                DO UPDATE SET title = EXCLUDED.title, updated_at = NOW();
+                """,
+                (self.user_id, session_id, clean_title),
+            )
+
+    def delete_chat_session(self, session_id: str) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                "DELETE FROM chat_history WHERE user_id = %s AND session_id = %s;",
+                (self.user_id, session_id),
+            )
+            cur.execute(
+                "DELETE FROM chat_session_titles WHERE user_id = %s AND session_id = %s;",
+                (self.user_id, session_id),
+            )
+            cur.execute(
+                """
+                UPDATE user_statistics
+                SET total_messages = (
+                    SELECT COUNT(*) FROM chat_history WHERE user_id = %s
+                ), updated_at = NOW()
+                WHERE user_id = %s;
+                """,
+                (self.user_id, self.user_id),
+            )
+
+    def clear_chat_history(self) -> None:
+        with self.conn.cursor() as cur:
+            cur.execute("DELETE FROM chat_history WHERE user_id = %s;", (self.user_id,))
+            cur.execute("DELETE FROM chat_session_titles WHERE user_id = %s;", (self.user_id,))
+            cur.execute(
+                """
+                UPDATE user_statistics
+                SET total_messages = 0, updated_at = NOW()
+                WHERE user_id = %s;
+                """,
+                (self.user_id,),
+            )
 
     def save_trip_history(self, trip_info: Dict[str, Any]):
         """
@@ -800,6 +964,7 @@ class PostgresLongTermMemory:
         """清空历史记录（保留偏好）"""
         with self.conn.cursor() as cur:
             cur.execute("DELETE FROM chat_history WHERE user_id = %s;", (self.user_id,))
+            cur.execute("DELETE FROM chat_session_titles WHERE user_id = %s;", (self.user_id,))
             cur.execute("DELETE FROM trip_history WHERE user_id = %s;", (self.user_id,))
             cur.execute(
                 """

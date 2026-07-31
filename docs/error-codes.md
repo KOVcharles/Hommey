@@ -36,6 +36,10 @@ structured logs as `debug_message`.
 | `ORCHESTRATION_FAILED` | 502 | llm | yes | 调度执行失败，请稍后重试。 | Orchestration agent call failed after retry handling. |
 | `ORCHESTRATION_PARSE_FAILED` | 500 | http | yes | 解析结果失败，请稍后重试 | Orchestration output could not be parsed into the expected result object. |
 | `AGENT_EXECUTION_FAILED` | 502 | llm | yes | 处理失败，请稍后重试。 | Orchestrator returned an internal agent error result such as `status=error` or a fatal `data.error`; the raw agent message is logged only as sanitized debug_message. |
+| `AGENT_CALL_LIMIT_EXCEEDED` | 502 | llm | no | 本次请求的 Agent 调用次数已达到安全上限 | Per-request Agent execution budget was exhausted. |
+| `EXTERNAL_CALL_LIMIT_EXCEEDED` | 502 | llm | no | 本次请求的外部调用总次数已达到安全上限 | Combined LLM, RAG, HTTP search/weather, and MCP budget was exhausted. |
+| `EXTERNAL_CALL_TYPE_LIMIT_EXCEEDED` | 502 | llm | no | 本次请求的同类外部调用次数已达到安全上限 | One outbound operation type exhausted its per-type budget. |
+| `REQUEST_EXECUTION_TIMEOUT` | 502 | llm | yes | 本次任务处理超时，请稍后重试。 | The complete request exceeded its configured execution deadline. |
 | `INTERNAL_ERROR` | 500 | http | yes | 系统暂时不可用，请稍后再试 | Unhandled exception caught by middleware. |
 | `HTTP_ERROR` | 500+ | http | yes | 请求处理失败，请稍后重试 | Starlette/FastAPI HTTPException with status >= 500. |
 

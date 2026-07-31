@@ -22,6 +22,7 @@ from core.intent_catalog import build_intent_prompt_section
 from core.intent_result import parse_json_object, validate_intent_result
 from core.intent_router import FastIntentRouter
 from core.schedule_builder import build_agent_schedule
+from core.execution_budget import ExecutionLimitExceeded
 from core.intent_guard import (
     DEFAULT_CONFIDENCE_THRESHOLD,
     INFORMATION_QUERY_THRESHOLD,
@@ -215,6 +216,8 @@ class IntentionAgent(AgentBase):
             result = parse_json_object(text)
             result = validate_intent_result(result)
 
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Intent recognition failed: {e}")
             # 识别失败时不允许默认调用 information_query。

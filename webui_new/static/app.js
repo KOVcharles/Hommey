@@ -1,44 +1,80 @@
 /**
  * Hommey WebUI
- * Keeps the real product logic: initialization, onboarding, streaming chat,
- * preference refresh, and quick prompts.
+ * Production interaction layer for authentication, onboarding, streaming chat,
+ * session history, appearance settings, and responsive navigation.
  */
 (function () {
     'use strict';
 
-    const userId = decodeURIComponent(window.location.pathname.split('/').pop() || '');
+    const userId = String(document.body.dataset.userId || '');
+    const appShell = document.getElementById('appShell');
     const chatMessages = document.getElementById('chatMessages');
     const chatInput = document.getElementById('chatInput');
     const sendBtn = document.getElementById('sendBtn');
+    const homeComposer = document.getElementById('homeComposer');
+    const homeInput = document.getElementById('homeInput');
+    const homeSendBtn = document.getElementById('homeSendBtn');
     const initOverlay = document.getElementById('initOverlay');
+    const sidebar = document.getElementById('sidebar');
+    const scrim = document.getElementById('scrim');
+    const historyList = document.getElementById('historyList');
+    const historySearch = document.getElementById('historySearch');
+    const historySearchBox = document.getElementById('historySearchBox');
+    const settingsLayer = document.getElementById('settingsLayer');
+    const renameLayer = document.getElementById('renameLayer');
+    const confirmLayer = document.getElementById('confirmLayer');
+    const sessionPopover = document.getElementById('sessionPopover');
+    const renameInput = document.getElementById('renameInput');
     const panelName = document.getElementById('panelName');
     const panelLevel = document.getElementById('panelLevel');
     const prefList = document.getElementById('prefList');
     const activeTrip = document.getElementById('activeTrip');
-    const adminLink = document.getElementById('adminLink');
+    const toast = document.getElementById('toast');
+    const promptRotator = document.getElementById('promptRotator');
+    const rotatingQuestion = document.getElementById('rotatingQuestion');
 
-    const assistantImage = '/static/assets/hommey-avatar.jpg';
-    const defaultPlaceholder = '告诉 Hommey 你的出行需求，例如：下周一去上海出差两天';
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
     const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
     const USER_ID_KEY = 'hommey.user_id';
+    const THEME_KEY = 'hommey.theme';
+    const MOTION_KEY = 'hommey.motion';
+    const defaultPlaceholder = '继续问 Hommey';
 
     let isProcessing = false;
     let isOnboarding = false;
     let onboardingIndex = 0;
     let customInputCallback = null;
+    let activeSessionId = '';
+    let selectedSessionId = '';
+    let confirmCallback = null;
+    let rotationTimer;
+    let rotationIndex = 0;
+    let toastTimer;
+
+    // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
+    let pendingAttachments = [];
+    let currentRequestId = '';
+
+    const rotatingPrompts = [
+        { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
+        { label: '查一下北京的住宿和交通标准', prompt: '北京出差的住宿和交通标准是什么' },
+        { label: '找到我上次去深圳的差旅行程', prompt: '查看我上次去深圳的差旅行程' },
+        { label: '看看上海下周一的天气', prompt: '上海下周一的天气怎么样' },
+        { label: '明早到虹桥，几点出门更稳妥？', prompt: '明早九点到上海虹桥站，建议我几点出门' },
+        { label: '准备一条航班延误的备选路线', prompt: '如果航班延误，帮我准备一条备选路线' },
+    ];
 
     const onboardingSteps = [
         {
             question: '先告诉我，你平时从哪个城市出发比较多？',
             key: 'home_location',
-            hint: '之后规划行程时，我会优先按这个城市帮你计算出发方案。',
+            hint: '之后规划行程时，我会优先按这个城市计算出发方案。',
             options: ['北京', '上海', '广州', '深圳', '成都', '杭州', '其他'],
         },
         {
             question: '出差路上，你更偏好哪种交通方式？',
             key: 'transportation_preference',
-            hint: '我会在时间、舒适度和预算之间替你做更贴近偏好的取舍。',
+            hint: '我会在时间、舒适度和预算之间做更贴近偏好的取舍。',
             options: ['高铁', '飞机', '自驾', '都可以', '其他'],
         },
         {
@@ -50,35 +86,85 @@
         {
             question: '最后，座位或舱位有什么偏好吗？',
             key: 'seat_preference',
-            hint: '如果没有固定偏好，我会优先选择更稳妥、性价比合适的方案。',
+            hint: '如果没有固定偏好，我会优先选择更稳妥的方案。',
             options: ['商务座', '一等座', '二等座', '经济舱', '不指定', '其他'],
         },
     ];
 
+    applyStoredAppearance();
+    bindEvents();
     document.addEventListener('DOMContentLoaded', initialize);
 
-    chatInput.addEventListener('input', resizeInput);
-    chatInput.addEventListener('keydown', (event) => {
-        if (event.key !== 'Enter' || event.shiftKey) return;
-        event.preventDefault();
-        submitCurrentInput();
-    });
-    sendBtn.addEventListener('click', submitCurrentInput);
-
-    document.querySelectorAll('.logout-link').forEach((link) => {
-        link.addEventListener('click', () => {
-            clearAuth();
+    function bindEvents() {
+        chatInput.addEventListener('input', () => resizeInput(chatInput));
+        homeInput.addEventListener('input', () => resizeInput(homeInput));
+        chatInput.addEventListener('keydown', handleComposerKeydown);
+        homeInput.addEventListener('keydown', handleComposerKeydown);
+        sendBtn.addEventListener('click', submitCurrentInput);
+        homeComposer.addEventListener('submit', (event) => {
+            event.preventDefault();
+            submitHomeInput();
         });
-    });
 
-    document.querySelectorAll('.quick-btn').forEach((button) => {
-        button.addEventListener('click', () => {
-            if (isOnboarding || isProcessing) return;
-            chatInput.value = button.dataset.quick || '';
-            resizeInput();
-            sendMessage();
+        // 附件入口：每个 composer 的 .attach-button 内含一个隐藏 file input。
+        document.querySelectorAll('.attach-button').forEach((label) => {
+            const input = label.querySelector('input[type="file"]');
+            if (!input) return;
+            label.addEventListener('click', (e) => {
+                // 让 label 自身只触发一次（避免与 input 默认行为重复）。
+                if (e.target === input) return;
+            });
+            input.addEventListener('change', () => {
+                handleFilePick(input.files);
+                input.value = '';
+            });
         });
-    });
+
+        document.getElementById('sidebarToggle').addEventListener('click', openSidebar);
+        document.getElementById('accountButton').addEventListener('click', openSettings);
+        document.getElementById('accountRow').addEventListener('click', openSettings);
+        document.getElementById('sidebarClose').addEventListener('click', closeSidebar);
+        scrim.addEventListener('click', closeSidebar);
+        document.getElementById('homeButton').addEventListener('click', showHome);
+        document.getElementById('newChatButton').addEventListener('click', createNewSession);
+        document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
+        document.getElementById('settingsButton').addEventListener('click', openSettings);
+        document.getElementById('settingsClose').addEventListener('click', closeSettings);
+        document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
+        document.getElementById('renameSessionButton').addEventListener('click', openRenameDialog);
+        document.getElementById('deleteSessionButton').addEventListener('click', confirmDeleteSession);
+        document.getElementById('renameForm').addEventListener('submit', renameSelectedSession);
+        document.getElementById('confirmAction').addEventListener('click', runConfirmedAction);
+
+        document.querySelectorAll('[data-close-layer]').forEach((button) => {
+            button.addEventListener('click', () => closeLayer(button.dataset.closeLayer));
+        });
+        document.querySelectorAll('.modal-layer').forEach((layer) => {
+            layer.addEventListener('click', (event) => {
+                if (event.target === layer) layer.classList.remove('open');
+            });
+        });
+        document.querySelectorAll('.logout-link').forEach((link) => {
+            link.addEventListener('click', clearAuth);
+        });
+        document.querySelectorAll('[data-theme-option]').forEach((button) => {
+            button.addEventListener('click', () => setTheme(button.dataset.themeOption));
+        });
+        document.getElementById('motionToggle').addEventListener('click', toggleMotion);
+
+        historySearch.addEventListener('input', filterHistory);
+        promptRotator.addEventListener('click', () => submitPrompt(promptRotator.dataset.prompt));
+        promptRotator.addEventListener('mouseenter', stopPromptRotation);
+        promptRotator.addEventListener('mouseleave', startPromptRotation);
+        promptRotator.addEventListener('focusin', stopPromptRotation);
+        promptRotator.addEventListener('focusout', startPromptRotation);
+
+        document.addEventListener('click', (event) => {
+            if (!sessionPopover.contains(event.target) && !event.target.closest('.session-more')) {
+                sessionPopover.hidden = true;
+            }
+        });
+    }
 
     async function initialize() {
         if (!ensureAuthenticatedPath()) return;
@@ -89,17 +175,45 @@
                 if (!initData.success) throw createApiError(initData, '初始化失败');
             }
 
-            await loadUserSummary();
-            await loadActiveTrip();
+            await Promise.all([loadUserSummary(), loadActiveTrip(), loadSessions()]);
             hideInitOverlay();
             setInputEnabled(true);
+            startPromptRotation();
 
             const newData = await fetchJson(`/api/${encodeURIComponent(userId)}/is-new`);
-            if (newData.is_new) startOnboarding();
-            else showWelcomeMessage();
+            if (newData.is_new) {
+                enterChatView();
+                startOnboarding();
+            } else {
+                showHome();
+            }
         } catch (err) {
             showInitError(err.message || '无法连接到服务器，请检查网络后刷新页面');
         }
+    }
+
+    function handleComposerKeydown(event) {
+        if (event.key !== 'Enter' || event.shiftKey) return;
+        event.preventDefault();
+        if (event.currentTarget === homeInput) submitHomeInput();
+        else submitCurrentInput();
+    }
+
+    function submitHomeInput() {
+        const text = homeInput.value.trim();
+        if (!text || isProcessing || isOnboarding) return;
+        homeInput.value = '';
+        resizeInput(homeInput);
+        chatInput.value = text;
+        enterChatView();
+        sendMessage();
+    }
+
+    function submitPrompt(prompt) {
+        if (!prompt || isProcessing || isOnboarding) return;
+        chatInput.value = prompt;
+        enterChatView();
+        sendMessage();
     }
 
     function submitCurrentInput() {
@@ -110,110 +224,299 @@
             customInputCallback = null;
             chatInput.value = '';
             chatInput.placeholder = defaultPlaceholder;
-            resizeInput();
+            resizeInput(chatInput);
             callback(value);
             return;
         }
         sendMessage();
     }
 
+    function enterChatView() {
+        appShell.dataset.view = 'chat';
+        closeSidebar();
+        requestAnimationFrame(scrollToBottom);
+    }
+
+    function showHome() {
+        if (isOnboarding || isProcessing) return;
+        appShell.dataset.view = 'home';
+        closeSidebar();
+        setTimeout(() => homeInput.focus(), 180);
+    }
+
     function setInputEnabled(enabled) {
         chatInput.disabled = !enabled;
         sendBtn.disabled = !enabled;
-        if (enabled) chatInput.focus();
+        homeInput.disabled = !enabled;
+        homeSendBtn.disabled = !enabled;
     }
 
     function hideInitOverlay() {
         initOverlay.classList.add('hidden');
-        setTimeout(() => {
-            initOverlay.style.display = 'none';
-        }, 360);
+        setTimeout(() => { initOverlay.style.display = 'none'; }, 340);
     }
 
     function showInitError(message) {
-        const status = document.querySelector('.init-status');
-        const sub = document.querySelector('.init-sub');
+        const status = initOverlay.querySelector('.init-status');
+        const sub = initOverlay.querySelector('.init-sub');
         if (status) status.textContent = message;
         if (sub) {
             sub.replaceChildren();
             const link = document.createElement('a');
             link.href = '/';
-            link.textContent = '返回登录页';
+            link.textContent = '重新登录';
             link.addEventListener('click', clearAuth);
-            sub.append('请重新登录，或', link);
+            sub.appendChild(link);
         }
     }
 
     async function loadUserSummary() {
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/summary`);
-            if (adminLink) adminLink.style.display = data.role === 'admin' ? 'inline-block' : 'none';
-            panelName.textContent = `您好，${data.name_display || userId}`;
-            panelLevel.textContent = data.member_level
-                ? `${data.member_level} · ${data.member_tag || '差旅常客'}`
-                : '差旅常客';
-
-            const preferences = Array.isArray(data.preferences) ? data.preferences : [];
+            panelName.textContent = data.name_display || userId;
+            panelLevel.textContent = data.member_level || '个人账户';
             prefList.replaceChildren();
-            if (preferences.length === 0) {
-                const empty = document.createElement('div');
-                empty.className = 'empty-state';
-                empty.textContent = '还没有偏好记录。完成初次引导后，Hommey 会把你的习惯收好。';
-                prefList.appendChild(empty);
+            const preferences = Array.isArray(data.preferences) ? data.preferences : [];
+            if (!preferences.length) {
+                prefList.appendChild(createEmptyState('还没有偏好记录。'));
                 return;
             }
-
             preferences.forEach((preference) => {
                 const row = document.createElement('div');
                 row.className = 'info-row';
-
                 const label = document.createElement('span');
-                label.className = 'info-label';
-                label.textContent = [preference.icon, preference.label].filter(Boolean).join(' ');
-
+                label.textContent = preference.label || '';
                 const value = document.createElement('span');
-                value.className = 'info-value';
                 value.textContent = preference.value || '-';
-
                 row.append(label, value);
                 prefList.appendChild(row);
             });
         } catch (err) {
-            console.error('Load summary error:', err);
+            prefList.replaceChildren(createEmptyState('暂时无法读取偏好。'));
         }
     }
 
     async function loadActiveTrip() {
-        if (!activeTrip) return;
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/trip/active`);
             const trip = data.active_trip;
             activeTrip.replaceChildren();
             if (!trip) {
-                const empty = document.createElement('div'); empty.className = 'empty-state'; empty.textContent = '尚未创建当前出差任务。'; activeTrip.appendChild(empty); return;
+                activeTrip.appendChild(createEmptyState('当前没有进行中的出差任务。'));
+                return;
             }
             const fields = [
-                ['目的地', trip.destination], ['出发地', trip.origin],
-                ['出发日期', trip.start_date], ['返程日期', trip.end_date],
-                ['工作地点', trip.work_location], ['状态', trip.status || 'active'],
+                ['目的地', trip.destination],
+                ['出发地', trip.origin],
+                ['出发日期', trip.start_date],
+                ['返程日期', trip.end_date],
+                ['工作地点', trip.work_location],
             ];
             fields.filter(([, value]) => value).forEach(([label, value]) => {
-                const row=document.createElement('div'); row.className='trip-row';
-                const key=document.createElement('span'); key.textContent=label;
-                const val=document.createElement('span'); val.textContent=String(value);
-                row.append(key,val); activeTrip.appendChild(row);
+                const row = document.createElement('div');
+                row.className = 'trip-row';
+                const key = document.createElement('span');
+                key.textContent = label;
+                const val = document.createElement('span');
+                val.textContent = String(value);
+                row.append(key, val);
+                activeTrip.appendChild(row);
             });
-            const missing = Array.isArray(trip.missing_info) ? trip.missing_info : [];
-            if (missing.length) {
-                const row=document.createElement('div'); row.className='meta'; row.textContent=`待补充：${missing.join('、')}`; activeTrip.appendChild(row);
+        } catch (err) {
+            activeTrip.replaceChildren(createEmptyState('暂时无法读取行程。'));
+        }
+    }
+
+    function createEmptyState(text) {
+        const empty = document.createElement('div');
+        empty.className = 'empty-state';
+        empty.textContent = text;
+        return empty;
+    }
+
+    async function loadSessions() {
+        try {
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`);
+            activeSessionId = data.active_session_id || '';
+            renderSessions(Array.isArray(data.sessions) ? data.sessions : []);
+        } catch (err) {
+            renderSessions([]);
+        }
+    }
+
+    function renderSessions(sessions) {
+        historyList.replaceChildren();
+        const label = document.createElement('p');
+        label.className = 'history-label';
+        label.textContent = '最近';
+        historyList.appendChild(label);
+        if (!sessions.length) {
+            historyList.appendChild(createEmptyState('还没有历史会话。发送第一条消息后会自动保存。'));
+            return;
+        }
+        sessions.forEach((session) => {
+            const row = document.createElement('div');
+            row.className = `session-row${session.session_id === activeSessionId ? ' active' : ''}`;
+            row.dataset.sessionId = session.session_id;
+            row.dataset.title = session.title;
+
+            const open = document.createElement('button');
+            open.type = 'button';
+            open.className = 'session-open';
+            open.textContent = session.title || '未命名会话';
+            open.title = session.preview || session.title || '';
+            open.addEventListener('click', () => openSession(session.session_id));
+
+            const more = document.createElement('button');
+            more.type = 'button';
+            more.className = 'session-more';
+            more.setAttribute('aria-label', '会话操作');
+            more.textContent = '•••';
+            more.addEventListener('click', (event) => openSessionPopover(event, session));
+            row.append(open, more);
+            historyList.appendChild(row);
+        });
+        filterHistory();
+    }
+
+    async function createNewSession() {
+        if (isProcessing || isOnboarding) return;
+        try {
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
+            activeSessionId = data.session_id || '';
+            chatMessages.replaceChildren();
+            showHome();
+            await loadSessions();
+        } catch (err) {
+            showToast(formatDisplayError(err, '无法创建新会话'));
+        }
+    }
+
+    async function openSession(sessionId) {
+        if (isProcessing || isOnboarding) return;
+        try {
+            const data = await fetchJson(
+                `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/activate`,
+                { method: 'POST' }
+            );
+            activeSessionId = sessionId;
+            chatMessages.replaceChildren();
+            (data.messages || []).forEach((message) => {
+                const role = message.role === 'assistant' ? 'ai' : message.role;
+                if (role === 'ai' || role === 'user') {
+                    addMessage(role, message.content || '', message.timestamp, message.attachments);
+                }
+            });
+            enterChatView();
+            await loadSessions();
+        } catch (err) {
+            showToast(formatDisplayError(err, '无法打开会话'));
+        }
+    }
+
+    function toggleHistorySearch() {
+        historySearchBox.classList.toggle('visible');
+        if (historySearchBox.classList.contains('visible')) historySearch.focus();
+        else {
+            historySearch.value = '';
+            filterHistory();
+        }
+    }
+
+    function filterHistory() {
+        const query = historySearch.value.trim().toLowerCase();
+        historyList.querySelectorAll('.session-row').forEach((row) => {
+            row.hidden = !!query && !String(row.dataset.title || '').toLowerCase().includes(query);
+        });
+    }
+
+    function openSessionPopover(event, session) {
+        event.stopPropagation();
+        selectedSessionId = session.session_id;
+        renameInput.value = session.title || '';
+        const rect = event.currentTarget.getBoundingClientRect();
+        sessionPopover.style.left = `${Math.max(8, rect.right - 130)}px`;
+        sessionPopover.style.top = `${Math.min(window.innerHeight - 90, rect.bottom + 4)}px`;
+        sessionPopover.hidden = false;
+    }
+
+    function openRenameDialog() {
+        sessionPopover.hidden = true;
+        renameLayer.classList.add('open');
+        setTimeout(() => renameInput.select(), 100);
+    }
+
+    async function renameSelectedSession(event) {
+        event.preventDefault();
+        const title = renameInput.value.trim();
+        if (!selectedSessionId || !title) return;
+        try {
+            await fetchJson(
+                `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(selectedSessionId)}`,
+                {
+                    method: 'PATCH',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ title }),
+                }
+            );
+            renameLayer.classList.remove('open');
+            await loadSessions();
+            showToast('会话已重命名');
+        } catch (err) {
+            showToast(formatDisplayError(err, '重命名失败'));
+        }
+    }
+
+    function confirmDeleteSession() {
+        sessionPopover.hidden = true;
+        openConfirm('删除这条会话？', '删除后无法恢复，但不会影响你的差旅偏好。', async () => {
+            await fetchJson(
+                `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(selectedSessionId)}`,
+                { method: 'DELETE' }
+            );
+            if (selectedSessionId === activeSessionId) {
+                chatMessages.replaceChildren();
+                appShell.dataset.view = 'home';
             }
-        } catch (err) { console.error('Load active trip error:', err); }
+            await loadSessions();
+            showToast('会话已删除');
+        });
+    }
+
+    function confirmClearHistory() {
+        openConfirm('清空全部聊天记录？', '所有历史会话都会被删除，此操作无法恢复。', async () => {
+            await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
+            chatMessages.replaceChildren();
+            closeSettings();
+            appShell.dataset.view = 'home';
+            await loadSessions();
+            showToast('聊天记录已清空');
+        });
+    }
+
+    function openConfirm(title, message, callback) {
+        document.getElementById('confirmTitle').textContent = title;
+        document.getElementById('confirmMessage').textContent = message;
+        confirmCallback = callback;
+        confirmLayer.classList.add('open');
+    }
+
+    async function runConfirmedAction() {
+        const callback = confirmCallback;
+        confirmCallback = null;
+        confirmLayer.classList.remove('open');
+        if (!callback) return;
+        try {
+            await callback();
+        } catch (err) {
+            showToast(formatDisplayError(err, '操作失败'));
+        }
     }
 
     function startOnboarding() {
         isOnboarding = true;
-        addMessage('ai', '你好，我是 Hommey。第一次见面，我想先轻轻了解几项偏好，这样之后帮你规划差旅会更贴心。');
-        setTimeout(() => showOnboardingQuestion(0), 420);
+        addMessage('ai', '你好，我是 Hommey。第一次见面，我想先了解几项偏好，让之后的差旅建议更贴近你。');
+        setTimeout(() => showOnboardingQuestion(0), 360);
     }
 
     function showOnboardingQuestion(index) {
@@ -229,14 +532,10 @@
     function addOptionsMessage(question, options, hint) {
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
-
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble ai';
         bubble.append(createStrong(question));
-        if (hint) {
-            bubble.append(document.createElement('br'), createMutedText(hint));
-        }
-
+        if (hint) bubble.append(document.createElement('br'), createMutedText(hint));
         const optionList = document.createElement('div');
         optionList.className = 'option-list';
         options.forEach((option) => {
@@ -247,32 +546,22 @@
             pill.addEventListener('click', () => handleOnboardingOption(option, optionList));
             optionList.appendChild(pill);
         });
-
-        stack.append(bubble, optionList, createTime());
+        stack.append(bubble, optionList);
         chatMessages.appendChild(row);
         scrollToBottom();
     }
 
     function handleOnboardingOption(option, optionList) {
-        optionList.querySelectorAll('button').forEach((button) => {
-            button.disabled = true;
-        });
-
+        optionList.querySelectorAll('button').forEach((button) => { button.disabled = true; });
         if (option === '其他') {
-            const note = document.createElement('div');
-            note.className = 'msg-time';
-            note.textContent = '可以直接输入你的偏好。';
-            optionList.after(note);
             chatInput.placeholder = '输入你的偏好';
             chatInput.focus();
             customInputCallback = (value) => {
                 addMessage('user', value);
                 sendOnboardingAnswer(value);
             };
-            scrollToBottom();
             return;
         }
-
         addMessage('user', option);
         sendOnboardingAnswer(option);
     }
@@ -281,7 +570,6 @@
         const step = onboardingSteps[onboardingIndex];
         isProcessing = true;
         showProcessingIndicator([]);
-
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/onboarding/preference`, {
                 method: 'POST',
@@ -295,11 +583,11 @@
             }
             addMessage('ai', data.message || `我记住了：${value}`);
             await loadUserSummary();
-            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 420);
+            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 360);
         } catch (err) {
             removeProcessingIndicator();
-            addMessage('ai', '偏好已先记录在对话里，稍后我会继续尝试同步。');
-            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 420);
+            addMessage('ai', '偏好已先记录在当前对话里，稍后会继续尝试同步。');
+            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 360);
         } finally {
             isProcessing = false;
         }
@@ -308,74 +596,184 @@
     function finishOnboarding() {
         isOnboarding = false;
         chatInput.placeholder = defaultPlaceholder;
-        addMessage(
-            'ai',
-            '偏好设置完成。以后你也可以随时告诉我新的习惯，我会继续更新。现在可以把你的出行计划交给我，比如：帮我规划下周去上海的两天行程。'
-        );
+        addMessage('ai', '偏好设置完成。现在可以把你的出行计划交给我。');
+        loadSessions();
     }
 
-    function showWelcomeMessage() {
-        const hour = new Date().getHours();
-        const greeting = hour < 6 ? '夜深了' : hour < 9 ? '早上好' : hour < 12 ? '上午好' : hour < 14 ? '中午好' : hour < 18 ? '下午好' : '晚上好';
-        addMessage(
-            'ai',
-            `${greeting}，我是 Hommey。你可以让我规划行程、查询天气、解释差旅标准，也可以告诉我新的出行偏好。`
-        );
+    function ensureRequestId() {
+        if (!currentRequestId) {
+            // 简单 uuid v4，无需依赖外部库。
+            currentRequestId = (crypto && crypto.randomUUID)
+                ? crypto.randomUUID()
+                : 'xxxxxxxxxxxx4xxx'.replace(/x/g, (c) => ((Math.random() * 16) | 0).toString(16));
+        }
+        return currentRequestId;
+    }
+
+    function resetRequestId() {
+        currentRequestId = '';
+    }
+
+    async function uploadAttachment(file, onProgress) {
+        const requestId = ensureRequestId();
+        return new Promise((resolve, reject) => {
+            const xhr = new XMLHttpRequest();
+            xhr.open('POST', `/api/${encodeURIComponent(userId)}/attachments`);
+            const token = getAccessToken();
+            if (token) xhr.setRequestHeader('Authorization', `Bearer ${token}`);
+            xhr.setRequestHeader('X-Request-ID', requestId);
+            // 注意：不设置 Content-Type——FormData 会自动带 multipart boundary。
+            if (onProgress && xhr.upload) {
+                xhr.upload.onprogress = (e) => {
+                    if (e.lengthComputable) onProgress(e.loaded / e.total);
+                };
+            }
+            xhr.onload = async () => {
+                if (xhr.status === 401) {
+                    const refreshed = await refreshAccessToken();
+                    if (!refreshed) {
+                        reject(new Error('登录已过期，请重新登录'));
+                        return;
+                    }
+                    try { resolve(await uploadAttachment(file, onProgress)); } catch (e) { reject(e); }
+                    return;
+                }
+                let body = null;
+                try { body = JSON.parse(xhr.responseText); } catch (e) { body = null; }
+                if (xhr.status >= 200 && xhr.status < 300 && body) {
+                    resolve(body);
+                } else {
+                    const msg = (body && body.error && body.error.message) || '附件上传失败';
+                    reject(new Error(msg));
+                }
+            };
+            xhr.onerror = () => reject(new Error('网络错误，附件上传失败'));
+            const form = new FormData();
+            form.append('file', file);
+            xhr.send(form);
+        });
+    }
+
+    function pendingContainers() {
+        return Array.from(document.querySelectorAll('.pending-attachments'));
+    }
+
+    function renderPendingAttachments() {
+        const html = pendingAttachments.map((a) => {
+            const cls = a.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
+            return `<span class="${cls}" data-id="${a.id || ''}" title="${a.filename}">${escapeHtml(a.filename)}${a.status === 'failed' ? '（失败）' : ''}<button class="pending-chip-remove" aria-label="移除">×</button></span>`;
+        }).join('');
+        pendingContainers().forEach((c) => { c.innerHTML = html; c.style.display = html ? '' : 'none'; });
+        pendingContainers().forEach((c) => {
+            c.querySelectorAll('.pending-chip-remove').forEach((btn) => {
+                btn.addEventListener('click', (e) => {
+                    const chip = e.target.closest('.pending-chip');
+                    const id = chip && chip.dataset.id;
+                    pendingAttachments = pendingAttachments.filter((a) => a.id !== id && a.tmpId !== chip.dataset.tmpid);
+                    renderPendingAttachments();
+                });
+            });
+        });
+    }
+
+    async function handleFilePick(fileList) {
+        const files = Array.from(fileList || []);
+        for (const file of files) {
+            const entry = { tmpId: 'tmp_' + Math.random().toString(36).slice(2), filename: file.name, status: 'uploading' };
+            pendingAttachments.push(entry);
+            renderPendingAttachments();
+            try {
+                const res = await uploadAttachment(file);
+                entry.id = res.id;
+                entry.filename = res.filename || file.name;
+                entry.kind = res.kind;
+                entry.status = res.status === 'ready' ? 'ready' : 'failed';
+            } catch (err) {
+                entry.status = 'failed';
+                showToast(formatDisplayError(err, '附件上传失败'));
+            }
+            renderPendingAttachments();
+        }
+    }
+
+    function escapeHtml(s) {
+        return String(s || '').replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c]));
+    }
+
+    function renderAttachmentCards(stack, attachments) {
+        if (!attachments || !attachments.length) return;
+        const wrap = document.createElement('div');
+        wrap.className = 'msg-attachments';
+        attachments.forEach((a) => {
+            const card = document.createElement('div');
+            card.className = 'attachment-card';
+            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">📎</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
+            wrap.appendChild(card);
+        });
+        stack.appendChild(wrap);
     }
 
     async function sendMessage() {
         const text = chatInput.value.trim();
-        if (!text || isProcessing || isOnboarding) return;
-
-        addMessage('user', text);
+        const hasAttachments = pendingAttachments.some((a) => a.status === 'ready');
+        if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
+        const sendingAttachmentIds = pendingAttachments.filter((a) => a.status === 'ready').map((a) => a.id);
+        const sendingAttachments = pendingAttachments.filter((a) => a.status === 'ready').map((a) => ({ filename: a.filename, kind: a.kind }));
+        enterChatView();
+        addMessage('user', text, undefined, sendingAttachments);
         chatInput.value = '';
-        resizeInput();
-
+        resizeInput(chatInput);
+        pendingAttachments = [];
+        renderPendingAttachments();
         isProcessing = true;
         sendBtn.disabled = true;
-        chatInput.placeholder = 'Hommey 正在整理回复...';
+        chatInput.placeholder = 'Hommey 正在整理…';
         setSendLoading(true);
         showProcessingIndicator([]);
 
         try {
-            const res = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
+            const response = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
                 method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ message: text }),
+                headers: {
+                    'Content-Type': 'application/json',
+                    'X-Request-ID': ensureRequestId(),
+                },
+                body: JSON.stringify({
+                    message: text,
+                    attachment_ids: sendingAttachmentIds,
+                    client_request_id: currentRequestId,
+                }),
             });
-
-            if (!res.ok) {
-                const err = await res.json();
-                throw createApiError(err, '请求失败，请重试', res.status);
+            if (!response.ok) {
+                const error = await response.json();
+                throw createApiError(error, '请求失败，请重试', response.status);
             }
-            if (!res.body) throw new Error('当前浏览器不支持流式响应');
+            if (!response.body) throw new Error('当前浏览器不支持流式响应');
 
-            let streamMsg = null;
+            let streamMessage = null;
             let preferencesUpdated = false;
-            const reader = res.body.getReader();
+            const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
 
             while (true) {
                 const { value, done } = await reader.read();
                 if (done) break;
-
                 buffer += decoder.decode(value, { stream: true });
                 const lines = buffer.split('\n');
                 buffer = lines.pop() || '';
-
                 for (const line of lines) {
                     const event = parseStreamLine(line);
                     if (!event) continue;
                     if (event.type === 'error') throw createApiError(event, '处理失败，请重试');
                     if (event.type === 'agents') updateAgentTags(event.agents);
                     if (event.type === 'chunk') {
-                        if (!streamMsg) {
+                        if (!streamMessage) {
                             removeProcessingIndicator();
-                            streamMsg = createStreamingMessage();
+                            streamMessage = createStreamingMessage();
                         }
-                        streamMsg.text += event.text || '';
-                        renderMessageInto(streamMsg.bubble, streamMsg.text);
+                        streamMessage.text += event.text || '';
+                        renderMessageInto(streamMessage.bubble, streamMessage.text);
                         scrollToBottom();
                     }
                     if (event.type === 'done') preferencesUpdated = !!event.preferences_updated;
@@ -383,24 +781,20 @@
             }
 
             const tail = parseStreamLine(buffer);
-            if (tail) {
-                if (tail.type === 'chunk') {
-                    if (!streamMsg) {
-                        removeProcessingIndicator();
-                        streamMsg = createStreamingMessage();
-                    }
-                    streamMsg.text += tail.text || '';
-                    renderMessageInto(streamMsg.bubble, streamMsg.text);
+            if (tail && tail.type === 'chunk') {
+                if (!streamMessage) {
+                    removeProcessingIndicator();
+                    streamMessage = createStreamingMessage();
                 }
-                if (tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
+                streamMessage.text += tail.text || '';
+                renderMessageInto(streamMessage.bubble, streamMessage.text);
             }
+            if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
 
             removeProcessingIndicator();
-            if (streamMsg) finishStreamingMessage(streamMsg);
-            else addMessage('ai', '我收到了，但这次没有返回具体内容。');
-
+            if (!streamMessage) addMessage('ai', '我收到了，但这次没有返回具体内容。');
             if (preferencesUpdated) await loadUserSummary();
-            await loadActiveTrip();
+            await Promise.all([loadActiveTrip(), loadSessions()]);
         } catch (err) {
             removeProcessingIndicator();
             addMessage('ai', formatDisplayError(err, '网络错误，请检查连接后重试。'));
@@ -409,6 +803,7 @@
             sendBtn.disabled = false;
             setSendLoading(false);
             chatInput.placeholder = defaultPlaceholder;
+            resetRequestId();
             chatInput.focus();
         }
     }
@@ -416,32 +811,25 @@
     function createMessageShell(role) {
         const row = document.createElement('div');
         row.className = `message-row ${role}`;
-
         const avatar = document.createElement('div');
         avatar.className = `msg-avatar ${role}`;
-        if (role === 'ai') {
-            const image = document.createElement('img');
-            image.src = assistantImage;
-            image.alt = 'Hommey';
-            avatar.appendChild(image);
-        } else {
-            avatar.textContent = (userId[0] || 'U').toUpperCase();
-        }
-
         const stack = document.createElement('div');
         stack.className = 'msg-stack';
-
         row.append(avatar, stack);
         return row;
     }
 
-    function addMessage(role, text) {
+    function addMessage(role, text, timestamp, attachments) {
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
         bubble.className = `msg-bubble ${role}`;
-        renderMessageInto(bubble, text);
-        stack.append(bubble, createTime());
+        if (text) renderMessageInto(bubble, text);
+        stack.appendChild(bubble);
+        if (role === 'user' && attachments && attachments.length) {
+            renderAttachmentCards(stack, attachments);
+        }
+        if (timestamp) stack.appendChild(createTime(timestamp));
         chatMessages.appendChild(row);
         scrollToBottom();
         return row;
@@ -454,31 +842,39 @@
         const stack = row.querySelector('.msg-stack');
         const box = document.createElement('div');
         box.className = 'agent-indicator';
-        box.innerHTML = `
-            <div class="agent-tags">${renderAgentTags(agents)}</div>
-            <div class="thinking-text">正在理解你的需求。</div>
-            <div class="typing-dots"><div class="typing-dot"></div><div class="typing-dot"></div><div class="typing-dot"></div></div>
-        `;
+        const tags = document.createElement('div');
+        tags.className = 'agent-tags';
+        renderAgentTagsInto(tags, agents);
+        const text = document.createElement('div');
+        text.className = 'thinking-text';
+        text.textContent = '正在整理';
+        const dots = document.createElement('div');
+        dots.className = 'typing-dots';
+        dots.innerHTML = '<i class="typing-dot"></i><i class="typing-dot"></i><i class="typing-dot"></i>';
+        box.append(tags, text, dots);
         stack.appendChild(box);
         chatMessages.appendChild(row);
         scrollToBottom();
     }
 
     function removeProcessingIndicator() {
-        const indicator = document.getElementById('processingIndicator');
-        if (indicator) indicator.remove();
+        document.getElementById('processingIndicator')?.remove();
     }
 
     function updateAgentTags(agents) {
-        const indicator = document.getElementById('processingIndicator');
-        const tags = indicator && indicator.querySelector('.agent-tags');
-        if (!tags || !Array.isArray(agents) || agents.length === 0) return;
-        tags.innerHTML = renderAgentTags(agents);
+        const tags = document.querySelector('#processingIndicator .agent-tags');
+        if (tags) renderAgentTagsInto(tags, agents);
     }
 
-    function renderAgentTags(agents) {
-        if (!Array.isArray(agents) || agents.length === 0) return '<span class="agent-tag">分析中</span>';
-        return agents.map((agent) => `<span class="agent-tag">${escapeHTML(agent.display || agent.name || '处理中')}</span>`).join('');
+    function renderAgentTagsInto(container, agents) {
+        container.replaceChildren();
+        const values = Array.isArray(agents) && agents.length ? agents : [{ display: '分析中' }];
+        values.forEach((agent) => {
+            const tag = document.createElement('span');
+            tag.className = 'agent-tag';
+            tag.textContent = agent.display || agent.name || '处理中';
+            container.appendChild(tag);
+        });
     }
 
     function createStreamingMessage() {
@@ -486,34 +882,24 @@
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble ai';
-        const time = createTime();
         stack.appendChild(bubble);
         chatMessages.appendChild(row);
         scrollToBottom();
-        return { bubble, stack, time, text: '' };
-    }
-
-    function finishStreamingMessage(streamMsg) {
-        streamMsg.time.textContent = formatTime(new Date());
-        streamMsg.stack.appendChild(streamMsg.time);
-        scrollToBottom();
+        return { bubble, text: '' };
     }
 
     function renderMessageInto(element, text) {
+        element.classList.toggle(
+            'structured-result',
+            /(?:✈️|🚄|🏨|📋|✅|⚠️)\s*(?:\*\*)?|(?:交通建议|住宿建议|行程规划)/.test(String(text || ''))
+        );
         element.replaceChildren();
         const fragment = document.createDocumentFragment();
-        const parts = String(text || '').split(/(\*\*[^*]+\*\*|\n|•)/g);
-        parts.forEach((part) => {
+        String(text || '').split(/(\*\*[^*]+\*\*|\n|•)/g).forEach((part) => {
             if (!part) return;
-            if (part === '\n') {
-                fragment.appendChild(document.createElement('br'));
-            } else if (part === '•') {
-                fragment.appendChild(document.createTextNode('•'));
-            } else if (part.startsWith('**') && part.endsWith('**')) {
-                fragment.appendChild(createStrong(part.slice(2, -2)));
-            } else {
-                fragment.appendChild(document.createTextNode(part));
-            }
+            if (part === '\n') fragment.appendChild(document.createElement('br'));
+            else if (part.startsWith('**') && part.endsWith('**')) fragment.appendChild(createStrong(part.slice(2, -2)));
+            else fragment.appendChild(document.createTextNode(part));
         });
         element.appendChild(fragment);
     }
@@ -526,36 +912,128 @@
 
     function createMutedText(text) {
         const span = document.createElement('span');
-        span.style.color = '#71808d';
-        span.style.fontSize = '13px';
+        span.style.color = 'var(--ink-2)';
+        span.style.fontSize = '11px';
         span.textContent = text;
         return span;
     }
 
-    function createTime() {
+    function createTime(value) {
         const time = document.createElement('div');
         time.className = 'msg-time';
-        time.textContent = formatTime(new Date());
+        const date = value ? new Date(value) : new Date();
+        time.textContent = Number.isNaN(date.getTime())
+            ? ''
+            : date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
         return time;
     }
 
-    function resizeInput() {
-        chatInput.style.height = 'auto';
-        chatInput.style.height = `${Math.min(chatInput.scrollHeight, 128)}px`;
+    function resizeInput(input) {
+        input.style.height = 'auto';
+        input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
     }
 
     function setSendLoading(loading) {
         sendBtn.innerHTML = loading
-            ? '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4"><circle cx="12" cy="12" r="9" stroke-dasharray="34 18" style="animation: spin 0.8s linear infinite; transform-origin: center;"/></svg>'
-            : '<svg class="send-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round"><path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/></svg>';
+            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8" stroke-dasharray="28 18" style="animation:logo-turn .8s linear infinite;transform-origin:center"/></svg>'
+            : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>';
     }
 
     function scrollToBottom() {
         chatMessages.scrollTop = chatMessages.scrollHeight;
     }
 
-    function formatTime(date) {
-        return date.toLocaleTimeString('zh-CN', { hour: '2-digit', minute: '2-digit' });
+    function openSidebar() {
+        sidebar.classList.add('open');
+        scrim.classList.add('visible');
+        loadSessions();
+    }
+
+    function closeSidebar() {
+        sidebar.classList.remove('open');
+        scrim.classList.remove('visible');
+        sessionPopover.hidden = true;
+    }
+
+    function openSettings() {
+        closeSidebar();
+        settingsLayer.classList.add('open');
+    }
+
+    function closeSettings() {
+        settingsLayer.classList.remove('open');
+    }
+
+    function closeLayer(id) {
+        document.getElementById(id)?.classList.remove('open');
+    }
+
+    function applyStoredAppearance() {
+        const theme = localStorage.getItem(THEME_KEY) || 'system';
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+        else document.documentElement.removeAttribute('data-theme');
+        document.querySelectorAll('[data-theme-option]').forEach((button) => {
+            button.classList.toggle('active', button.dataset.themeOption === theme);
+        });
+
+        const motionEnabled = localStorage.getItem(MOTION_KEY) !== 'off';
+        document.getElementById('motionToggle').classList.toggle('on', motionEnabled);
+        document.getElementById('motionToggle').setAttribute('aria-checked', String(motionEnabled));
+        if (!motionEnabled) document.documentElement.dataset.motion = 'off';
+    }
+
+    function setTheme(theme) {
+        localStorage.setItem(THEME_KEY, theme);
+        if (theme === 'light' || theme === 'dark') document.documentElement.dataset.theme = theme;
+        else document.documentElement.removeAttribute('data-theme');
+        document.querySelectorAll('[data-theme-option]').forEach((button) => {
+            button.classList.toggle('active', button.dataset.themeOption === theme);
+        });
+    }
+
+    function toggleMotion(event) {
+        const enabled = event.currentTarget.classList.toggle('on');
+        event.currentTarget.setAttribute('aria-checked', String(enabled));
+        localStorage.setItem(MOTION_KEY, enabled ? 'on' : 'off');
+        if (enabled) {
+            document.documentElement.removeAttribute('data-motion');
+            startPromptRotation();
+        } else {
+            document.documentElement.dataset.motion = 'off';
+            stopPromptRotation();
+        }
+    }
+
+    function rotatePrompt() {
+        if (document.documentElement.dataset.motion === 'off') return;
+        rotatingQuestion.classList.add('is-leaving');
+        setTimeout(() => {
+            rotationIndex = (rotationIndex + 1) % rotatingPrompts.length;
+            const next = rotatingPrompts[rotationIndex];
+            rotatingQuestion.classList.remove('is-leaving');
+            rotatingQuestion.classList.add('is-entering');
+            rotatingQuestion.textContent = next.label;
+            promptRotator.dataset.prompt = next.prompt;
+            setTimeout(() => rotatingQuestion.classList.remove('is-entering'), 70);
+        }, 280);
+    }
+
+    function startPromptRotation() {
+        stopPromptRotation();
+        if (document.documentElement.dataset.motion !== 'off') {
+            rotationTimer = setInterval(rotatePrompt, 3600);
+        }
+    }
+
+    function stopPromptRotation() {
+        clearInterval(rotationTimer);
+    }
+
+    function showToast(message) {
+        clearTimeout(toastTimer);
+        toast.textContent = message;
+        toast.classList.add('visible');
+        toastTimer = setTimeout(() => toast.classList.remove('visible'), 2200);
     }
 
     function parseStreamLine(line) {
@@ -564,15 +1042,14 @@
         try {
             return JSON.parse(trimmed);
         } catch (err) {
-            console.warn('Bad stream event:', trimmed);
             return null;
         }
     }
 
     async function fetchJson(url, options) {
-        const res = await authFetch(url, options);
-        const data = await res.json();
-        if (!res.ok) throw createApiError(data, '请求失败', res.status);
+        const response = await authFetch(url, options);
+        const data = await response.json();
+        if (!response.ok) throw createApiError(data, '请求失败', response.status);
         return data;
     }
 
@@ -608,7 +1085,6 @@
             showInitError('请先登录');
             return false;
         }
-
         const payload = decodeJwtPayload(token);
         const tokenUserId = payload && payload.sub;
         if (!tokenUserId) {
@@ -616,9 +1092,8 @@
             showInitError('登录信息无效');
             return false;
         }
-
         localStorage.setItem(USER_ID_KEY, String(tokenUserId));
-        if (String(tokenUserId) !== String(userId)) {
+        if (String(tokenUserId) !== userId) {
             window.location.replace(`/chat/${encodeURIComponent(tokenUserId)}`);
             return false;
         }
@@ -628,10 +1103,10 @@
     async function authFetch(url, options) {
         const first = await fetchWithAccessToken(url, options);
         if (first.status !== 401) return first;
-
         const refreshed = await refreshAccessToken();
         if (!refreshed) {
             clearAuth();
+            window.location.replace('/');
             return first;
         }
         return fetchWithAccessToken(url, options);
@@ -648,15 +1123,15 @@
         const refreshToken = getRefreshToken();
         if (!refreshToken) return false;
         try {
-            const res = await fetch('/auth/refresh', {
+            const response = await fetch('/auth/refresh', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ refresh_token: refreshToken }),
             });
-            if (!res.ok) return false;
-            const data = await res.json();
+            if (!response.ok) return false;
+            const data = await response.json();
             const payload = decodeJwtPayload(data.access_token);
-            if (!payload || String(payload.sub) !== String(userId)) return false;
+            if (!payload || String(payload.sub) !== userId) return false;
             localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
             localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
             localStorage.setItem(USER_ID_KEY, String(payload.sub));
@@ -706,15 +1181,6 @@
 
     function formatDisplayError(error, fallback) {
         const message = (error && error.message) || fallback;
-        return error && error.requestId ? `${message}\n错误编号：${error.requestId}` : message;
-    }
-
-    function escapeHTML(value) {
-        return String(value || '')
-            .replace(/&/g, '&amp;')
-            .replace(/</g, '&lt;')
-            .replace(/>/g, '&gt;')
-            .replace(/"/g, '&quot;')
-            .replace(/'/g, '&#039;');
+        return error && error.requestId ? `${message}（${error.requestId}）` : message;
     }
 })();

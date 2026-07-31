@@ -14,6 +14,7 @@
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
+from core.execution_budget import ExecutionLimitExceeded
 from typing import Optional, Union, List, Dict, Any
 import json
 import logging
@@ -226,6 +227,8 @@ class ChitchatAgent(AgentBase):
                         }, ensure_ascii=False),
                         role="assistant"
                     )
+            except ExecutionLimitExceeded:
+                raise
             except Exception as e:
                 logger.warning(f"Chitchat LLM fallback failed: {e}")
 
@@ -340,6 +343,8 @@ class ChitchatAgent(AgentBase):
                 text = '\n'.join(lines[1:-1]) if len(lines) > 2 else text
             return text if text else None
 
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Chitchat LLM generation failed: {e}")
             return None

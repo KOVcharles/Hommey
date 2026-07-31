@@ -5,6 +5,7 @@ MCP Tool Agent
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
+from core.execution_budget import ExecutionLimitExceeded, consume_external_call
 from typing import Optional, Union, List, Dict, Any
 import json
 import logging
@@ -86,6 +87,7 @@ class MCPToolAgent(AgentBase):
 
         # 调用 MCP 工具
         try:
+            consume_external_call("mcp")
             result = await self.mcp_manager.call_tool(
                 server_name=server_name,
                 tool_name=tool_name,
@@ -108,6 +110,8 @@ class MCPToolAgent(AgentBase):
                 role="assistant",
             )
 
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"MCP tool call failed: {server_name}.{tool_name} - {e}")
             return Msg(

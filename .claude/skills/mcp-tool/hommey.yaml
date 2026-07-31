@@ -12,5 +12,7 @@ execution:
   - skill: mcp-tool
     agent_name: mcp_tool
     priority: 1
+    on_failure: abort
+    max_retries: 0
     reason: 执行受授权的内部 MCP 操作
     expected_output: 结构化工具执行结果

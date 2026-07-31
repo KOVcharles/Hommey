@@ -23,7 +23,16 @@ import time
 import uuid
 
 from core.skill_store import SkillPlatformStore
+from core.execution_budget import (
+    ExecutionBudget,
+    ExecutionLimitExceeded,
+    consume_agent_call,
+    current_execution_budget,
+    execution_budget_scope,
+)
+from settings import RESILIENCE_CONFIG
 from utils.skill_loader import SkillLoader
+from utils.llm_resilience import is_retriable_error
 from utils.memory_safety import filter_safe_memory_mapping, is_safe_preference_value
 
 logger = logging.getLogger(__name__)
@@ -72,6 +81,26 @@ class OrchestrationAgent(AgentBase):
             logger.info(f"Unregistered agent: {agent_name}")
 
     async def reply(self, x: Optional[Union[Msg, List[Msg]]] = None) -> Msg:
+        """Execute with the caller's budget, or create one for non-Web entrypoints."""
+        if current_execution_budget() is not None:
+            return await self._reply_impl(x)
+
+        rc = RESILIENCE_CONFIG
+        budget = ExecutionBudget(
+            max_agent_calls=rc.get("max_agent_calls_per_request", 8),
+            max_external_calls=rc.get("max_external_calls_per_request", 16),
+            max_external_calls_per_type=rc.get("max_external_calls_per_type", 6),
+        )
+        try:
+            with execution_budget_scope(budget):
+                return await asyncio.wait_for(
+                    self._reply_impl(x),
+                    timeout=rc.get("request_timeout_sec", 120.0),
+                )
+        finally:
+            logger.info("Orchestration execution budget: %s", budget.snapshot())
+
+    async def _reply_impl(self, x: Optional[Union[Msg, List[Msg]]] = None) -> Msg:
         """
         协调执行流程
 
@@ -143,40 +172,42 @@ class OrchestrationAgent(AgentBase):
         # 准备上下文信息
         context = self._prepare_context(intention_data)
 
-        # 并行执行智能体（按优先级分组）
+        # 按优先级分批执行；同一优先级并行，不同优先级顺序执行。
         results = []
-        current_priority = None
-        parallel_tasks = []
-
-        for task in sorted_schedule:
-            priority = task.get("priority", 0)
-
-            # 如果优先级变化，先执行当前批次
-            if current_priority is not None and priority != current_priority:
-                # 并行执行当前优先级的所有任务
-                if parallel_tasks:
-                    batch_results = await self._execute_parallel_agents(parallel_tasks, context, results)
-                    results.extend(batch_results)
-                    parallel_tasks = []
-                    if self._pause_incomplete_trip_planning(sorted_schedule, results):
-                        break
-
-            current_priority = priority
-            parallel_tasks.append(task)
-
-        # 执行最后一批
-        if parallel_tasks:
-            batch_results = await self._execute_parallel_agents(parallel_tasks, context, results)
+        halted = False
+        paused_for_input = False
+        priorities = sorted({task.get("priority", 999) for task in sorted_schedule})
+        for priority in priorities:
+            batch = [task for task in sorted_schedule if task.get("priority", 999) == priority]
+            batch_results = await self._execute_parallel_agents(batch, context, results)
             results.extend(batch_results)
 
-        await self._continue_ready_trip_planning(sorted_schedule, context, results)
+            if self._has_abort_failure(batch_results):
+                remaining = [
+                    task for task in sorted_schedule
+                    if task.get("priority", 999) > priority
+                ]
+                results.extend(self._build_skipped_results(remaining))
+                halted = True
+                break
+
+            if self._pause_incomplete_trip_planning(sorted_schedule, results):
+                paused_for_input = True
+                break
+
+        if not halted and not paused_for_input:
+            await self._continue_ready_trip_planning(sorted_schedule, context, results)
 
         # 聚合结果
         final_result = self._aggregate_results(results, intention_data)
 
         # 更新记忆
         if self.memory_manager:
-            self._update_memory(intention_data, results)
+            successful_results = [
+                item for item in results
+                if (item.get("result") or {}).get("status") == "success"
+            ]
+            self._update_memory(intention_data, successful_results)
 
         self._record_skill_runs(intention_data, results)
 
@@ -223,16 +254,53 @@ class OrchestrationAgent(AgentBase):
         plan_definition = self.skill_definitions.get("plan-trip")
         if not plan_definition:
             return
+        executed_agents = {item.get("agent_name") for item in results}
         follow_up = [
             step.model_dump()
             for step in plan_definition.execution
-            if step.agent_name != "event_collection"
+            if step.agent_name != "event_collection" and step.agent_name not in executed_agents
         ]
         follow_up, _ = self._filter_enabled_schedule(follow_up)
-        for priority in sorted({item.get("priority", 999) for item in follow_up}):
+        priorities = sorted({item.get("priority", 999) for item in follow_up})
+        for priority in priorities:
             batch = [item for item in follow_up if item.get("priority", 999) == priority]
             batch_results = await self._execute_parallel_agents(batch, context, results)
             results.extend(batch_results)
+            if self._has_abort_failure(batch_results):
+                remaining = [
+                    item for item in follow_up
+                    if item.get("priority", 999) > priority
+                ]
+                results.extend(self._build_skipped_results(remaining))
+                return
+
+    @staticmethod
+    def _has_abort_failure(results: List[Dict[str, Any]]) -> bool:
+        return any(
+            (item.get("result") or {}).get("status") == "error"
+            and item.get("on_failure", "abort") == "abort"
+            for item in results
+        )
+
+    @staticmethod
+    def _build_skipped_results(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
+        return [
+            {
+                "agent_name": task.get("agent_name"),
+                "priority": task.get("priority", 0),
+                "on_failure": task.get("on_failure", "abort"),
+                "result": {
+                    "status": "skipped",
+                    "agent_name": task.get("agent_name"),
+                    "data": {},
+                    "error_code": "UPSTREAM_DEPENDENCY_FAILED",
+                    "error_message": "前置关键步骤失败，本步骤未执行",
+                    "retryable": False,
+                    "attempts": 0,
+                },
+            }
+            for task in tasks
+        ]
 
     def _prepare_context(self, intention_data: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -307,7 +375,10 @@ class OrchestrationAgent(AgentBase):
                 input_summary=input_summary,
                 output_summary={"agent": agent_name, "status": runtime_result.get("status", "unknown")},
                 evidence_count=len(evidence) if isinstance(evidence, list) else 0,
-                error_code="AGENT_ERROR" if runtime_result.get("status") == "error" else None,
+                error_code=(
+                    (runtime_result.get("error_code") or "AGENT_ERROR")
+                    if runtime_result.get("status") == "error" else None
+                ),
             )
 
     async def _execute_parallel_agents(
@@ -340,10 +411,12 @@ class OrchestrationAgent(AgentBase):
                 expected_output=task.get("expected_output", ""),
                 previous_results=previous_results,
                 task_params=task.get("params", {}),
+                max_retries=task.get("max_retries", 0),
             )
             return [{
                 "agent_name": task.get("agent_name"),
                 "priority": task.get("priority", 0),
+                "on_failure": task.get("on_failure", "abort"),
                 "result": result
             }]
 
@@ -369,25 +442,29 @@ class OrchestrationAgent(AgentBase):
                 expected_output=expected_output,
                 previous_results=previous_results,
                 task_params=task_params,
+                max_retries=task.get("max_retries", 0),
             )
-            parallel_coroutines.append((agent_name, priority, coroutine))
+            parallel_coroutines.append((agent_name, priority, task.get("on_failure", "abort"), coroutine))
 
         # 使用 asyncio.gather 并行执行
         execution_results = await asyncio.gather(
-            *[coro for _, _, coro in parallel_coroutines],
+            *[coro for _, _, _, coro in parallel_coroutines],
             return_exceptions=True
         )
 
         # 整理结果
         results = []
-        for (agent_name, priority, _), exec_result in zip(parallel_coroutines, execution_results):
+        for (agent_name, priority, on_failure, _), exec_result in zip(parallel_coroutines, execution_results):
             if isinstance(exec_result, Exception):
                 logger.error(f"Parallel agent execution failed: {agent_name}, error: {exec_result}")
                 result = {
                     "status": "error",
                     "agent_name": agent_name,
                     "data": {"error": str(exec_result)},
-                    "message": f"并行执行失败: {str(exec_result)}"
+                    "error_code": "AGENT_EXECUTION_FAILED",
+                    "error_message": "Agent 并行执行失败",
+                    "retryable": is_retriable_error(exec_result),
+                    "attempts": 1,
                 }
             else:
                 result = exec_result
@@ -395,6 +472,7 @@ class OrchestrationAgent(AgentBase):
             results.append({
                 "agent_name": agent_name,
                 "priority": priority,
+                "on_failure": on_failure,
                 "result": result
             })
 
@@ -408,6 +486,7 @@ class OrchestrationAgent(AgentBase):
         expected_output: str,
         previous_results: List[Dict],
         task_params: Dict[str, Any] = None,
+        max_retries: int = 0,
     ) -> Dict[str, Any]:
         """
         执行单个智能体
@@ -428,10 +507,26 @@ class OrchestrationAgent(AgentBase):
             logger.warning(f"Agent not registered: {agent_name}")
             return {
                 "status": "error",
-                "message": f"智能体未注册: {agent_name}"
+                "agent_name": agent_name,
+                "data": {},
+                "error_code": "AGENT_NOT_REGISTERED",
+                "error_message": f"智能体未注册: {agent_name}",
+                "retryable": False,
+                "attempts": 0,
             }
 
-        agent = self.agent_registry[agent_name]
+        try:
+            agent = self.agent_registry[agent_name]
+        except Exception as exc:
+            logger.error("Agent load failed: %s, error: %s", agent_name, exc)
+            return self._error_result(
+                agent_name,
+                exc,
+                duration_sec=0.0,
+                attempts=0,
+                retryable=False,
+                error_code="AGENT_LOAD_FAILED",
+            )
 
         # 构建输入消息（包含 task_params）
         msg_data = {
@@ -450,51 +545,121 @@ class OrchestrationAgent(AgentBase):
         )
 
         start_time = time.perf_counter()
-        try:
-            # 调用智能体
-            response = await agent.reply(input_msg)
-            duration_sec = time.perf_counter() - start_time
-            logger.info("Agent %s completed in %.3fs", agent_name, duration_sec)
+        retries = max(0, min(int(max_retries or 0), 2))
+        for attempt in range(retries + 1):
+            attempts = attempt + 1
+            try:
+                consume_agent_call(agent_name)
+                response = await agent.reply(input_msg)
+                payload = self._parse_agent_response(response)
+                result = self._normalize_agent_payload(agent_name, payload)
+                result["attempts"] = attempts
+                result["duration_sec"] = time.perf_counter() - start_time
+                if result["status"] == "success" or not result.get("retryable") or attempt >= retries:
+                    logger.info(
+                        "Agent %s finished status=%s attempts=%d in %.3fs",
+                        agent_name,
+                        result["status"],
+                        attempts,
+                        result["duration_sec"],
+                    )
+                    return result
+            except ExecutionLimitExceeded as exc:
+                return self._error_result(
+                    agent_name,
+                    exc,
+                    duration_sec=time.perf_counter() - start_time,
+                    attempts=attempts,
+                    retryable=False,
+                    error_code=exc.code,
+                )
+            except Exception as exc:
+                retryable = is_retriable_error(exc)
+                if not retryable or attempt >= retries:
+                    logger.error("Agent execution failed: %s, error: %s", agent_name, exc)
+                    return self._error_result(
+                        agent_name,
+                        exc,
+                        duration_sec=time.perf_counter() - start_time,
+                        attempts=attempts,
+                        retryable=retryable,
+                    )
 
-            # 解析响应
-            if isinstance(response.content, str):
-                try:
-                    result = json.loads(response.content)
-                except json.JSONDecodeError:
-                    result = {"output": response.content}
-            else:
-                result = response.content
+            await asyncio.sleep(0.5 * (2 ** attempt))
 
-            # 检查 result 中是否有 error 字段
-            # 如果有，说明智能体内部执行失败了
-            if isinstance(result, dict) and "error" in result:
-                error_msg = result.get("error", "未知错误")
-                return {
-                    "status": "error",
-                    "agent_name": agent_name,
-                    "duration_sec": duration_sec,
-                    "data": result,
-                    "message": error_msg
-                }
+        return self._error_result(
+            agent_name,
+            RuntimeError("Agent execution exhausted without a result"),
+            duration_sec=time.perf_counter() - start_time,
+            attempts=retries + 1,
+            retryable=False,
+        )
 
-            return {
-                "status": "success",
-                "agent_name": agent_name,
-                "duration_sec": duration_sec,
-                "data": result
-            }
+    @staticmethod
+    def _parse_agent_response(response) -> Any:
+        content = getattr(response, "content", response)
+        if isinstance(content, str):
+            try:
+                return json.loads(content)
+            except json.JSONDecodeError:
+                return {"output": content}
+        return content
 
-        except Exception as e:
-            duration_sec = time.perf_counter() - start_time
-            logger.error(f"Agent execution failed: {agent_name}, error: {e}")
-            # 返回友好的错误信息，但不中断流程
+    @staticmethod
+    def _normalize_agent_payload(agent_name: str, payload: Any) -> Dict[str, Any]:
+        data = payload if isinstance(payload, dict) else {"output": payload}
+        status = str(data.get("status") or "").lower()
+        error_message = data.get("error")
+        if status == "error" and not error_message:
+            error_message = data.get("message") or "Agent returned error status"
+
+        nested_results = data.get("results") if isinstance(data.get("results"), dict) else {}
+        if data.get("query_success") is False and nested_results.get("error"):
+            error_message = nested_results["error"]
+
+        if error_message:
+            retryable = bool(data.get("retryable")) or is_retriable_error(
+                RuntimeError(str(error_message))
+            )
             return {
                 "status": "error",
                 "agent_name": agent_name,
-                "duration_sec": duration_sec,
-                "data": {"error": str(e)},
-                "message": f"智能体执行失败: {str(e)}"
+                "data": data,
+                "error_code": str(data.get("error_code") or "AGENT_EXECUTION_FAILED"),
+                "error_message": str(error_message),
+                "retryable": retryable,
             }
+
+        return {
+            "status": "success",
+            "agent_name": agent_name,
+            "data": data,
+            "error_code": None,
+            "error_message": None,
+            "retryable": False,
+        }
+
+    @staticmethod
+    def _error_result(
+        agent_name: str,
+        exc: Exception,
+        *,
+        duration_sec: float,
+        attempts: int,
+        retryable: bool,
+        error_code: str = "AGENT_EXECUTION_FAILED",
+    ) -> Dict[str, Any]:
+        public_message = getattr(exc, "public_message", None) or "Agent 执行失败"
+        return {
+            "status": "error",
+            "agent_name": agent_name,
+            "duration_sec": duration_sec,
+            "attempts": attempts,
+            "data": {"error": str(exc)},
+            "error_code": error_code,
+            "error_message": public_message,
+            "retryable": retryable,
+        }
 
     def _aggregate_results(
         self,
@@ -526,18 +691,29 @@ class OrchestrationAgent(AgentBase):
             aggregated["results"].append({
                 "agent_name": result["agent_name"],
                 "priority": result["priority"],
+                "on_failure": result.get("on_failure", "abort"),
                 "status": result["result"].get("status", "unknown"),
                 "duration_sec": result["result"].get("duration_sec"),
-                "data": result["result"].get("data", {})
+                "attempts": result["result"].get("attempts", 1),
+                "data": result["result"].get("data", {}),
+                "error_code": result["result"].get("error_code"),
+                "error_message": result["result"].get("error_message"),
+                "retryable": bool(result["result"].get("retryable", False)),
             })
 
-        return aggregated
-
         # 检查是否有错误
-        errors = [r for r in results if r["result"].get("status") == "error"]
-        if errors:
+        errors = [r for r in results if (r.get("result") or {}).get("status") == "error"]
+        required_errors = [r for r in errors if r.get("on_failure", "abort") == "abort"]
+        skipped = [r for r in results if (r.get("result") or {}).get("status") == "skipped"]
+        if required_errors:
+            aggregated["status"] = "failed"
+        elif errors:
             aggregated["status"] = "partial_failure"
-            aggregated["errors"] = len(errors)
+        aggregated["summary"] = {
+            "success": len(results) - len(errors) - len(skipped),
+            "error": len(errors),
+            "skipped": len(skipped),
+        }
 
         return aggregated
 

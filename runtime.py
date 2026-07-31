@@ -15,6 +15,7 @@ from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
 from utils.circuit_breaker import CircuitBreaker
 from core.skill_store import SkillPlatformStore
+from core.execution_budget import BudgetedModel
 
 
 @dataclass
@@ -25,6 +26,20 @@ class AgentRuntime:
     agent_registry: LazyAgentRegistry
     orchestrator: OrchestrationAgent
     agent_cache: Dict
+    attachment_service: Optional[object] = None  # 多模态附件服务（共享单例）
+
+
+# 多模态附件服务单例：跨用户共享（按 user_id/attachment_id 隔离），惰性构造。
+_shared_attachment_service = None
+
+
+def get_shared_attachment_service():
+    global _shared_attachment_service
+    if _shared_attachment_service is None:
+        from multimodal.service import AttachmentService
+
+        _shared_attachment_service = AttachmentService()
+    return _shared_attachment_service
 
 
 def create_agent_runtime(
@@ -39,16 +54,19 @@ def create_agent_runtime(
     from agentscope.model import OpenAIChatModel
 
     timeout_sec = SYSTEM_CONFIG.get("timeout", 60)
-    model = OpenAIChatModel(
+    raw_model = OpenAIChatModel(
         model_name=LLM_CONFIG["model_name"],
         api_key=LLM_CONFIG["api_key"],
         client_kwargs={
             "base_url": LLM_CONFIG["base_url"],
             "timeout": float(timeout_sec),
         },
-        temperature=LLM_CONFIG.get("temperature", 0.7),
-        max_tokens=LLM_CONFIG.get("max_tokens", 2000),
+        generate_kwargs={
+            "temperature": LLM_CONFIG.get("temperature", 0.7),
+            "max_tokens": LLM_CONFIG.get("max_tokens", 8192),
+        },
     )
+    model = BudgetedModel(raw_model)
 
     memory_manager = MemoryManager(
         user_id=user_id,
@@ -83,6 +101,7 @@ def create_agent_runtime(
         agent_registry=agent_registry,
         orchestrator=orchestrator,
         agent_cache=cache,
+        attachment_service=get_shared_attachment_service(),
     )
 
 

@@ -20,6 +20,8 @@ from urllib.parse import quote
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
+from core.execution_budget import ExecutionLimitExceeded, consume_external_call
+
 logger = logging.getLogger(__name__)
 
 # 尝试导入 duckduckgo_search (旧包名) 或 ddgs (新包名)
@@ -114,6 +116,8 @@ class InformationQueryAgent(AgentBase):
             try:
                 result = await self._weather_query(user_query)
                 return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
+            except ExecutionLimitExceeded:
+                raise
             except Exception as e:
                 logger.warning(f"Weather query failed, fallback to web search: {e}")
                 result = None
@@ -124,6 +128,8 @@ class InformationQueryAgent(AgentBase):
             logger.info(f"Web search query: {user_query}")
             try:
                 result = await self._web_search(user_query)
+            except ExecutionLimitExceeded:
+                raise
             except Exception as e:
                 logger.error(f"Query failed: {e}")
                 result = {
@@ -159,6 +165,9 @@ class InformationQueryAgent(AgentBase):
             self._web_search(transport_query),
             return_exceptions=True,
         )
+        for value in (weather, transport):
+            if isinstance(value, ExecutionLimitExceeded):
+                raise value
         weather_data = weather if isinstance(weather, dict) else {"query_success": False, "results": {"message": str(weather)}}
         transport_data = transport if isinstance(transport, dict) else {"query_success": False, "results": {"message": str(transport)}}
         weather_summary = (weather_data.get("results") or {}).get("summary") or (weather_data.get("results") or {}).get("message")
@@ -212,6 +221,7 @@ class InformationQueryAgent(AgentBase):
 
         url = f"https://wttr.in/{quote(city)}?format=j1"
         try:
+            consume_external_call("weather")
             loop = asyncio.get_event_loop()
             resp = await loop.run_in_executor(
                 None,
@@ -224,6 +234,8 @@ class InformationQueryAgent(AgentBase):
             )
             resp.raise_for_status()
             data = resp.json()
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.warning(f"wttr.in request failed, trying Open-Meteo fallback: {e}")
             return await self._open_meteo_weather_query(city, httpx)
@@ -290,6 +302,7 @@ class InformationQueryAgent(AgentBase):
         }
 
         try:
+            consume_external_call("weather")
             loop = asyncio.get_event_loop()
             resp = await loop.run_in_executor(
                 None,
@@ -303,6 +316,8 @@ class InformationQueryAgent(AgentBase):
             )
             resp.raise_for_status()
             data = resp.json()
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.warning(f"Open-Meteo request failed: {e}")
             return {
@@ -466,6 +481,7 @@ class InformationQueryAgent(AgentBase):
             search_results = []
             for backend in ("bing", "duckduckgo", "auto"):
                 try:
+                    consume_external_call("web_search")
                     raw = ddgs.text(
                         query,
                         max_results=10,
@@ -476,6 +492,8 @@ class InformationQueryAgent(AgentBase):
                     search_results = list(raw)
                     if search_results:
                         break
+                except ExecutionLimitExceeded:
+                    raise
                 except Exception as e:
                     logger.debug(f"DDGS backend {backend} failed: {e}")
                     continue
@@ -511,6 +529,8 @@ class InformationQueryAgent(AgentBase):
                     "sources": results,
                 },
             }
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Web search failed: {e}")
             return {
@@ -596,6 +616,8 @@ class InformationQueryAgent(AgentBase):
                 text = str(response) if response else ""
 
             return text.strip() if text else "无法生成摘要"
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Summarization failed: {e}")
             return "搜索成功，但摘要生成失败"

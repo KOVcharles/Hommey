@@ -3,6 +3,7 @@
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
+from core.execution_budget import ExecutionLimitExceeded
 from typing import Optional, Union, List, Dict, Any
 import json
 import logging
@@ -250,6 +251,8 @@ class ItineraryPlanningAgent(AgentBase):
                 raise ValueError("Parsed result is None")
             result = normalize_planning_result(result)
 
+        except ExecutionLimitExceeded:
+            raise
         except Exception as e:
             logger.error(f"Itinerary planning failed: {e}")
             # Ensure text is defined for logging even if extraction failed

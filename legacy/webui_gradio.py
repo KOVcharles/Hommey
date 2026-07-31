@@ -173,16 +173,20 @@ class WebHommey:
         timeout_sec = SYSTEM_CONFIG.get("timeout", 60)
         from agentscope.model import OpenAIChatModel
 
-        self.model = OpenAIChatModel(
+        raw_model = OpenAIChatModel(
             model_name=LLM_CONFIG["model_name"],
             api_key=LLM_CONFIG["api_key"],
             client_kwargs={
                 "base_url": LLM_CONFIG["base_url"],
                 "timeout": float(timeout_sec),
             },
-            temperature=LLM_CONFIG.get("temperature", 0.7),
-            max_tokens=LLM_CONFIG.get("max_tokens", 2000),
+            generate_kwargs={
+                "temperature": LLM_CONFIG.get("temperature", 0.7),
+                "max_tokens": LLM_CONFIG.get("max_tokens", 8192),
+            },
         )
+        from core.execution_budget import BudgetedModel
+        self.model = BudgetedModel(raw_model)
 
         # 记忆管理器
         self.memory_manager = MemoryManager(
@@ -288,7 +292,7 @@ class WebHommey:
 
         # 意图识别
         rc = RESILIENCE_CONFIG
-        max_retries = rc.get("max_retries", 3)
+        max_retries = rc.get("agent_max_retries", 1)
 
         try:
             if self.circuit_breaker:
@@ -320,12 +324,7 @@ class WebHommey:
 
         # 调度执行
         try:
-            orchestration_result = await retry_with_backoff(
-                lambda: self.orchestrator.reply(intention_result),
-                max_retries=max_retries,
-                base_delay_sec=rc.get("retry_base_delay_sec", 1.0),
-                max_delay_sec=rc.get("retry_max_delay_sec", 30.0),
-            )
+            orchestration_result = await self.orchestrator.reply(intention_result)
             if self.circuit_breaker:
                 self.circuit_breaker.record_success()
         except CircuitOpenError:

@@ -1,578 +1,237 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Hommey - {{ user_id }}</title>
-    <link rel="preconnect" href="https://fonts.googleapis.com">
-    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Noto+Sans+SC:wght@400;500;600;700&display=swap" rel="stylesheet">
-    <style>
-        :root {
-            --ink: #211f1c;
-            --muted: #766d63;
-            --cream: #f8efe4;
-            --paper: #fffaf3;
-            --orange: #d76b1f;
-            --orange-deep: #a64a13;
-            --line: rgba(52, 43, 32, 0.13);
-            --dark: #201f1d;
-            --dark-soft: #2c2925;
-            --shadow: 0 28px 86px rgba(66, 49, 30, 0.15);
-        }
-
-        * { box-sizing: border-box; }
-        html, body { height: 100%; }
-        body {
-            margin: 0;
-            overflow: hidden;
-            font-family: "Inter", "Noto Sans SC", -apple-system, BlinkMacSystemFont, sans-serif;
-            color: var(--ink);
-            background:
-                radial-gradient(circle at 78% 12%, rgba(215,107,31,0.12), transparent 30%),
-                linear-gradient(135deg, #fffaf3 0%, #f3e8d8 54%, #fff6ec 100%);
-        }
-        ::-webkit-scrollbar { width: 7px; }
-        ::-webkit-scrollbar-track { background: transparent; }
-        ::-webkit-scrollbar-thumb { background: rgba(89, 77, 64, 0.26); border-radius: 999px; }
-
-        .app-layout {
-            width: min(1440px, 100vw);
-            height: 100vh;
-            margin: 0 auto;
-            padding: 18px;
-            display: grid;
-            grid-template-columns: minmax(0, 1fr) 340px;
-            gap: 16px;
-        }
-
-        .desk,
-        .docket {
-            border: 1px solid rgba(255,255,255,0.74);
-            box-shadow: var(--shadow);
-            backdrop-filter: blur(18px);
-        }
-
-        .desk {
-            min-width: 0;
-            border-radius: 34px;
-            overflow: hidden;
-            background: rgba(255,250,243,0.82);
-            display: grid;
-            grid-template-rows: auto 1fr auto;
-        }
-
-        .chat-header {
-            min-height: 104px;
-            padding: 22px 26px;
-            display: flex;
-            align-items: center;
-            gap: 16px;
-            border-bottom: 1px solid var(--line);
-        }
-        .assistant-avatar {
-            width: 58px;
-            height: 58px;
-            border-radius: 16px;
-            object-fit: cover;
-            border: 1px solid rgba(255,255,255,0.78);
-            box-shadow: 0 16px 32px rgba(83, 58, 31, 0.16);
-            flex: 0 0 auto;
-        }
-        .eyebrow {
-            color: var(--orange-deep);
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-        }
-        .title-block h1 {
-            margin: 4px 0 0;
-            font-size: 24px;
-            line-height: 1.1;
-            letter-spacing: 0;
-        }
-        .title-block p {
-            margin: 6px 0 0;
-            color: var(--muted);
-            font-size: 13px;
-        }
-        .header-actions {
-            margin-left: auto;
-            display: flex;
-            align-items: center;
-            gap: 10px;
-        }
-        .user-chip {
-            display: inline-flex;
-            align-items: center;
-            gap: 8px;
-            min-height: 38px;
-            padding: 7px 11px 7px 7px;
-            border: 1px solid var(--line);
-            border-radius: 999px;
-            background: rgba(255,255,255,0.56);
-            color: #4f463e;
-            font-size: 13px;
-            font-weight: 800;
-        }
-        .user-dot {
-            width: 26px;
-            height: 26px;
-            border-radius: 999px;
-            display: grid;
-            place-items: center;
-            background: var(--dark);
-            color: #fff7ee;
-            font-size: 12px;
-        }
-        .logout-link {
-            width: 38px;
-            height: 38px;
-            display: grid;
-            place-items: center;
-            border: 1px solid var(--line);
-            border-radius: 13px;
-            background: rgba(255,255,255,0.56);
-            color: #655b52;
-            text-decoration: none;
-        }
-        .logout-link:hover { color: var(--orange-deep); border-color: rgba(215,107,31,0.28); }
-
-        .chat-messages {
-            overflow-y: auto;
-            padding: 30px;
-            display: flex;
-            flex-direction: column;
-            gap: 18px;
-        }
-        .message-row {
-            display: flex;
-            gap: 11px;
-            align-items: flex-start;
-            max-width: min(780px, 88%);
-            animation: messageIn 0.24s ease;
-        }
-        .message-row.user {
-            align-self: flex-end;
-            flex-direction: row-reverse;
-        }
-        .message-row.ai { align-self: flex-start; }
-        @keyframes messageIn {
-            from { opacity: 0; transform: translateY(6px); }
-            to { opacity: 1; transform: translateY(0); }
-        }
-        .msg-avatar {
-            width: 36px;
-            height: 36px;
-            flex: 0 0 auto;
-            display: grid;
-            place-items: center;
-            overflow: hidden;
-            border-radius: 12px;
-            font-size: 13px;
-            font-weight: 800;
-        }
-        .msg-avatar.ai img {
-            width: 100%;
-            height: 100%;
-            object-fit: cover;
-        }
-        .msg-avatar.user {
-            background: #fffaf3;
-            color: var(--orange-deep);
-            border: 1px solid rgba(215,107,31,0.22);
-        }
-        .msg-stack { max-width: 100%; }
-        .msg-bubble {
-            padding: 14px 16px;
-            border-radius: 18px;
-            font-size: 14px;
-            line-height: 1.78;
-            word-break: break-word;
-            box-shadow: 0 14px 28px rgba(72, 52, 30, 0.08);
-        }
-        .msg-bubble.ai {
-            background: #fffaf3;
-            border: 1px solid rgba(255,255,255,0.78);
-            color: #312c26;
-            border-bottom-left-radius: 7px;
-        }
-        .msg-bubble.user {
-            background: var(--dark);
-            color: #fff7ee;
-            border-bottom-right-radius: 7px;
-        }
-        .msg-bubble strong { font-weight: 800; }
-        .msg-time {
-            margin-top: 6px;
-            color: #a19589;
-            font-size: 11px;
-        }
-        .message-row.user .msg-time { text-align: right; }
-
-        .option-list {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 8px;
-            margin-top: 10px;
-        }
-        .option-pill {
-            min-height: 34px;
-            padding: 7px 14px;
-            border-radius: 999px;
-            border: 1px solid rgba(215,107,31,0.22);
-            background: #fffaf3;
-            color: #574c42;
-            font: inherit;
-            font-size: 13px;
-            cursor: pointer;
-        }
-        .option-pill:hover {
-            border-color: rgba(215,107,31,0.5);
-            color: var(--orange-deep);
-        }
-        .option-pill:disabled {
-            cursor: default;
-            opacity: 0.45;
-        }
-        .agent-indicator {
-            min-width: 210px;
-            padding: 15px 16px;
-            border-radius: 18px 18px 18px 7px;
-            background: #fffaf3;
-            border: 1px solid rgba(255,255,255,0.78);
-            box-shadow: 0 14px 28px rgba(72,52,30,0.08);
-        }
-        .agent-tags {
-            display: flex;
-            flex-wrap: wrap;
-            gap: 6px;
-            margin-bottom: 8px;
-        }
-        .agent-tag {
-            padding: 4px 9px;
-            border-radius: 999px;
-            background: rgba(215,107,31,0.11);
-            color: var(--orange-deep);
-            font-size: 11px;
-            font-weight: 800;
-        }
-        .thinking-text { color: var(--muted); font-size: 13px; }
-        .typing-dots { display: flex; gap: 4px; margin-top: 9px; }
-        .typing-dot {
-            width: 6px;
-            height: 6px;
-            border-radius: 999px;
-            background: var(--orange);
-            animation: dotBounce 1.1s ease-in-out infinite;
-        }
-        .typing-dot:nth-child(2) { animation-delay: 0.15s; }
-        .typing-dot:nth-child(3) { animation-delay: 0.3s; }
-        @keyframes dotBounce {
-            0%, 80%, 100% { transform: translateY(0); opacity: 0.35; }
-            40% { transform: translateY(-4px); opacity: 1; }
-        }
-
-        .chat-input-area {
-            padding: 18px 24px 24px;
-            border-top: 1px solid var(--line);
-        }
-        .input-wrapper {
-            min-height: 60px;
-            display: flex;
-            align-items: flex-end;
-            gap: 10px;
-            padding: 8px;
-            border-radius: 20px;
-            background: #fffaf3;
-            border: 1px solid var(--line);
-            transition: border-color 0.18s ease, box-shadow 0.18s ease;
-        }
-        .input-wrapper:focus-within {
-            border-color: rgba(215,107,31,0.48);
-            box-shadow: 0 0 0 4px rgba(215,107,31,0.1);
-        }
-        .chat-input {
-            flex: 1;
-            max-height: 128px;
-            resize: none;
-            border: 0;
-            outline: 0;
-            background: transparent;
-            color: var(--ink);
-            font: inherit;
-            font-size: 14px;
-            line-height: 1.55;
-            padding: 10px;
-        }
-        .chat-input::placeholder { color: #a89b90; }
-        .send-btn {
-            width: 44px;
-            height: 44px;
-            border: 0;
-            border-radius: 15px;
-            display: grid;
-            place-items: center;
-            flex: 0 0 auto;
-            background: var(--dark);
-            color: #fff7ee;
-            cursor: pointer;
-        }
-        .send-btn:disabled {
-            cursor: not-allowed;
-            opacity: 0.44;
-        }
-
-        .docket {
-            border-radius: 34px;
-            overflow: hidden;
-            display: flex;
-            flex-direction: column;
-            background: var(--dark);
-            color: #fff7ee;
-        }
-        .docket-hero {
-            padding: 18px;
-            border-bottom: 1px solid rgba(255,255,255,0.12);
-        }
-        .avatar-card {
-            padding: 12px;
-            border-radius: 24px;
-            background:
-                linear-gradient(145deg, rgba(255,247,238,0.1), rgba(215,107,31,0.2));
-            border: 1px solid rgba(255,247,238,0.13);
-        }
-        .avatar-card img {
-            width: 100%;
-            aspect-ratio: 1;
-            display: block;
-            border-radius: 18px;
-            object-fit: cover;
-        }
-        .docket-info {
-            padding: 20px;
-            flex: 1;
-            overflow-y: auto;
-        }
-        .docket-kicker {
-            margin: 0 0 10px;
-            color: #c78357;
-            font-size: 11px;
-            font-weight: 800;
-            letter-spacing: 0.14em;
-            text-transform: uppercase;
-        }
-        .panel-name {
-            margin: 0;
-            font-size: 20px;
-            font-weight: 800;
-        }
-        .panel-level {
-            margin: 6px 0 20px;
-            color: #bdae9f;
-            font-size: 13px;
-        }
-        .info-row {
-            display: grid;
-            grid-template-columns: minmax(82px, auto) 1fr;
-            gap: 12px;
-            padding: 13px 0;
-            border-top: 1px solid rgba(255,255,255,0.11);
-        }
-        .info-label {
-            color: #bdae9f;
-            font-size: 12px;
-        }
-        .info-value {
-            color: #fff7ee;
-            font-size: 13px;
-            font-weight: 800;
-            text-align: right;
-        }
-        .empty-state {
-            padding: 16px 0;
-            border-top: 1px solid rgba(255,255,255,0.11);
-            color: #bdae9f;
-            font-size: 13px;
-            line-height: 1.7;
-        }
-        .panel-quick {
-            padding: 0 20px 20px;
-        }
-        .trip-card { margin-top:16px; padding:14px; border:1px solid var(--line); border-radius:14px; background:rgba(255,255,255,.72); }
-        .trip-card h3 { margin:0 0 8px; font-size:15px; }
-        .trip-row { display:flex; justify-content:space-between; gap:12px; padding:5px 0; font-size:13px; }
-        .trip-row span:first-child { color:var(--muted); }
-        .admin-link { display:none; color:inherit; text-decoration:none; font-size:13px; margin-right:8px; }
-        .quick-grid {
-            display: grid;
-            grid-template-columns: 1fr 1fr;
-            gap: 8px;
-        }
-        .quick-btn {
-            min-height: 42px;
-            border: 1px solid rgba(255,247,238,0.14);
-            border-radius: 14px;
-            background: var(--dark-soft);
-            color: #f2dfcc;
-            font: inherit;
-            font-size: 13px;
-            font-weight: 800;
-            cursor: pointer;
-        }
-        .quick-btn:hover {
-            border-color: rgba(215,107,31,0.46);
-            color: #fff7ee;
-        }
-
-        .init-overlay {
-            position: fixed;
-            inset: 0;
-            z-index: 10;
-            display: grid;
-            place-items: center;
-            background: rgba(248,239,228,0.88);
-            backdrop-filter: blur(16px);
-            transition: opacity 0.35s ease;
-        }
-        .init-overlay.hidden {
-            opacity: 0;
-            pointer-events: none;
-        }
-        .init-card {
-            width: min(330px, calc(100vw - 40px));
-            padding: 18px;
-            border-radius: 28px;
-            background: rgba(255,250,243,0.82);
-            border: 1px solid rgba(255,255,255,0.76);
-            box-shadow: var(--shadow);
-            text-align: center;
-        }
-        .init-card img {
-            width: 86px;
-            height: 86px;
-            border-radius: 22px;
-            object-fit: cover;
-            margin-bottom: 14px;
-        }
-        .init-status {
-            color: var(--ink);
-            font-size: 15px;
-            font-weight: 800;
-        }
-        .init-sub {
-            margin-top: 8px;
-            color: var(--muted);
-            font-size: 13px;
-        }
-        .init-spinner {
-            width: 26px;
-            height: 26px;
-            margin: 16px auto 0;
-            border: 3px solid rgba(215,107,31,0.18);
-            border-top-color: var(--orange);
-            border-radius: 999px;
-            animation: spin 0.8s linear infinite;
-        }
-        @keyframes spin { to { transform: rotate(360deg); } }
-
-        @media (max-width: 980px) {
-            body { overflow: auto; }
-            .app-layout {
-                min-height: 100vh;
-                height: auto;
-                grid-template-columns: 1fr;
-                padding: 10px;
-            }
-            .docket { display: none; }
-            .desk { min-height: calc(100vh - 20px); }
-            .chat-header { padding: 16px; }
-            .header-actions { display: none; }
-            .chat-messages { padding: 18px; }
-            .message-row { max-width: 96%; }
-        }
-    </style>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light dark">
+    <title>Hommey</title>
+    <link rel="stylesheet" href="/static/hommey.css">
 </head>
-<body>
+<body class="chat-page" data-user-id="{{ user_id }}">
     <div id="initOverlay" class="init-overlay">
         <div class="init-card">
-            <img src="/static/assets/hommey-avatar.jpg" alt="">
-            <div class="init-status">Hommey 正在整理你的旅行空间</div>
-            <div class="init-sub">首次加载需要几秒钟</div>
-            <div class="init-spinner"></div>
+            <span class="mini-logo">
+                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+            </span>
+            <div class="init-status">正在准备 Hommey</div>
+            <div class="init-sub">首次加载可能需要几秒钟</div>
         </div>
     </div>
 
-    <div class="app-layout">
-        <main class="desk">
-            <header class="chat-header">
-                <img class="assistant-avatar" src="/static/assets/hommey-avatar.jpg" alt="Hommey">
-                <div class="title-block">
-                    <div class="eyebrow">Private travel desk</div>
-                    <h1>Hommey</h1>
-                    <p>把复杂差旅整理成一张安静的计划。</p>
-                </div>
-                <div class="header-actions">
-                    <a id="adminLink" class="admin-link" href="/admin/skills">Skill 管理</a>
-                    <div class="user-chip">
-                        <span class="user-dot">{{ user_id[0:1].upper() if user_id else 'U' }}</span>
-                        <span>{{ user_id }}</span>
+    <div id="appShell" class="app-shell" data-view="home">
+        <header class="topbar">
+            <div class="topbar-group">
+                <button id="sidebarToggle" class="icon-button" type="button" aria-label="打开侧栏">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+                </button>
+                <button id="homeButton" class="product-home" type="button">
+                    <span class="mini-logo">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                    </span>
+                    <span>Hommey</span>
+                </button>
+            </div>
+            <div class="topbar-group">
+                <button id="accountButton" class="avatar-button" type="button" aria-label="打开账户设置">
+                    {{ user_id[0:1].upper() if user_id else 'U' }}
+                </button>
+            </div>
+        </header>
+
+        <main id="welcomeView" class="screen welcome-view">
+            <div class="welcome-inner">
+                <svg class="route-intro" viewBox="0 0 500 88" aria-hidden="true">
+                    <path d="M20 59 C104 59, 116 17, 208 29 S335 82, 480 27"/>
+                    <path class="route-progress" d="M20 59 C104 59, 116 17, 208 29 S335 82, 480 27"/>
+                    <circle cx="20" cy="59" r="4"/>
+                    <circle cx="480" cy="27" r="4"/>
+                    <circle class="traveller" cx="0" cy="0" r="3"/>
+                </svg>
+                <h1 class="welcome-title">出发前，问问 Hommey。<br><span>路线、标准和细节，一次理清。</span></h1>
+
+                <form id="homeComposer" class="composer welcome-composer">
+                    <textarea id="homeInput" rows="1" placeholder="今天想去哪儿？" aria-label="输入差旅需求" disabled></textarea>
+                    <div class="pending-attachments" style="display:none" aria-live="polite"></div>
+                    <div class="composer-tools">
+                        <span class="mode-badge">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/><path d="m9 12 2 2 4-4"/></svg>
+                            <span>企业差旅</span>
+                        </span>
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                        </label>
+                        <span class="composer-spacer"></span>
+                        <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送" disabled>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
+                        </button>
                     </div>
-                    <a class="logout-link" href="/" title="切换用户" aria-label="切换用户">
-                        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.1" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4"/>
-                            <path d="m16 17 5-5-5-5"/>
-                            <path d="M21 12H9"/>
-                        </svg>
-                    </a>
-                </div>
-            </header>
+                </form>
 
-            <div id="chatMessages" class="chat-messages"></div>
-
-            <footer class="chat-input-area">
-                <div class="input-wrapper">
-                    <textarea id="chatInput" class="chat-input" rows="1" placeholder="告诉 Hommey 你的出行需求，例如：下周一去上海出差两天" disabled></textarea>
-                    <button id="sendBtn" class="send-btn" disabled aria-label="发送">
-                        <svg class="send-icon" width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
-                            <path d="m22 2-7 20-4-9-9-4Z"/><path d="M22 2 11 13"/>
-                        </svg>
-                    </button>
-                </div>
-            </footer>
+                <button id="promptRotator" class="prompt-rotator" type="button" data-prompt="下周一去上海出差两天，帮我规划行程">
+                    <span class="prompt-label">试试问</span>
+                    <span class="prompt-window"><span id="rotatingQuestion" class="rotating-question">下周一去上海两天，帮我安排一下</span></span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+                <p class="privacy-note">重要的动态信息请以官方来源为准。</p>
+            </div>
         </main>
 
-        <aside class="docket">
-            <div class="docket-hero">
-                <div class="avatar-card">
-                    <img src="/static/assets/hommey-avatar.jpg" alt="Hommey 简约像素短发少女头像">
+        <main id="conversationView" class="screen conversation-view">
+            <div id="chatMessages" class="chat-messages" aria-live="polite"></div>
+            <footer class="chat-composer-shell">
+                <div class="composer">
+                    <textarea id="chatInput" rows="1" placeholder="继续问 Hommey" aria-label="继续提问" disabled></textarea>
+                    <div class="pending-attachments" style="display:none" aria-live="polite"></div>
+                    <div class="composer-tools">
+                        <span class="mode-badge">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/></svg>
+                            <span>企业差旅</span>
+                        </span>
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                        </label>
+                        <span class="composer-spacer"></span>
+                        <button id="sendBtn" class="send-button" type="button" aria-label="发送" disabled>
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
+                        </button>
+                    </div>
                 </div>
-            </div>
-            <div class="docket-info">
-                <p class="docket-kicker">Travel Docket</p>
-                <p id="panelName" class="panel-name">您好，{{ user_id }}</p>
-                <p id="panelLevel" class="panel-level">加载中...</p>
-                <div id="prefList">
-                    <div class="empty-state">正在读取你的偏好。</div>
-                </div>
-                <div class="trip-card">
-                    <h3>当前出差任务</h3>
-                    <div id="activeTrip"><div class="empty-state">尚未创建当前出差任务。</div></div>
-                </div>
-            </div>
-            <div class="panel-quick">
-                <p class="docket-kicker">Quick Ask</p>
-                <div class="quick-grid">
-                    <button class="quick-btn" type="button" data-quick="帮我规划去北京的行程">规划行程</button>
-                    <button class="quick-btn" type="button" data-quick="北京的天气怎么样">查询天气</button>
-                    <button class="quick-btn" type="button" data-quick="出差住宿标准是多少">差旅标准</button>
-                    <button class="quick-btn" type="button" data-quick="查看我的历史行程">历史记录</button>
-                </div>
-            </div>
-        </aside>
+                <p class="disclaimer">Hommey 可能会出错，请核对重要的出行信息。</p>
+            </footer>
+        </main>
     </div>
 
+    <button id="scrim" class="scrim" type="button" aria-label="关闭侧栏"></button>
+
+    <aside id="sidebar" class="sidebar" aria-label="会话侧栏">
+        <div class="sidebar-head">
+            <div class="sidebar-brand-row">
+                <div class="sidebar-brand">
+                    <span class="mini-logo">
+                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                    </span>
+                    <span>Hommey</span>
+                </div>
+                <button id="sidebarClose" class="icon-button" type="button" aria-label="关闭侧栏">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+                </button>
+            </div>
+            <div class="sidebar-actions">
+                <button id="newChatButton" class="sidebar-action" type="button">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
+                    <span>新对话</span>
+                </button>
+                <button id="searchToggle" class="sidebar-action" type="button">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                    <span>搜索会话</span>
+                </button>
+                <label id="historySearchBox" class="history-search">
+                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                    <input id="historySearch" type="search" placeholder="输入会话名称">
+                </label>
+            </div>
+        </div>
+        <div id="historyList" class="history-list">
+            <p class="history-label">最近</p>
+            <div class="history-empty">还没有历史会话。</div>
+        </div>
+        <div class="sidebar-foot">
+            <button id="settingsButton" class="sidebar-action" type="button">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.2 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.6 4.2a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.71 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 8.6c.14.4.36.75.6 1 .3.3.7.4 1.1.4h.1a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.71 1Z"/></svg>
+                <span>设置</span>
+            </button>
+            <button id="accountRow" class="account-row" type="button">
+                <span class="account-avatar">{{ user_id[0:1].upper() if user_id else 'U' }}</span>
+                <span class="account-copy"><strong id="panelName">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span>
+                <span>›</span>
+            </button>
+        </div>
+    </aside>
+
+    <div id="sessionPopover" class="session-popover" hidden>
+        <button id="renameSessionButton" type="button">重命名</button>
+        <button id="deleteSessionButton" class="danger" type="button">删除</button>
+    </div>
+
+    <section id="settingsLayer" class="modal-layer" aria-label="设置">
+        <div class="settings-modal">
+            <header class="modal-head">
+                <h2>设置</h2>
+                <button id="settingsClose" class="icon-button" type="button" aria-label="关闭">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                </button>
+            </header>
+            <div class="settings-body">
+                <section class="settings-section">
+                    <p class="settings-label">外观</p>
+                    <div class="settings-card">
+                        <div class="setting-row">
+                            <div><div class="setting-title">显示模式</div><div class="setting-note">默认跟随系统</div></div>
+                            <div class="theme-tabs">
+                                <button class="theme-tab active" type="button" data-theme-option="system">自动</button>
+                                <button class="theme-tab" type="button" data-theme-option="light">浅色</button>
+                                <button class="theme-tab" type="button" data-theme-option="dark">深色</button>
+                            </div>
+                        </div>
+                        <div class="setting-row">
+                            <div><div class="setting-title">界面动效</div><div class="setting-note">路线和界面过渡</div></div>
+                            <button id="motionToggle" class="toggle on" type="button" role="switch" aria-checked="true"></button>
+                        </div>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <p class="settings-label">个人信息</p>
+                    <div class="settings-card">
+                        <details class="settings-details">
+                            <summary><span>差旅偏好</span><span>›</span></summary>
+                            <div id="prefList" class="pref-list"><div class="empty-state">正在读取偏好。</div></div>
+                        </details>
+                        <details class="settings-details">
+                            <summary><span>当前出差任务</span><span>›</span></summary>
+                            <div id="activeTrip" class="active-trip"><div class="empty-state">正在读取行程。</div></div>
+                        </details>
+                    </div>
+                </section>
+
+                <section class="settings-section">
+                    <p class="settings-label">数据与账户</p>
+                    <div class="settings-card">
+                        <button id="clearHistoryButton" class="settings-action" type="button"><span>清空聊天记录</span><span>›</span></button>
+                        <a id="adminLink" href="/admin/skills" hidden>Skill 管理</a>
+                        <a class="settings-action danger logout-link" href="/"><span>退出登录</span><span>›</span></a>
+                    </div>
+                </section>
+            </div>
+        </div>
+    </section>
+
+    <section id="renameLayer" class="modal-layer" aria-label="重命名会话">
+        <form id="renameForm" class="small-modal">
+            <h2>重命名会话</h2>
+            <p>输入一个简短、容易识别的名称。</p>
+            <input id="renameInput" class="modal-input" type="text" maxlength="80" required>
+            <div class="modal-actions">
+                <button class="secondary-button" type="button" data-close-layer="renameLayer">取消</button>
+                <button class="primary-button" type="submit">保存</button>
+            </div>
+        </form>
+    </section>
+
+    <section id="confirmLayer" class="modal-layer" aria-label="确认操作">
+        <div class="small-modal">
+            <h2 id="confirmTitle">确认删除</h2>
+            <p id="confirmMessage">删除后无法恢复。</p>
+            <div class="modal-actions">
+                <button class="secondary-button" type="button" data-close-layer="confirmLayer">取消</button>
+                <button id="confirmAction" class="danger-button" type="button">删除</button>
+            </div>
+        </div>
+    </section>
+
+    <div id="toast" class="toast" role="status"></div>
     <script src="/static/app.js"></script>
 </body>
 </html>
