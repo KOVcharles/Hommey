@@ -1,6 +1,6 @@
 # Hommey TravelAgent
 
-Hommey 是一个面向企业差旅规划、制度问答和合规检查的智能 Agent，包含 FastAPI Web、声明式 Skill 平台、多智能体编排、当前出差任务、记忆系统和 RAG 知识库。CLI 仅保持兼容，后续开发以 Web 前后端为主。
+Hommey 是一个面向企业差旅规划、制度问答和合规检查的智能 Agent，包含 FastAPI Web、声明式 Skill 平台、多智能体编排、当前出差任务、记忆系统和 RAG 知识库。项目只维护 Docker Web 运行入口，浏览器前端通过 HTTP/SSE 与 FastAPI 后端通信。
 
 ## 当前状态
 
@@ -19,6 +19,14 @@ Hommey 是一个面向企业差旅规划、制度问答和合规检查的智能 
 ```bash
 docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 ```
+
+生产运行链路只有一条：
+
+```text
+Docker Compose -> Dockerfile CMD -> Uvicorn -> webui_new.server:app
+```
+
+不再提供 CLI、独立 MCP Server 或本地 Web 启动脚本。
 
 查看服务状态：
 
@@ -231,33 +239,19 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml bui
   hommey
 ```
 
-## 本地非 Docker 运行
-
-Docker 是推荐方式。确实需要本地跑时：
-
-```bash
-python -m pip install -r requirements.txt
-PYTHONPATH=. python run_webui.py
-```
-
-本地运行时 `.env` 里的 `HOMMEY_POSTGRES_DSN` 需要指向宿主机端口，例如：
-
-```bash
-HOMMEY_POSTGRES_DSN=postgresql://hommey:<postgres-password>@localhost:5432/hommey
-```
-
 ## 测试
 
 常用测试：
 
 ```bash
-PYTHONPATH=. pytest
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml exec hommey pytest
 ```
 
 鉴权相关测试：
 
 ```bash
-PYTHONPATH=. pytest tests/test_auth_routes.py tests/test_auth_deps.py
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml exec hommey \
+  pytest tests/test_auth_routes.py tests/test_auth_deps.py
 ```
 
 注意：鉴权测试会跑真实 bcrypt，可能比普通单元测试慢。

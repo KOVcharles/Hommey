@@ -162,10 +162,10 @@ class RAGKnowledgeAgent(AgentBase):
                 "适用的住宿、交通、补贴、报销和审批制度。只返回公司制度证据，不提供路线规划。"
             )
         if isinstance(context, dict):
-            query = context.get("rewritten_query") or context.get("user_query")
+            query = context.get("agent_query") or context.get("rewritten_query") or context.get("user_query")
             if query:
                 return str(query).strip()
-        return str(data.get("rewritten_query") or data.get("query") or text).strip()
+        return str(data.get("agent_query") or data.get("rewritten_query") or data.get("query") or text).strip()
 
     def _format_knowledge_context(self, docs: List[Dict[str, Any]]) -> str:
         return "\n\n".join(f"【知识片段{i}】\n{doc.get('content', '')}" for i, doc in enumerate(docs, start=1))

@@ -5,14 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
+    <link rel="icon" href="/static/assets/hommey-icon.png" type="image/png">
+    <link rel="apple-touch-icon" href="/static/assets/hommey-icon.png">
     <link rel="stylesheet" href="/static/hommey.css">
 </head>
 <body>
     <main class="auth-page">
         <section class="auth-visual">
             <div class="auth-brand">
-                <span class="mini-logo">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                <span class="mini-logo" aria-hidden="true">
+                    <img src="/static/assets/hommey-icon.png" alt="">
                 </span>
                 <span>Hommey</span>
             </div>
@@ -28,6 +30,12 @@
 
         <section class="auth-panel">
             <div class="auth-box">
+                <div class="auth-mobile-brand" aria-label="Hommey">
+                    <span class="mini-logo" aria-hidden="true">
+                        <img src="/static/assets/hommey-icon.png" alt="">
+                    </span>
+                    <span>Hommey</span>
+                </div>
                 <h2 id="authTitle">欢迎回来</h2>
                 <p id="authDescription">登录后继续你的差旅行程。</p>
                 <div class="auth-tabs" role="tablist" aria-label="登录或注册">

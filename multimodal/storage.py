@@ -14,7 +14,7 @@ from settings import ATTACHMENT_CONFIG
 
 class LocalAttachmentStore:
     def __init__(self, storage_path: str | None = None):
-        self.root = Path(storage_path or ATTACHMENT_CONFIG["storage_path"])
+        self.root = Path(storage_path or ATTACHMENT_CONFIG["storage_path"]).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
 
     @staticmethod
@@ -27,18 +27,32 @@ class LocalAttachmentStore:
     def object_key(self, user_id: str, attachment_id: str) -> str:
         return f"{self._safe_segment(user_id)}/{self._safe_segment(attachment_id)}"
 
+    def _path_for_key(self, object_key: str) -> Path:
+        """Resolve a stored key while keeping every operation below the private root."""
+        key = Path(object_key)
+        if key.is_absolute() or ".." in key.parts:
+            raise ValueError("unsafe attachment object key")
+        candidate = (self.root / key).resolve()
+        try:
+            candidate.relative_to(self.root)
+        except ValueError as exc:
+            raise ValueError("attachment object key escapes storage root") from exc
+        return candidate
+
     def save(self, user_id: str, attachment_id: str, data: bytes) -> str:
         key = self.object_key(user_id, attachment_id)
-        path = self.root / key
+        path = self._path_for_key(key)
         path.parent.mkdir(parents=True, exist_ok=True)
-        path.write_bytes(data)
+        # Attachment IDs are unique; exclusive creation prevents accidental overwrite.
+        with path.open("xb") as stream:
+            stream.write(data)
         return key
 
     def load(self, object_key: str) -> bytes:
-        return (self.root / object_key).read_bytes()
+        return self._path_for_key(object_key).read_bytes()
 
     def delete(self, object_key: str) -> None:
-        path = self.root / object_key
+        path = self._path_for_key(object_key)
         if path.exists():
             path.unlink()
 

@@ -41,7 +41,7 @@ class PreferenceAgent(AgentBase):
             try:
                 data = json.loads(content)
                 context = data.get("context", {})
-                user_query = context.get("rewritten_query", "") or str(data)
+                user_query = context.get("agent_query") or context.get("rewritten_query", "") or str(data)
             except json.JSONDecodeError:
                 user_query = content
         else:

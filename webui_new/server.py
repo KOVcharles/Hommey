@@ -37,6 +37,7 @@ from webui_new.routes.users import create_users_router
 from webui_new.auth.migrations import apply_all_migrations
 from webui_new.routes.skill_admin import create_skill_admin_router
 from webui_new.skill_platform import SkillPlatformService
+from context.postgres_pool import close_all_postgres_pools
 
 
 configure_logging()
@@ -45,7 +46,10 @@ configure_logging()
 async def lifespan(_app):
     if MEMORY_CONFIG.get("long_term", {}).get("backend") == "postgres":
         apply_all_migrations()
-    yield
+    try:
+        yield
+    finally:
+        close_all_postgres_pools()
 
 
 app = FastAPI(title="Hommey 商旅助手", version="3.0.0", lifespan=lifespan)

@@ -138,6 +138,12 @@ MEMORY_CONFIG = {
         "backend": os.getenv("HOMMEY_LONG_TERM_BACKEND", "file").lower(),
         "storage_path": os.getenv("HOMMEY_MEMORY_STORAGE_PATH", "data/memory"),
         "postgres_dsn": os.getenv("HOMMEY_POSTGRES_DSN", ""),
+        "postgres_pool_min_size": _int_env("HOMMEY_POSTGRES_POOL_MIN_SIZE", 1),
+        "postgres_pool_max_size": _int_env("HOMMEY_POSTGRES_POOL_MAX_SIZE", 10),
+        "postgres_pool_timeout_sec": _float_env("HOMMEY_POSTGRES_POOL_TIMEOUT_SEC", 10.0),
+    },
+    "retention": {
+        "raw_message_days": _int_env("HOMMEY_RAW_MESSAGE_RETENTION_DAYS", 14),
     },
     "safety": {
         "enabled": _bool_env("HOMMEY_MEMORY_SAFETY_ENABLED", True),
@@ -157,6 +163,14 @@ ATTACHMENT_CONFIG = {
     "max_size_bytes": _int_env("HOMMEY_ATTACHMENT_MAX_BYTES", 25 * 1024 * 1024),
     # 单条消息最多附件数。
     "max_per_message": _int_env("HOMMEY_ATTACHMENT_MAX_PER_MESSAGE", 5),
+    # DOCX 解压上限，阻止超大解压体积和压缩炸弹进入解析器。
+    "max_archive_entries": _int_env("HOMMEY_ATTACHMENT_MAX_ARCHIVE_ENTRIES", 2048),
+    "max_archive_uncompressed_bytes": _int_env(
+        "HOMMEY_ATTACHMENT_MAX_ARCHIVE_BYTES", 100 * 1024 * 1024
+    ),
+    "max_archive_ratio": _int_env("HOMMEY_ATTACHMENT_MAX_ARCHIVE_RATIO", 100),
+    # 原文件的全局保留期；过期附件不能再绑定到新消息。
+    "retention_days": _int_env("HOMMEY_ATTACHMENT_RETENTION_DAYS", 30),
     # 允许的扩展名（小写、不含点）。P0 仅文档类。
     "allowed_extensions": tuple(
         ext.strip().lower().lstrip(".")

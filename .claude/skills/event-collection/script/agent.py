@@ -48,7 +48,7 @@ class EventCollectionAgent(AgentBase):
             try:
                 data = json.loads(content)
                 context = data.get("context", {})
-                user_query = context.get("rewritten_query", "") or str(data)
+                user_query = context.get("agent_query") or context.get("rewritten_query", "") or str(data)
                 user_preferences = context.get("user_preferences", {})
                 active_trip = context.get("active_trip") or {}
             except json.JSONDecodeError:

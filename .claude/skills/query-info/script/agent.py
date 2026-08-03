@@ -99,7 +99,7 @@ class InformationQueryAgent(AgentBase):
             try:
                 payload = json.loads(content)
                 context = payload.get("context", {})
-                user_query = context.get("rewritten_query", "") or content
+                user_query = context.get("agent_query") or context.get("rewritten_query", "") or content
             except json.JSONDecodeError:
                 user_query = content
         else:

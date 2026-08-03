@@ -24,7 +24,7 @@ from utils.llm_resilience import retry_with_backoff
 from utils.logging_safety import sanitize_for_log
 from utils.memory_safety import redact_sensitive_text, wrap_untrusted_memory
 from utils.observability import COMPONENT_LLM, ERROR_CIRCUIT_OPEN, record_upstream_error
-from webui_new.core.errors import BusinessError, InternalError, UpstreamError
+from webui_new.core.errors import AppError, BusinessError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
 from core.intent_router import FastIntentRouter
 from core.intent_catalog import INTENT_DISPLAY_NAMES
@@ -34,6 +34,8 @@ from core.execution_budget import (
     consume_agent_call,
     execution_budget_scope,
 )
+from multimodal.schemas import NormalizedInput
+from context.memory_repository import AttachmentBindingError
 
 logger = logging.getLogger(__name__)
 
@@ -87,6 +89,7 @@ class HommeyWebInstance:
 
             self.model = runtime.model
             self.memory_manager = runtime.memory_manager
+            self.session_id = self.memory_manager.session_id
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
             self.attachment_service = getattr(runtime, "attachment_service", None)
@@ -190,8 +193,8 @@ class HommeyWebInstance:
             return rows
         enriched = []
         for row in rows:
-            message_id = row.get("id")
-            if row.get("role") == "user" and message_id is not None and not isinstance(message_id, bool):
+            message_id = row.get("message_id")
+            if row.get("role") == "user" and message_id:
                 try:
                     attachments = repository.attachments_for_message(message_id)
                     if attachments:
@@ -205,10 +208,10 @@ class HommeyWebInstance:
         return enriched
 
     def start_new_chat_session(self) -> str:
-        session_id = str(uuid.uuid4())[:8]
-        self.session_id = session_id
+        session_id = str(uuid.uuid4())
         if self.memory_manager:
-            self.memory_manager.rotate_session(session_id)
+            session_id = self.memory_manager.rotate_session(session_id)
+        self.session_id = session_id
         self._last_activity_monotonic = None
         self._total_messages = 0
         return session_id
@@ -217,14 +220,9 @@ class HommeyWebInstance:
         payload = self.get_chat_session(session_id)
         if not payload["messages"]:
             raise ValueError("Chat session not found")
-        self.session_id = session_id
         if self.memory_manager:
-            self.memory_manager.rotate_session(session_id)
-            for message in payload["messages"][-10:]:
-                role = message.get("role")
-                content = message.get("content")
-                if role in {"user", "assistant"} and content:
-                    self.memory_manager.short_term.add_message(role, content)
+            session_id = self.memory_manager.activate_session(session_id)
+        self.session_id = session_id
         self._last_activity_monotonic = time.monotonic()
         self._total_messages = len(payload["messages"])
         return payload
@@ -296,20 +294,33 @@ class HommeyWebInstance:
 
     def _normalize_input(
         self, message: str, attachment_ids: list[str] | None
-    ) -> tuple[str, str]:
-        """方案 §4.5：把附件规范化为 agent_query（喂 LLM）与 display_message（写记忆）。
+    ) -> NormalizedInput:
+        """Build the one typed input used by persistence and agent execution."""
+        if not attachment_ids:
+            text = (message or "").strip()
+            return NormalizedInput(agent_query=text, display_message=text)
+        if self.attachment_service is None:
+            raise InternalError("ATTACHMENT_SERVICE_UNAVAILABLE", "附件服务暂时不可用，请稍后重试")
+        try:
+            return self.attachment_service.normalize(message, attachment_ids, self.user_id)
+        except AppError:
+            raise
+        except Exception as exc:
+            # Fail closed: an attached file must never be silently ignored.
+            raise InternalError(
+                "ATTACHMENT_NORMALIZATION_FAILED",
+                "附件处理失败，请重试或移除附件",
+            ) from exc
 
-        无附件或附件服务未注入时，agent_query == display_message == message。
-        """
-        if attachment_ids and self.attachment_service is not None:
-            try:
-                normalized = self.attachment_service.normalize(message, attachment_ids, self.user_id)
-                return normalized.agent_query, normalized.display_message
-            except AppError:
-                raise
-            except Exception as e:
-                logger.warning("附件规范化失败，回退为纯文本: %s", sanitize_for_log(e))
-        return message, message
+    def _persist_user_message(self, content: str, metadata: dict) -> None:
+        """Persist display text and attachment links through one safe boundary."""
+        try:
+            self.memory_manager.add_message("user", content, metadata)
+        except AttachmentBindingError as exc:
+            raise BusinessError(
+                "ATTACHMENT_BINDING_FAILED",
+                "附件已失效或已被其他消息使用，请重新上传",
+            ) from exc
 
     async def _get_cached_summary(self) -> str:
         """Cache only query-independent memory; dynamic trip retrieval stays per request."""
@@ -333,20 +344,29 @@ class HommeyWebInstance:
         return self._summary_cache or ""
 
     def _ensure_active_session(self) -> bool:
-        """Rotate the dialogue session after the configured idle timeout."""
-        now = time.monotonic()
-        timeout = int(MEMORY_CONFIG.get("short_term", {}).get("session_idle_timeout_sec", 600))
-        rotated = bool(
-            self._last_activity_monotonic is not None
-            and now - self._last_activity_monotonic >= max(timeout, 1)
-        )
+        """Resume or rotate the durable session after the idle timeout."""
+        ensure_session = getattr(self.memory_manager, "ensure_active_session", None)
+        if callable(ensure_session):
+            rotated = ensure_session()
+            self.session_id = self.memory_manager.session_id
+        else:
+            # Compatibility for lightweight adapters and isolated test doubles.
+            now = time.monotonic()
+            timeout = int(MEMORY_CONFIG.get("short_term", {}).get("session_idle_timeout_sec", 600))
+            rotated = bool(
+                self._last_activity_monotonic is not None
+                and now - self._last_activity_monotonic >= max(timeout, 1)
+            )
+            if rotated:
+                self.session_id = str(uuid.uuid4())[:8]
+                rotate_session = getattr(self.memory_manager, "rotate_session", None)
+                if callable(rotate_session):
+                    rotate_session(self.session_id)
+            self._last_activity_monotonic = now
         if rotated:
-            self.session_id = str(uuid.uuid4())[:8]
-            self.memory_manager.rotate_session(self.session_id)
             self._summary_cache = None
             self._summary_msg_count = 0
             self._total_messages = 0
-        self._last_activity_monotonic = now
         return rotated
 
     def _handle_task_lifecycle_command(self, message: str) -> Optional[str]:
@@ -441,22 +461,42 @@ class HommeyWebInstance:
         if self.memory_manager is not None:
             self.memory_manager.current_request_id = request_id
 
-        # 多模态输入规范化（方案 §4.5）：附件只进 agent_query，display_message 进记忆。
-        agent_query, display_message = self._normalize_input(message, attachment_ids)
+        normalized = self._normalize_input(message, attachment_ids)
+        agent_query = normalized.agent_query
+        display_message = normalized.display_message
+        user_metadata = {
+            **metadata,
+            "attachment_ids": normalized.attachment_ids,
+            "content_type": "attachment" if normalized.attachment_ids else "text",
+        }
+        input_result = {
+            "sources": [source.model_dump() for source in normalized.sources],
+            "warnings": list(normalized.warnings),
+        }
 
         lifecycle_response = self._handle_task_lifecycle_command(message)
         if lifecycle_response:
-            self.memory_manager.add_message("user", display_message, metadata)
+            self._persist_user_message(display_message, user_metadata)
             self.memory_manager.add_message("assistant", lifecycle_response, metadata)
-            return {"response": lifecycle_response, "agents": [], "preferences_updated": False}
+            return {
+                "response": lifecycle_response,
+                "agents": [],
+                "preferences_updated": False,
+                **input_result,
+            }
 
         # ═══ 优化 1: 简单闲聊直接处理，不经过 LLM ═══
         # 带附件时不走闲聊短路，避免附件问题被草率打发。
         if self._is_simple_chitchat(message) and not attachment_ids:
-            self.memory_manager.add_message("user", display_message, metadata)
+            self._persist_user_message(display_message, user_metadata)
             response = await self._handle_chitchat(message)
             self.memory_manager.add_message("assistant", response, metadata)
-            return {"response": response, "agents": [], "preferences_updated": False}
+            return {
+                "response": response,
+                "agents": [],
+                "preferences_updated": False,
+                **input_result,
+            }
 
         rc = RESILIENCE_CONFIG
         agent_max_retries = rc.get("agent_max_retries", 1)
@@ -530,18 +570,21 @@ class HommeyWebInstance:
             )
 
         self._total_messages += 1
-        message_id = self.memory_manager.add_message("user", display_message, metadata)
-        # 把附件绑定到这条用户消息（方案 §4.4）；记忆只存 display_message，附件全文不进库。
-        if attachment_ids and self.attachment_service is not None and message_id is not False and message_id:
-            try:
-                self.attachment_service.bind(message_id, attachment_ids, self.user_id)
-            except Exception as e:
-                logger.warning("附件绑定失败 request_id=%s: %s", request_id, sanitize_for_log(e))
+        # Persistence boundary: display text and attachment links commit together.
+        self._persist_user_message(display_message, user_metadata)
 
         # 3. Orchestration
         try:
             orchestration_start = time.perf_counter()
-            orchestration_result = await self.orchestrator.reply(intention_result)
+            orchestration_result = await self.orchestrator.reply(
+                intention_result,
+                request_context={
+                    "original_query": message,
+                    "agent_query": normalized.agent_query,
+                    "attachment_sources": input_result["sources"],
+                    "attachment_warnings": input_result["warnings"],
+                },
+            )
             timings["orchestration"] = time.perf_counter() - orchestration_start
             if self.circuit_breaker:
                 self.circuit_breaker.record_success()
@@ -574,10 +617,20 @@ class HommeyWebInstance:
             if result_data.get("message"):
                 response = result_data["message"]
                 self.memory_manager.add_message("assistant", response, metadata)
-                return {"response": response, "agents": [], "preferences_updated": False}
+                return {
+                    "response": response,
+                    "agents": [],
+                    "preferences_updated": False,
+                    **input_result,
+                }
             response = await self._handle_chitchat(agent_query)
             self.memory_manager.add_message("assistant", response, metadata)
-            return {"response": response, "agents": [], "preferences_updated": False}
+            return {
+                "response": response,
+                "agents": [],
+                "preferences_updated": False,
+                **input_result,
+            }
 
         # 5. Format response
         response = self._format_response(result_data)
@@ -610,6 +663,7 @@ class HommeyWebInstance:
             "agents": agents,
             "preferences_updated": prefs_updated,
             "timings": {key: round(value, 3) for key, value in timings.items()},
+            **input_result,
         }
 
     def _raise_on_agent_errors(self, result_data: dict) -> None:
@@ -695,6 +749,13 @@ class HommeyWebInstance:
             message, request_id=request_id, attachment_ids=attachment_ids
         )
 
+        if result.get("sources") or result.get("warnings"):
+            yield {
+                "type": "attachment_context",
+                "sources": result.get("sources", []),
+                "warnings": result.get("warnings", []),
+            }
+
         agents = result.get("agents", [])
         if agents:
             yield {"type": "agents", "agents": agents}
@@ -708,6 +769,8 @@ class HommeyWebInstance:
             "type": "done",
             "preferences_updated": result.get("preferences_updated", False),
             "timings": result.get("timings", {}),
+            "sources": result.get("sources", []),
+            "warnings": result.get("warnings", []),
         }
 
     @staticmethod

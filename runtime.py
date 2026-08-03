@@ -1,9 +1,4 @@
-"""
-Shared runtime factory for Hommey entry points.
-
-CLI, WebUI, and MCP should create the core agent runtime through this module
-instead of duplicating model, memory, registry, and orchestrator wiring.
-"""
+"""Internal backend factory for the Docker-hosted FastAPI application."""
 from dataclasses import dataclass
 from typing import Dict, Optional
 
@@ -48,7 +43,7 @@ def create_agent_runtime(
     agent_cache: Optional[Dict] = None,
     mcp_manager=None,
 ) -> AgentRuntime:
-    """Create the shared core runtime used by CLI, WebUI, and MCP."""
+    """Create the agent runtime used by the FastAPI backend."""
     init_agentscope()
 
     from agentscope.model import OpenAIChatModel
