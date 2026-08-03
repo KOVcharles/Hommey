@@ -2,7 +2,6 @@
 
 - upload：校验 → 存盘 → INSERT → 同步解析 → 写 extraction → ready/failed
 - normalize：加载附件 + 归属/状态校验 → 产出 NormalizedInput(agent_query, display_message)
-- bind：把附件关联到 chat_history 消息 id
 
 所有方法 user_id 来自 JWT（require_path_user），不信任请求体里的 user_id。
 """
@@ -10,7 +9,9 @@ from __future__ import annotations
 
 import logging
 import uuid
+from datetime import datetime, timedelta, timezone
 
+from settings import ATTACHMENT_CONFIG
 from webui_new.core.errors import BusinessError
 
 from . import context_builder, validation
@@ -18,6 +19,7 @@ from .processors import ProcessorRegistry
 from .repository import AttachmentRepository
 from .schemas import (
     ATTACHMENT_STATUS_FAILED,
+    ATTACHMENT_STATUS_EXPIRED,
     ATTACHMENT_STATUS_PROCESSING,
     ATTACHMENT_STATUS_READY,
     Attachment,
@@ -27,8 +29,21 @@ from .schemas import (
     NormalizedInput,
 )
 from .storage import LocalAttachmentStore
+from .document_processor import PARSER_VERSION
 
 logger = logging.getLogger(__name__)
+
+
+def _is_expired(attachment: Attachment) -> bool:
+    if not attachment.expires_at:
+        return False
+    try:
+        expires_at = datetime.fromisoformat(attachment.expires_at.replace("Z", "+00:00"))
+    except ValueError:
+        return True
+    if expires_at.tzinfo is None:
+        expires_at = expires_at.replace(tzinfo=timezone.utc)
+    return expires_at <= datetime.now(timezone.utc)
 
 
 class AttachmentService:
@@ -74,8 +89,17 @@ class AttachmentService:
             sha256=sha256,
             object_key=object_key,
             status=ATTACHMENT_STATUS_PROCESSING,
+            expires_at=(
+                datetime.now(timezone.utc)
+                + timedelta(days=max(int(ATTACHMENT_CONFIG["retention_days"]), 1))
+            ).isoformat(),
         )
-        self.repository.create(attachment)
+        try:
+            self.repository.create(attachment)
+        except Exception:
+            # Storage and metadata must not diverge if the database write fails.
+            self.store.delete(object_key)
+            raise
 
         try:
             result = self.processors.parse(ext, content, filename)
@@ -96,13 +120,25 @@ class AttachmentService:
 
         extraction = Extraction(
             attachment_id=attachment_id,
-            parser_version="document-p0-1",
+            parser_version=PARSER_VERSION,
             content_text=result.content_text,
             structured=result.structured,
             char_count=result.char_count,
         )
-        self.repository.set_extraction(extraction)
-        self.repository.update_status(attachment_id, user_id, ATTACHMENT_STATUS_READY)
+        try:
+            # Extraction and ready status become visible together.
+            self.repository.complete_processing(extraction, user_id)
+        except Exception:
+            try:
+                self.repository.update_status(
+                    attachment_id,
+                    user_id,
+                    ATTACHMENT_STATUS_FAILED,
+                    error_code="PERSIST_FAILED",
+                )
+            except Exception:
+                logger.exception("附件失败状态写入失败 id=%s", attachment_id)
+            raise
         return AttachmentUploadResponse(
             id=attachment_id,
             filename=filename,
@@ -118,11 +154,12 @@ class AttachmentService:
         att = self.repository.get(attachment_id, user_id)
         if att is None:
             raise BusinessError("ATTACHMENT_NOT_FOUND", "附件不存在或无权访问", status_code=404)
+        status = ATTACHMENT_STATUS_EXPIRED if _is_expired(att) else att.status
         return AttachmentDetailResponse(
             id=att.id,
             filename=att.filename,
             kind=att.kind,
-            status=att.status,
+            status=status,
             mime_type=att.mime_type,
             size_bytes=att.size_bytes,
             error_code=att.error_code,
@@ -148,7 +185,7 @@ class AttachmentService:
     ) -> NormalizedInput:
         """方案 §1.1 / §4.5：产出 agent_query（喂 Agent）与 display_message（写记忆）。"""
         user_text = (user_text or "").strip()
-        attachment_ids = list(attachment_ids or [])
+        attachment_ids = list(dict.fromkeys(attachment_ids or []))
         if not attachment_ids:
             return NormalizedInput(agent_query=user_text, display_message=user_text)
 
@@ -157,6 +194,12 @@ class AttachmentService:
         found_ids = {a.id for a in attachments}
         if len(found_ids) != len(set(attachment_ids)):
             raise BusinessError("ATTACHMENT_NOT_FOUND", "部分附件不存在或无权访问", status_code=404)
+        if any(_is_expired(attachment) for attachment in attachments):
+            raise BusinessError(
+                "ATTACHMENT_EXPIRED",
+                "部分附件已过期，请重新上传",
+                status_code=400,
+            )
         not_ready = [a for a in attachments if a.status != ATTACHMENT_STATUS_READY]
         if not_ready:
             raise BusinessError(
@@ -182,9 +225,3 @@ class AttachmentService:
             attachments=attachments,
             attachment_ids=attachment_ids,
         )
-
-    def bind(self, message_id: int, attachment_ids: list[str] | None, user_id: str) -> None:
-        """把附件关联到已写入的用户消息 id（chat_message_attachments）。"""
-        if not attachment_ids:
-            return
-        self.repository.bind(message_id, list(attachment_ids), user_id)

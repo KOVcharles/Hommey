@@ -15,15 +15,13 @@ main boundaries explicit so later refactors can be done safely.
   - `SKILL.md` declares portable discovery metadata and instructions; `hommey.yaml` declares runtime versions, intent mapping, tool declarations, dependencies, schemas, and execution stages. Tool declarations are metadata, not an enforcement boundary.
   - The runtime path is configurable with `HOMMEY_SKILLS_ROOT`.
 - `context/`: short-term and long-term memory implementations.
-- `hommey_mcp/`: project-owned MCP client/server integration. This name avoids
+- `hommey_mcp/`: project-owned MCP client integration. This name avoids
   shadowing the third-party `mcp` protocol package.
 - `webui_new/`: current FastAPI web application.
 - `webui_new/skill_platform/`: administrator Skill registry, graph, settings, and trace service.
 - `core/skill_definition.py`: standard Skill metadata and Hommey runtime-extension contract.
 - `core/skill_store.py`: PostgreSQL-backed Skill settings and sanitized execution traces.
-- `legacy/webui_gradio.py`: legacy Gradio web entry point retained for compatibility.
-- `cli.py`: command-line entry point.
-- `runtime.py`: shared factory for model, memory, registry, and orchestrator wiring.
+- `runtime.py`: internal backend factory for model, memory, registry, and orchestrator wiring.
 - `settings.py`: tracked runtime configuration that reads environment variables.
 - `utils/`: shared infrastructure helpers.
 - `data/`: local runtime data and large assets. New runtime data should not be
@@ -68,7 +66,6 @@ changing behavior:
 src/
   hommey/
     app/
-      cli.py
       web/
     core/
       agents/

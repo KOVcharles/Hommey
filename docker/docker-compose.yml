@@ -50,8 +50,6 @@ services:
     dns:
       - 8.8.8.8         # 实测从 bridge 可达
       - 223.5.5.5       # AliDNS（备，本机 bridge 当前暂不可达）
-    command: python run_webui.py
-
   redis:
     image: redis:7-alpine
     container_name: hommey-redis

@@ -13,6 +13,7 @@
     --sage: #315e4c;
     --sage-bg: #e5f1eb;
     --danger: #d74747;
+    --brand-icon: url("/static/assets/hommey-icon.png");
     --content: 760px;
     --shadow-1: 0 8px 30px rgba(25, 25, 22, .06);
     --shadow-2: 0 24px 80px rgba(25, 25, 22, .12);
@@ -108,13 +109,23 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     width: 22px;
     height: 22px;
     border-radius: 7px;
+    background: #5b5b5b;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14);
 }
 .route-logo {
     width: 25px;
     height: 25px;
     border-radius: 8px;
 }
-.mini-logo svg, .route-logo svg { position: relative; z-index: 2; }
+.mini-logo img {
+    width: 164%;
+    height: auto;
+    aspect-ratio: 1;
+    max-width: none;
+    object-fit: cover;
+    flex: none;
+}
+.route-logo svg { position: relative; z-index: 2; }
 .route-logo::after {
     content: "";
     position: absolute;
@@ -394,17 +405,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     width: 25px;
     height: 25px;
     border-radius: 8px;
-    color: var(--bg);
-    background: var(--ink);
+    background: var(--brand-icon) center / 164% 164% no-repeat #5b5b5b;
+    box-shadow: inset 0 0 0 1px rgba(0, 0, 0, .14);
     display: grid;
     place-items: center;
 }
 .msg-avatar.ai img { display: none; }
-.msg-avatar.ai::before {
-    content: "H";
-    font-size: 11px;
-    font-weight: 700;
-}
 .msg-stack { min-width: 0; }
 .msg-bubble {
     font-size: 14px;
@@ -875,6 +881,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     font-size: 14px;
     font-weight: 620;
 }
+.auth-mobile-brand { display: none; }
 .auth-story {
     width: min(620px, 90%);
     margin: auto;
@@ -974,6 +981,14 @@ html[data-motion="off"] *::after {
     .auth-page { grid-template-columns: 1fr; }
     .auth-visual { display: none; }
     .auth-panel { min-height: 100vh; padding: 24px; border-left: 0; }
+    .auth-mobile-brand {
+        margin-bottom: 34px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 14px;
+        font-weight: 620;
+    }
 }
 
 /* ── 多模态附件（P0）────────────────────────────────────────── */

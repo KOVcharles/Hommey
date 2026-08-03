@@ -1,6 +1,6 @@
 # Hommey 记忆系统重构计划
 
-> 状态：需求已确认；阶段 0（P0 安全止血）已于 2026-07-16 实施，后续阶段待实施  
+> 状态：需求已确认；阶段 0、阶段 1 已实施；阶段 2A（画像事实与冲突确认数据底座）已于 2026-07-31 实施；阶段 2B～6 待实施
 > 日期：2026-07-16  
 > 适用范围：当前单进程 Web/CLI 架构，并为未来多实例扩展保留边界  
 > 核心目标：性能、历史查询准确率、数据安全、长对话连续性
@@ -1184,6 +1184,12 @@ HOMMEY_MEMORY_V2_READ_MODE=legacy
 - 确认回复不被误路由；
 - 旧任务不会污染新任务。
 
+实施进度（2026-07-31）：本阶段已完成 2A 数据底座，包括画像字段目录、
+`user_profile_facts`、`memory_change_requests`、事务化首次写入、冲突挂起、
+确认/拒绝和事实版本切换。当前兼容偏好路径尚未切换，确认消息路由和任务状态机
+分别留在 2B、2C，不能将阶段 2 标记为整体完成。详见
+`docs/changelog/2026-07-31-memory-stage2a-profile-foundation-report.md`。
+
 ### 阶段 3：可靠异步摘要和历史事件
 
 **急迫程度：P1**
@@ -1477,3 +1483,250 @@ memory_sensitive_redaction_total
 7. 最后用 pgvector 补足模糊语义查询。
 
 目标状态应当是：普通请求几乎不为记忆额外调用 LLM，明确事实立即生效，复杂历史在后台被压缩为可解释事件，原始聊天短期保留，模糊查询能够找到“发生过什么以及为什么”，同时不保存用户不希望长期记住的敏感和无价值信息。
+
+## 28. 阶段 1 实施工作报告（2026-07-17）
+
+### 28.1 本次实施范围和确认结论
+
+本次只实施“阶段 1：PostgreSQL 事实源和 Session 基础”，不提前实现画像冲突确认、任务完整状态机、异步摘要、历史事件和统一召回。动工前确认了以下边界：
+
+1. 当前属于测试版本，旧聊天数据不需要迁移或保留；
+2. 新会话和消息表可以直接替换旧 `chat_history`；
+3. `user_preferences`、`trip_history`、`active_trip_contexts` 和 `user_statistics` 暂时作为阶段 1 兼容表保留，等阶段 2～3 对应领域模型落地后再移除；
+4. Web API、页面行为、CLI 命令、MCP 入口和 Agent 输出格式保持兼容；
+5. 同一用户在刷新页面或服务重启后，如果最后活动时间不足 10 分钟，应恢复原 session；超过 10 分钟应关闭旧 session 并创建新 session；
+6. Redis 只作为最近对话热缓存，PostgreSQL 始终是生产事实源；
+7. 本次交付必须包含代码、版本化迁移、自动化测试和本工作报告。
+
+### 28.2 完成的工作
+
+#### 28.2.1 PostgreSQL Session 事实源
+
+新增 `conversation_sessions`，保存：
+
+- UUID session id；
+- 用户、状态和开始时间；
+- 最后活动时间、关闭时间和关闭原因；
+- 消息数量、最后 sequence 和摘要水位；
+- 每个用户最多一个 active session 的部分唯一索引。
+
+Session 获取过程使用 PostgreSQL 事务和 `pg_advisory_xact_lock(hashtext(user_id))` 串行化同一用户的创建/轮换，避免两个并发请求同时创建 active session。读取 active session 后使用 `FOR UPDATE` 锁定状态：
+
+- `last_active_at` 在 600 秒窗口内：复用并刷新活动时间；
+- 超过窗口：将旧 session 标记为 `closed/idle`，再创建新 session；
+- 手动清理或结束：记录相应的关闭原因；
+- 任务和偏好位于 session 之外，因此 session 轮换不会清除长期业务状态。
+
+#### 28.2.2 PostgreSQL Message 事实源
+
+新增 `conversation_messages`，每条消息保存：
+
+- `message_id`、`request_id`、`turn_id`、`session_id`；
+- 用户、session 内单调递增 sequence；
+- role、脱敏 content、content type 和可选 token count；
+- 创建时间、保留截止时间和软删除时间。
+
+写入过程在一个数据库事务中完成：
+
+1. 检查 `(user_id, request_id, role)` 是否已经存在；
+2. 锁定 session 行并分配下一 sequence；
+3. 插入消息；
+4. 更新 session 消息数、sequence 和活动时间；
+5. 增加 `memory_versions.messages`；
+6. 更新兼容统计。
+
+因此同一个 request 重试不会重复生成 user/assistant 消息，同一个 session 也不会分配重复 sequence。外部 request id 可能不是标准 UUID，Repository 使用 UUID v5 将其稳定映射为数据库 UUID；相同用户和相同外部 request id 始终得到相同结果。
+
+#### 28.2.3 共享 PostgreSQL 连接池
+
+新增进程级连接池注册表，基于 Psycopg 3 的 `psycopg_pool.ConnectionPool`：
+
+- 同一 DSN 在单个进程内只创建一个连接池；
+- MemoryService 和兼容 Repository 按操作借用连接，不再每个用户长期持有一条连接；
+- 池连接使用非 autocommit 模式，多步写入使用显式事务；
+- FastAPI lifespan 关闭时统一关闭连接池；
+- Web、CLI 和 MCP 统一通过 `runtime.py` 在首次创建运行时前应用版本化迁移。
+
+新增配置：
+
+```text
+HOMMEY_POSTGRES_POOL_MIN_SIZE=1
+HOMMEY_POSTGRES_POOL_MAX_SIZE=10
+HOMMEY_POSTGRES_POOL_TIMEOUT_SEC=10
+HOMMEY_RAW_MESSAGE_RETENTION_DAYS=14
+```
+
+依赖由 `psycopg[binary]` 调整为 `psycopg[binary,pool]`。
+
+#### 28.2.4 MemoryService 和兼容 Facade
+
+新增 `MemoryService`，集中负责：
+
+- 获取、恢复、轮换和关闭 session；
+- 消息幂等写入；
+- 最近上下文读取；
+- Redis 缓存和 PostgreSQL 回源；
+- 已完成 request 的 assistant 回答重放；
+- 向旧 `MemoryManager` 暴露兼容接口。
+
+`MemoryManager` 现在是兼容 Facade：Agent 仍可以使用 `memory_manager.short_term` 和 `memory_manager.long_term`，但 PostgreSQL session/message 操作已经委托给 MemoryService 和 Repository。这样本次不需要修改所有 Agent 的输入输出契约，也为后续逐步将偏好、任务和事件迁移到专用 Service 留出了边界。
+
+#### 28.2.5 Redis 热缓存和故障回源
+
+Redis 继续使用每用户、每 session 的 List，并为消息 key 和 version key 设置 24 小时 TTL。新增行为包括：
+
+- PostgreSQL 先提交，Redis 后更新；
+- Redis 写入失败不回滚已经成功的事实写入；
+- 读取时对比缓存条数和 PostgreSQL `memory_versions`；
+- Redis 不可用、内容不全或版本落后时，从 PostgreSQL 读取最近消息；
+- 回源成功后尝试重建 Redis 有界窗口和版本；
+- 回填失败只记录警告，不影响业务结果正确性。
+
+这使 Redis 从“可能影响结果的存储后端”降级为“可丢失、可重建的热缓存”。
+
+#### 28.2.6 入口统一和兼容行为
+
+Web 和 CLI 的 `_ensure_active_session()` 已切换到 MemoryManager/MemoryService。初始化运行时时，会把数据库恢复出的真实 UUID session id 回写到 Web/CLI 实例。
+
+共享 `runtime.py` 在 Web、CLI、MCP 第一次创建 AgentRuntime 前确保迁移已经执行，因此 CLI/MCP 不再依赖 Web 服务先启动，也不再依赖旧 PostgreSQL 类构造函数临时建表。
+
+现有偏好、行程和当前任务接口由 `PostgresCompatibilityStore` 暂时承接，并改用共享连接池和事务。它们仍保持现有数据模型和 Agent 调用方式，不在阶段 1 引入阶段 2 的画像版本、冲突确认或任务乐观锁语义。
+
+### 28.3 数据库迁移说明
+
+新增迁移：
+
+```text
+webui_new/auth/migrations/0006_memory_stage1.sql
+```
+
+迁移执行以下操作：
+
+1. 删除原型表 `chat_history`；
+2. 新建 `conversation_sessions`；
+3. 新建 `conversation_messages`；
+4. 新建 `memory_versions`；
+5. 建立 active session、用户活动时间、session sequence、request 幂等和保留期索引；
+6. 确保阶段 1 仍需使用的兼容表由迁移创建，而不是由业务类运行时创建。
+
+本次根据测试版本约束，没有迁移旧聊天数据，也没有为 `chat_history` 提供回滚恢复。迁移仍由现有 checksum 机制保证顺序和内容不可静默修改。
+
+### 28.4 主要代码文件
+
+| 文件 | 本次职责 |
+| --- | --- |
+| `context/postgres_pool.py` | 进程级 Psycopg 连接池注册、复用和优雅关闭 |
+| `context/memory_repository.py` | Session/Message 事实源 Repository、事务、幂等和兼容领域存储 |
+| `context/memory_service.py` | 统一 Session/Message 服务、Redis 缓存、PostgreSQL 回源和兼容 Facade |
+| `context/memory_manager.py` | 降级为兼容入口，委托 MemoryService |
+| `context/short_term_memory.py` | Redis TTL、版本和从事实源整体回填窗口 |
+| `runtime.py` | Web/CLI/MCP 共用迁移初始化和 MemoryManager 创建 |
+| `webui_new/server.py` | FastAPI 关闭时释放共享连接池 |
+| `webui_new/manager.py` | Web 使用持久化 session 获取/轮换 |
+| `cli.py` | CLI 使用同一持久化 session 规则 |
+| `webui_new/auth/migrations/0006_memory_stage1.sql` | 阶段 1 数据库结构迁移（保留旧表） |
+| `docker/docker-compose.test.yml` | 隔离的 PostgreSQL/Redis 集成测试服务 |
+
+### 28.5 自动化测试和验证结果
+
+新增或调整的覆盖包括：
+
+- 非 UUID request id 的稳定 UUID 映射；
+- 阶段 1 迁移表、索引、幂等键和 retention 字段；
+- Redis 失败后 PostgreSQL 回源；
+- Redis 实际读写和 TTL；
+- 10 分钟内恢复相同 session；
+- 模拟超时后关闭旧 session 并创建新 session；
+- request/role 幂等和 session sequence；
+- 相同 turn 的 user/assistant 配对；
+- 跨 MemoryService 实例恢复 session、最近消息和已记录回答；
+- Web 错误响应、CLI、鉴权、Skill 平台和原 P0 记忆测试回归。
+
+本次验证结果：
+
+```text
+Python compileall                       通过
+文件后端 MemoryManager smoke test      通过
+阶段 1/P0 专项测试                     22 passed
+隔离 PostgreSQL/Redis 集成测试         4 passed
+完整项目回归测试                       179 passed, 6 skipped
+```
+
+集成测试使用 `docker/docker-compose.test.yml`，默认端口为 PostgreSQL `55432`、Redis `56379`。示例：
+
+```powershell
+docker compose -f docker/docker-compose.test.yml up -d
+$env:HOMMEY_TEST_POSTGRES_DSN="postgresql://hommey:hommey-test@127.0.0.1:55432/hommey_test"
+$env:HOMMEY_TEST_REDIS_HOST="127.0.0.1"
+$env:HOMMEY_TEST_REDIS_PORT="56379"
+python -m pytest tests/test_memory_stage1_integration.py -q
+```
+
+### 28.6 阶段 1 验收映射
+
+| 阶段 1 完成标准 | 结果 | 说明 |
+| --- | --- | --- |
+| 连续超过 10 轮不丢关键上下文 | 已建立基础 | 原始消息进入 PostgreSQL，Redis 只保留窗口；长期摘要水位属于阶段 3 |
+| 10 分钟后新 session 仍能继续当前任务 | 已完成基础 | session 与兼容 active task 分离，轮换不清除任务 |
+| 重复 request 不生成重复消息 | 已完成 | `(user_id, request_id, role)` 唯一约束和事务检查 |
+| PostgreSQL 是唯一生产事实源 | 已完成 | Redis 失败时回源 PostgreSQL |
+| Redis 不可用时结果正确 | 已完成 | 单元故障测试和真实 Redis/PostgreSQL 集成测试通过 |
+| 全局连接池、Repository 无状态化 | 已完成 | 同 DSN 进程级共享池，Repository 按操作借用连接 |
+| Web/CLI/MCP 统一消息路径 | 已完成 | 三个入口统一通过 runtime 和 MemoryManager/MemoryService |
+
+“连续超过 10 轮不丢关键上下文”在阶段 1 的含义是原始消息不会因 Redis/List 裁剪而丢失；将长对话压缩为持久化分段摘要并按 token 预算注入上下文，仍属于阶段 3～4，不能在本报告中宣称已经完成。
+
+### 28.7 当前保留的边界和已知限制
+
+1. `user_preferences` 仍是可覆盖的 KV 表，没有来源、版本和冲突确认；
+2. `active_trip_contexts` 仍是兼容 JSON 状态，没有阶段 2 的完整状态机和乐观锁版本；
+3. `trip_history` 仍是旧行程摘要，不是阶段 3 的 `memory_episodes`；
+4. 长期摘要仍使用现有同步请求路径和临时缓存，尚未切换到 `memory_jobs` worker；
+5. 历史查询仍是旧 Memory Query Skill，没有全文检索和证据式召回；
+6. 尚未执行原始聊天 14 天清理任务；本次只写入 `retention_until`，清理 worker 属于阶段 3；
+7. 未启用 pgvector，也没有新增记忆管理页面，符合本轮非目标；
+8. 旧 autocommit PostgreSQL 类仅作为迁移参考保留，运行时入口已经切换到 pooled adapter；后续完成兼容领域迁移后应删除该参考实现。
+
+### 28.8 后续实施计划
+
+#### 下一步：阶段 2——画像事实、冲突确认和任务状态机
+
+建议在阶段 1 观察稳定后实施：
+
+1. 创建 `user_profile_facts`、`memory_change_requests` 和 `travel_tasks`；
+2. 建立画像字段目录、规范化器和来源验证；
+3. 空字段仅在用户明确表达时自动写入；
+4. 已有值发生冲突时创建 pending change，不直接覆盖；
+5. 下一轮优先解析确认/拒绝，防止被误路由成行程；
+6. 将当前任务升级为 `collecting/planning/planned/completed/cancelled` 状态机；
+7. 使用 version 乐观锁或 SQL 原子 patch 防止并发丢更新；
+8. 完成后移除 `user_preferences` 和 `active_trip_contexts` 兼容表及相应旧逻辑。
+
+#### 后续：阶段 3——可靠异步摘要和历史事件
+
+1. 创建 `memory_jobs`、`session_summaries` 和 `memory_episodes`；
+2. 启动支持 `FOR UPDATE SKIP LOCKED` 的单进程 worker；
+3. 增加独立记忆模型配置和 JSON Schema 输出；
+4. 实现分段摘要、source watermark、模型版本和幂等 job；
+5. 将完成/取消任务转为带原因、结果和脱敏片段的 episode；
+6. 增加重试、dead job、优雅关闭、重建和保留期清理；
+7. 完成后移除 `trip_history` 兼容表和请求路径同步长期摘要。
+
+#### 后续：阶段 4——统一 Context Builder 和历史召回
+
+1. 建立统一、按 token 预算的 Context Builder；
+2. 使用结构化过滤和 PostgreSQL 全文检索召回 episode；
+3. Memory Query Skill 改为证据式回答；
+4. 返回时间、地点、摘要、关键片段、匹配原因和置信度；
+5. 建立黄金历史查询集和 P95 性能基线；
+6. 只有全文/结构化召回经黄金集证明不足时，才进入阶段 5 的 pgvector。
+
+### 28.9 部署注意事项
+
+本次修改增加 `psycopg_pool` 依赖并包含数据库迁移，因此第一次部署必须重新构建镜像，而不是只重启进程：
+
+```powershell
+docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d --build
+```
+
+启动时会自动应用 `0006_memory_stage1.sql`。该迁移只新增阶段 1 事实表，不删除旧 `chat_history`；旧数据的转换与清理由后续独立迁移处理。

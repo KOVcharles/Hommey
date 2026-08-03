@@ -312,7 +312,7 @@ class DisabledLongTermMemory(FileLongTermMemory):
         return None
 
 
-class PostgresLongTermMemory:
+class LegacyAutocommitPostgresLongTermMemory:
     """
     长期记忆：持久化用户信息
     - 用户偏好（家庭地址、酒店品牌、航空公司等）
@@ -981,6 +981,28 @@ class PostgresLongTermMemory:
         logger.info("Cleared all history (chat + trips)")
 
         logger.warning(f"Deleted long-term memory data for user: {self.user_id}")
+
+
+class PostgresLongTermMemory:
+    """Compatibility constructor backed by the shared stage-1 repository pool.
+
+    The legacy autocommit implementation above is retained only as migration
+    reference. Runtime code and compatibility imports use this pooled adapter.
+    """
+
+    def __new__(cls, user_id: str, storage_path: str = "data/memory", postgres_dsn: str = ""):
+        from settings import MEMORY_CONFIG
+        from .memory_repository import PostgresCompatibilityStore, PostgresMemoryRepository
+        from .postgres_pool import get_postgres_pool
+
+        dsn = postgres_dsn or MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
+        repository = PostgresMemoryRepository(
+            get_postgres_pool(dsn),
+            raw_message_retention_days=MEMORY_CONFIG.get("retention", {}).get(
+                "raw_message_days", 14
+            ),
+        )
+        return PostgresCompatibilityStore(str(user_id), repository)
 
 
 LongTermMemory = PostgresLongTermMemory

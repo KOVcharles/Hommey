@@ -4,7 +4,7 @@ WebUI API 请求体模型。
 这里只放入站 request body 的 Pydantic schema，避免路由文件里散落模型定义。
 响应结构暂时保持现状，没有在这里建 response schema。
 """
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class LoginRequest(BaseModel):
@@ -14,7 +14,7 @@ class LoginRequest(BaseModel):
 class ChatRequest(BaseModel):
     # message 与 attachment_ids 不能同时为空（路由层校验）。默认值保证老客户端兼容。
     message: str = ""
-    attachment_ids: list[str] = []
+    attachment_ids: list[str] = Field(default_factory=list)
     client_request_id: str | None = None
 
 

@@ -268,7 +268,7 @@ class ChitchatAgent(AgentBase):
 
         # 从 orchestrator 格式提取
         ctx = data.get("context", {})
-        rewritten = ctx.get("rewritten_query", "") if isinstance(ctx, dict) else ""
+        rewritten = (ctx.get("agent_query") or ctx.get("rewritten_query", "")) if isinstance(ctx, dict) else ""
         if rewritten and rewritten.strip():
             return rewritten.strip()
 
