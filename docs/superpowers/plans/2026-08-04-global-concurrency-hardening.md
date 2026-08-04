@@ -638,7 +638,9 @@ CONCURRENCY_CONFIG = {
     # 拿锁重试 sleep 间隔（秒）。
     "lock_retry_interval_sec": _float_env("HOMMEY_LOCK_RETRY_INTERVAL_SEC", 0.2),
     # 信号量计数 TTL（秒），防 worker 崩溃泄漏计数。
-    "semaphore_ttl_sec": _int_env("HOMMEY_SEMAPHORE_TTL_SEC", 60),
+    # 必须 >= RESILIENCE_CONFIG.request_timeout_sec（默认 240），否则长时间请求
+    # 超过 TTL 会导致计数 key 过期、并发上限被静默突破（Task 2 review 实测复现）。
+    "semaphore_ttl_sec": _int_env("HOMMEY_SEMAPHORE_TTL_SEC", 240),
 }
 ```
 
