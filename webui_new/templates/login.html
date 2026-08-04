@@ -5,14 +5,15 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
-    <link rel="stylesheet" href="/static/hommey.css">
+    <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260803-brand-v1">
 </head>
 <body>
     <main class="auth-page">
         <section class="auth-visual">
             <div class="auth-brand">
                 <span class="mini-logo">
-                    <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                    <svg viewBox="0 0 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
                 </span>
                 <span>Hommey</span>
             </div>
@@ -28,22 +29,32 @@
 
         <section class="auth-panel">
             <div class="auth-box">
-                <h2 id="authTitle">欢迎回来</h2>
-                <p id="authDescription">登录后继续你的差旅行程。</p>
-                <div class="auth-tabs" role="tablist" aria-label="登录或注册">
+                <div id="authModeCopy" class="auth-mode-copy">
+                    <h2 id="authTitle">欢迎回来</h2>
+                    <p id="authDescription">登录后继续你的差旅行程。</p>
+                </div>
+                <div id="authTabs" class="auth-tabs" data-mode="login" role="tablist" aria-label="登录或注册">
                     <button id="loginModeBtn" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
                     <button id="registerModeBtn" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
                 </div>
-                <form id="loginForm" class="auth-form" autocomplete="on">
-                    <input id="email" class="auth-input" type="email" placeholder="邮箱地址" aria-label="邮箱地址" autocomplete="username" required>
-                    <input id="password" class="auth-input" type="password" placeholder="密码" aria-label="密码" autocomplete="current-password" required>
+                <form id="loginForm" class="auth-form" autocomplete="on" novalidate>
+                    <div id="emailField" class="auth-field">
+                        <label class="sr-only" for="email">邮箱地址</label>
+                        <input id="email" class="auth-input" type="email" placeholder="邮箱地址" aria-describedby="emailError" autocomplete="username" required>
+                        <p id="emailError" class="auth-field-error" aria-live="polite"></p>
+                    </div>
+                    <div id="passwordField" class="auth-field">
+                        <label class="sr-only" for="password">密码</label>
+                        <input id="password" class="auth-input" type="password" placeholder="密码" aria-describedby="passwordError" autocomplete="current-password" required>
+                        <p id="passwordError" class="auth-field-error" aria-live="polite"></p>
+                    </div>
                     <button id="submitBtn" class="auth-submit" type="submit">继续</button>
+                    <div id="errorMsg" class="auth-error" role="alert"></div>
                 </form>
-                <div id="errorMsg" class="auth-error" role="alert"></div>
-                <p class="auth-footnote">登录即表示你同意仅将账户用于 Hommey 差旅服务。</p>
+                <p id="authFootnote" class="auth-footnote">登录即表示你同意仅将账户用于 Hommey 差旅服务。</p>
             </div>
         </section>
     </main>
-    <script src="/static/auth.js"></script>
+    <script src="/static/auth.js?v=20260803-auth2"></script>
 </body>
 </html>

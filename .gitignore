@@ -39,7 +39,6 @@ wheels/
 
 # AgentScope
 .agentscope/
-.agents/
 .claude/*.local.json
 .claude/claudian-settings.json
 
@@ -60,8 +59,8 @@ data/rag_knowledge/*
 !data/rag_knowledge/.gitkeep
 !data/rag_knowledge/README.md
 data/rag_scratch/
-.claude/skills/*/data/rag_knowledge/
-.claude/skills/*/data/documents/
+.agents/skills/*/data/rag_knowledge/
+.agents/skills/*/data/documents/
 data/preferences/*.json
 !data/preferences/.gitkeep
 data/memory/*.json
@@ -85,6 +84,9 @@ reviews/
 auth-pipeline/
 observer/
 unison-workflows/
+
+# Generated brand exploration renders (production marks are SVG)
+webui_new/static/brand/*.png
 
 # Logs
 *.log

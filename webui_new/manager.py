@@ -16,7 +16,12 @@ sys.path.insert(0, project_root)
 
 from agents.intention_agent import IntentionAgent
 from agents.orchestration_agent import OrchestrationAgent
-from settings import MEMORY_CONFIG, RESILIENCE_CONFIG
+from settings import (
+    MEMORY_CONFIG,
+    ORCHESTRATION_V2_CONFIG,
+    RESILIENCE_CONFIG,
+    TRIP_INTAKE_CONFIG,
+)
 from context.memory_manager import MemoryManager
 from runtime import create_agent_runtime, create_circuit_breaker
 from utils.circuit_breaker import CircuitBreaker, CircuitOpenError
@@ -28,6 +33,9 @@ from webui_new.core.errors import BusinessError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
 from core.intent_router import FastIntentRouter
 from core.intent_catalog import INTENT_DISPLAY_NAMES
+from core.orchestration.pipeline import MultiIntentPipeline
+from core.orchestration.validator import supports_phase_one
+from core.presentation import build_legacy_answer_document, build_trip_intake_document
 from core.execution_budget import (
     ExecutionBudget,
     ExecutionLimitExceeded,
@@ -64,6 +72,7 @@ class HommeyWebInstance:
         self.intention_agent: Optional[IntentionAgent] = None
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
+        self.multi_intent_pipeline: Optional[MultiIntentPipeline] = None
         self._agent_cache = {}
         self.circuit_breaker: Optional[CircuitBreaker] = None
         self.onboarding = InitialPreferenceOnboarding()
@@ -89,6 +98,11 @@ class HommeyWebInstance:
             self.memory_manager = runtime.memory_manager
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
+            self.multi_intent_pipeline = MultiIntentPipeline(
+                model=self.model,
+                composer_model=runtime.composer_model,
+                agent_runner=self.orchestrator.execute_task,
+            )
             self.attachment_service = getattr(runtime, "attachment_service", None)
             self._agent_cache = runtime.agent_cache
             self.circuit_breaker = create_circuit_breaker()
@@ -371,6 +385,7 @@ class HommeyWebInstance:
         message: str,
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
+        progress_callback=None,
     ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
         rc = RESILIENCE_CONFIG
@@ -381,10 +396,14 @@ class HommeyWebInstance:
         )
         try:
             with execution_budget_scope(budget):
+                implementation_kwargs = {
+                    "request_id": request_id,
+                    "attachment_ids": attachment_ids,
+                }
+                if progress_callback is not None:
+                    implementation_kwargs["progress_callback"] = progress_callback
                 return await asyncio.wait_for(
-                    self._process_message_impl(
-                        message, request_id=request_id, attachment_ids=attachment_ids
-                    ),
+                    self._process_message_impl(message, **implementation_kwargs),
                     timeout=rc.get("request_timeout_sec", 120.0),
                 )
         except ExecutionLimitExceeded as exc:
@@ -416,6 +435,7 @@ class HommeyWebInstance:
         message: str,
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
+        progress_callback=None,
     ) -> dict:
         """处理用户消息，返回响应"""
         from agentscope.message import Msg
@@ -431,8 +451,22 @@ class HommeyWebInstance:
             get_recorded_response = getattr(self.memory_manager, "get_recorded_response", None)
             recorded = get_recorded_response(request_id) if get_recorded_response else None
             if recorded:
+                get_recorded_document = getattr(
+                    self.memory_manager, "get_recorded_answer_document", None
+                )
+                get_recorded_presentation = getattr(
+                    self.memory_manager, "get_recorded_presentation_document", None
+                )
+                recorded_document = (
+                    get_recorded_document(request_id) if get_recorded_document else None
+                )
+                recorded_presentation = (
+                    get_recorded_presentation(request_id) if get_recorded_presentation else None
+                )
                 return {
                     "response": recorded,
+                    "answer_document": recorded_document,
+                    "presentation_document": recorded_presentation,
                     "agents": [],
                     "preferences_updated": False,
                     "idempotent_replay": True,
@@ -538,10 +572,80 @@ class HommeyWebInstance:
             except Exception as e:
                 logger.warning("附件绑定失败 request_id=%s: %s", request_id, sanitize_for_log(e))
 
-        # 3. Orchestration
+        use_task_pipeline = bool(
+            ORCHESTRATION_V2_CONFIG.get("enabled", True)
+            and self.multi_intent_pipeline is not None
+            and supports_phase_one(intention_data)
+        )
+        if use_task_pipeline:
+            try:
+                orchestration_start = time.perf_counter()
+                pipeline_output = await self.multi_intent_pipeline.run(
+                    original_query=display_message,
+                    intention_data=intention_data,
+                    base_context=self.orchestrator.prepare_context(intention_data),
+                    progress=progress_callback,
+                )
+                timings["orchestration"] = time.perf_counter() - orchestration_start
+                self.orchestrator.record_task_results(intention_data, pipeline_output.results)
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_success()
+            except ExecutionLimitExceeded:
+                raise
+            except CircuitOpenError:
+                record_upstream_error(COMPONENT_LLM, ERROR_CIRCUIT_OPEN, retryable=True)
+                raise UpstreamError(
+                    "CIRCUIT_OPEN",
+                    "服务暂时不可用，请稍后再试。",
+                    retryable=True,
+                    component=COMPONENT_LLM,
+                )
+            except Exception as e:
+                if self.circuit_breaker:
+                    self.circuit_breaker.record_failure()
+                logger.error("Task orchestration failed: %s", sanitize_for_log(e))
+                record_upstream_error(COMPONENT_LLM, e, retryable=True)
+                raise UpstreamError(
+                    "ORCHESTRATION_FAILED",
+                    "调度执行失败，请稍后重试。",
+                    retryable=True,
+                    component=COMPONENT_LLM,
+                    debug_message=str(e),
+                )
+            answer_document = pipeline_output.answer_document.model_dump(mode="json")
+            response = pipeline_output.answer_document.plain_text
+            assistant_metadata = dict(metadata)
+            assistant_metadata["answer_document"] = answer_document
+            self.memory_manager.add_message("assistant", response, assistant_metadata)
+            agents = [
+                {
+                    "name": result.agent_name,
+                    "display": AGENT_DISPLAY_NAMES.get(result.agent_name, result.agent_name),
+                    "status": result.status,
+                    "duration_sec": result.duration_sec,
+                }
+                for result in pipeline_output.results
+            ]
+            timings["total"] = time.perf_counter() - start_time
+            return {
+                "response": response,
+                "answer_document": answer_document,
+                "agents": agents,
+                "preferences_updated": False,
+                "timings": {key: round(value, 3) for key, value in timings.items()},
+            }
+
+        # 3. Legacy orchestration for single intents and dependent workflows.
         try:
             orchestration_start = time.perf_counter()
-            orchestration_result = await self.orchestrator.reply(intention_result)
+            progress_reply = getattr(self.orchestrator, "reply_with_progress", None)
+            if progress_callback is None or progress_reply is None:
+                orchestration_result = await self.orchestrator.reply(intention_result)
+            else:
+                orchestration_result = await progress_reply(
+                    intention_result,
+                    progress_callback,
+                )
             timings["orchestration"] = time.perf_counter() - orchestration_start
             if self.circuit_breaker:
                 self.circuit_breaker.record_success()
@@ -579,9 +683,25 @@ class HommeyWebInstance:
             self.memory_manager.add_message("assistant", response, metadata)
             return {"response": response, "agents": [], "preferences_updated": False}
 
-        # 5. Format response
-        response = self._format_response(result_data)
-        self.memory_manager.add_message("assistant", response, metadata)
+        # 5. Format response. Incomplete trip intake uses a typed presentation
+        # document; plain text remains available for old clients and exports.
+        presentation_document = self._trip_intake_presentation(result_data)
+        answer_document = None
+        if presentation_document:
+            response = presentation_document["plain_text"]
+            assistant_metadata = dict(metadata)
+            assistant_metadata["presentation_document"] = presentation_document
+            self.memory_manager.add_message("assistant", response, assistant_metadata)
+        else:
+            response = self._format_response(result_data)
+            document = build_legacy_answer_document(result_data, response)
+            if document:
+                answer_document = document.model_dump(mode="json")
+                assistant_metadata = dict(metadata)
+                assistant_metadata["answer_document"] = answer_document
+                self.memory_manager.add_message("assistant", response, assistant_metadata)
+            else:
+                self.memory_manager.add_message("assistant", response, metadata)
 
         # 6. Extract agent names
         agents = []
@@ -607,10 +727,26 @@ class HommeyWebInstance:
 
         return {
             "response": response,
+            "answer_document": answer_document,
+            "presentation_document": presentation_document,
             "agents": agents,
             "preferences_updated": prefs_updated,
             "timings": {key: round(value, 3) for key, value in timings.items()},
         }
+
+    @staticmethod
+    def _trip_intake_presentation(result_data: dict) -> dict | None:
+        """Build a structured prompt when planning is paused for required facts."""
+        if not TRIP_INTAKE_CONFIG.get("enabled", True):
+            return None
+        for result in result_data.get("results", []):
+            if result.get("agent_name") != "event_collection" or result.get("status") != "success":
+                continue
+            data = result.get("data") if isinstance(result.get("data"), dict) else {}
+            nested = data.get("data") if isinstance(data.get("data"), dict) else data
+            if nested.get("planning_ready") is False:
+                return build_trip_intake_document(nested).model_dump(mode="json")
+        return None
 
     def _raise_on_agent_errors(self, result_data: dict) -> None:
         """Convert internal agent error payloads into the public AppError flow."""
@@ -689,15 +825,58 @@ class HommeyWebInstance:
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
     ):
-        """Yield JSON-serializable progress and response events for Web streaming."""
-        yield {"type": "status", "message": "processing"}
-        result = await self.process_message(
-            message, request_id=request_id, attachment_ids=attachment_ids
-        )
+        """Yield live orchestration progress and response events as NDJSON payloads."""
+        queue: asyncio.Queue = asyncio.Queue()
+        result_holder = {}
+
+        async def progress_callback(event):
+            payload = event.model_dump(mode="json") if hasattr(event, "model_dump") else dict(event)
+            await queue.put(payload)
+
+        async def run_request():
+            try:
+                result_holder["result"] = await self.process_message(
+                    message,
+                    request_id=request_id,
+                    attachment_ids=attachment_ids,
+                    progress_callback=progress_callback,
+                )
+            finally:
+                await queue.put(None)
+
+        yield {"type": "status", "phase": "analyzing", "message_key": "request_analyzing"}
+        request_task = asyncio.create_task(run_request())
+        while True:
+            event = await queue.get()
+            if event is None:
+                break
+            yield event
+        await request_task
+        result = result_holder["result"]
 
         agents = result.get("agents", [])
         if agents:
             yield {"type": "agents", "agents": agents}
+
+        answer_document = result.get("answer_document")
+        if answer_document:
+            yield {"type": "answer_document", "document": answer_document}
+            yield {
+                "type": "done",
+                "preferences_updated": result.get("preferences_updated", False),
+                "timings": result.get("timings", {}),
+            }
+            return
+
+        presentation_document = result.get("presentation_document")
+        if presentation_document:
+            yield {"type": "presentation_document", "document": presentation_document}
+            yield {
+                "type": "done",
+                "preferences_updated": result.get("preferences_updated", False),
+                "timings": result.get("timings", {}),
+            }
+            return
 
         response = result.get("response") or ""
         for chunk in self._chunk_text(response):

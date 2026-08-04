@@ -5,13 +5,16 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
-    <link rel="stylesheet" href="/static/hommey.css">
+    <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260803-brand-v1">
+    <link rel="stylesheet" href="/static/answer-card.css?v=20260803-cards-v4">
+    <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260803-cards-v4">
 </head>
 <body class="chat-page" data-user-id="{{ user_id }}">
     <div id="initOverlay" class="init-overlay">
         <div class="init-card">
             <span class="mini-logo">
-                <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                <svg viewBox="0 0 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
             </span>
             <div class="init-status">正在准备 Hommey</div>
             <div class="init-sub">首次加载可能需要几秒钟</div>
@@ -26,7 +29,7 @@
                 </button>
                 <button id="homeButton" class="product-home" type="button">
                     <span class="mini-logo">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                        <svg viewBox="0 0 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
                     </span>
                     <span>Hommey</span>
                 </button>
@@ -110,7 +113,7 @@
             <div class="sidebar-brand-row">
                 <div class="sidebar-brand">
                     <span class="mini-logo">
-                        <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 5v14M18 5v14M6 12h12"/></svg>
+                        <svg viewBox="0 0 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
                     </span>
                     <span>Hommey</span>
                 </div>
@@ -232,6 +235,8 @@
     </section>
 
     <div id="toast" class="toast" role="status"></div>
-    <script src="/static/app.js"></script>
+    <script src="/static/answer-card.js?v=20260803-cards-v4"></script>
+    <script src="/static/trip-intake-card.js?v=20260803-cards-v4"></script>
+    <script src="/static/app.js?v=20260803-cards-v4"></script>
 </body>
 </html>

@@ -84,7 +84,7 @@ RAG_CONFIG = {
 
 
 SKILL_CONFIG = {
-    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".claude/skills"),
+    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".agents/skills"),
 }
 
 

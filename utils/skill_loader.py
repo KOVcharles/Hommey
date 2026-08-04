@@ -10,7 +10,7 @@ class SkillLoader:
 
     def __init__(self, skills_dir: Optional[str] = None):
         project_root = Path(__file__).parent.parent.resolve()
-        configured_dir = skills_dir or SKILL_CONFIG.get("root", ".claude/skills")
+        configured_dir = skills_dir or SKILL_CONFIG.get("root", ".agents/skills")
         self.skills_dir = Path(configured_dir)
         if not self.skills_dir.is_absolute():
             self.skills_dir = project_root / self.skills_dir

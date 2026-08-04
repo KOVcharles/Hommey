@@ -40,7 +40,7 @@
 - `context/long_term_memory.py`：文件/PostgreSQL 长期存储。
 - `webui_new/manager.py`：Web 请求中的上下文读取和消息写入。
 - `agents/orchestration_agent.py`：向子 Agent 注入记忆并回写结构化信息。
-- `.claude/skills/memory-query/script/agent.py`：回答“我以前去过哪里”等记忆查询。
+- `.agents/skills/memory-query/script/agent.py`：回答“我以前去过哪里”等记忆查询。
 
 ## 2. 身份与会话隔离
 
@@ -138,13 +138,14 @@ PostgreSQL 模式使用以下表：
 
 | 表 | 关键字段 | 用途 |
 | --- | --- | --- |
-| `user_preferences` | `user_id`, `pref_type`, `pref_value JSONB` | 每类偏好一行，主键为用户和偏好类型 |
+| `user_travel_preferences` | `user_id`、核心偏好列、`extra_preferences JSONB` | 每位用户一行；核心偏好类型明确，扩展偏好保留弹性 |
+| `user_preferences` | `user_id`, `pref_type`, `pref_value JSONB` | 已弃用的 EAV 兼容镜像，仅用于迁移期回滚 |
 | `chat_history` | `user_id`, `session_id`, `role`, `content`, `created_at` | 完整聊天记录 |
 | `trip_history` | `trip_id`, `user_id`, 起终点、日期、目的 | 历史行程 |
 | `user_statistics` | 消息数、行程数、查询数、高频目的地 JSONB | 用户统计 |
 | `active_trip_contexts` | `user_id`, `status`, `context_data JSONB` | 每位用户唯一的当前出差任务 |
 
-`PostgresLongTermMemory` 初始化时会幂等创建这些表，并确保当前用户有一条统计记录。连接使用 `autocommit=True`，目前每个 `MemoryManager` 持有一条长期连接，没有连接池和显式关闭逻辑。
+`PostgresLongTermMemory` 初始化时会幂等创建这些表，并确保当前用户有一条统计记录。偏好读取以 `user_travel_preferences` 为准，写入时在同一事务内同步旧 EAV 表。连接使用 `autocommit=True`，目前每个 `MemoryManager` 持有一条长期连接，没有连接池和显式关闭逻辑。
 
 应用启动迁移还会创建 `active_trip_contexts`，使当前任务表在业务实例初始化前也可存在；其他核心记忆表目前仍由 `PostgresLongTermMemory._init_schema()` 创建。
 
@@ -171,7 +172,7 @@ PostgreSQL 模式使用以下表：
 - 首次引导直接保存 `home_location`、`transportation_preference`、`hotel_brands`、`seat_preference`；
 - `preference` Agent 返回偏好后，由协调器按 `append` 或 `replace` 规则回写。
 
-偏好存储支持字符串、列表等 JSON 值。`hotel_brands` 等列表型偏好会去重追加。
+核心偏好使用明确字段：`home_location`、`transportation_preference`、`hotel_brands`、`airlines`、`seat_preference`、`meal_preference`、`budget_level`。其中酒店和航空公司为 JSONB 数组；其他未建模偏好写入 `extra_preferences JSONB`。`hotel_brands` 等列表型偏好会去重追加。
 
 ### 5.3 当前出差任务
 
@@ -291,7 +292,7 @@ Docker Compose 默认把短期后端设为 Redis、长期后端设为 PostgreSQL
 5. Web 的摘要刷新计数直接读取内存列表长度；Redis 后端下该列表不增长，因此摘要通常只在首次生成，后续不会按预期每 5 条刷新。CLI 使用后端统计，不受此问题影响。
 6. 长期聊天摘要排除当前 `session_id`；当前会话中超出短期窗口的旧消息不会进入历史摘要，直到创建新会话。
 7. 文件后端和 PostgreSQL 后端的全量删除能力不一致。
-8. 记忆表除当前任务外主要由运行时代码建表，尚未全部纳入版本化迁移。
+8. 旧 `user_preferences` 表仍处于迁移期双写状态；确认版本稳定并完成回滚窗口后才能停止双写和删除旧表。
 
 ## 11. 检查与测试
 
@@ -306,7 +307,9 @@ docker exec hommey-redis redis-cli --scan --pattern 'hommey:short_term:*'
 ```sql
 SELECT user_id, count(*) FROM chat_history GROUP BY user_id;
 SELECT user_id, count(*) FROM trip_history GROUP BY user_id;
-SELECT user_id, count(*) FROM user_preferences GROUP BY user_id;
+SELECT user_id, home_location, transportation_preference, hotel_brands,
+       airlines, seat_preference, extra_preferences
+FROM user_travel_preferences;
 SELECT user_id, status, updated_at FROM active_trip_contexts;
 ```
 

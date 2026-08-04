@@ -122,6 +122,27 @@ class MemoryManager:
                 return row.get("content") or None
         return None
 
+    def get_recorded_answer_document(self, request_id: str) -> dict | None:
+        """Return the structured answer saved for an idempotent retry, when present."""
+        if not request_id:
+            return None
+        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
+        for row in reversed(rows):
+            if row.get("role") == "assistant" and isinstance(row.get("answer_document"), dict):
+                return row["answer_document"]
+        return None
+
+    def get_recorded_presentation_document(self, request_id: str) -> dict | None:
+        """Return a typed presentation saved for an idempotent retry."""
+        if not request_id:
+            return None
+        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
+        for row in reversed(rows):
+            document = row.get("presentation_document")
+            if row.get("role") == "assistant" and isinstance(document, dict):
+                return document
+        return None
+
     # ========== 长期记忆操作 ==========
     # 注意：大部分方法直接使用 self.short_term 和 self.long_term 即可，无需封装
 

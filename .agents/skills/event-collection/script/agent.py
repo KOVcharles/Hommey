@@ -9,6 +9,7 @@
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
 from core.execution_budget import ExecutionLimitExceeded
+from core.trip_intake import evaluate_trip_intake
 from typing import Optional, Union, List
 import json
 import logging
@@ -19,14 +20,6 @@ import os
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 logger = logging.getLogger(__name__)
-
-PLANNING_REQUIRED_FIELDS = (
-    "origin",
-    "destination",
-    "start_date",
-    "trip_purpose",
-)
-
 
 class EventCollectionAgent(AgentBase):
     """事项收集智能体"""
@@ -51,14 +44,17 @@ class EventCollectionAgent(AgentBase):
                 user_query = context.get("rewritten_query", "") or str(data)
                 user_preferences = context.get("user_preferences", {})
                 active_trip = context.get("active_trip") or {}
+                recent_dialogue = context.get("recent_dialogue") or []
             except json.JSONDecodeError:
                 user_query = content
                 user_preferences = {}
                 active_trip = {}
+                recent_dialogue = []
         else:
             user_query = str(content)
             user_preferences = {}
             active_trip = {}
+            recent_dialogue = []
 
         # 构建用户背景信息
         background_info = ""
@@ -76,6 +72,16 @@ class EventCollectionAgent(AgentBase):
         if active_trip:
             background_info += "【当前出差任务】（在此基础上增量更新）\n"
             background_info += json.dumps(active_trip, ensure_ascii=False, indent=2) + "\n\n"
+        dialogue_lines = []
+        for item in recent_dialogue[-8:]:
+            if not isinstance(item, dict) or item.get("role") != "user":
+                continue
+            text = str(item.get("content") or "").strip()
+            if text and text != user_query:
+                dialogue_lines.append(f"• {text[:500]}")
+        if dialogue_lines:
+            background_info += "【当前会话最近提供的行程信息】（仅用于补齐当前任务）\n"
+            background_info += "\n".join(dialogue_lines) + "\n\n"
 
         # 获取当前时间
         from datetime import datetime
@@ -112,6 +118,8 @@ class EventCollectionAgent(AgentBase):
 - 不把公司差旅行程扩展为景点或私人旅游计划
 - 如果用户没说出发地，但有家庭住址信息，可推断出发地为家庭住址
 - 当前出差任务已有的字段应保留；用户本轮提供的新信息覆盖旧值
+- 可使用最近对话补齐本轮省略的当前行程事实，但不得把旧的、已完成的其他行程混入当前任务
+- 最近对话、当前任务和本轮输入有冲突时，以本轮明确表达为准；无法判断时保留当前任务并要求确认
 
 【输出格式】(严格JSON)
 {{
@@ -195,19 +203,8 @@ class EventCollectionAgent(AgentBase):
                 "error": str(e)
             }
 
-        # 行程规划必须等到核心事项完整后再调用外部查询和规划 Agent。
-        planning_missing = []
-        for field in PLANNING_REQUIRED_FIELDS:
-            if not result.get(field):
-                planning_missing.append(field)
-        if not result.get("end_date") and not result.get("duration_days"):
-            planning_missing.append("duration_days_or_end_date")
-        optional_info = [
-            field for field in ("work_location", "work_schedule") if not result.get(field)
-        ]
-        result["missing_info"] = planning_missing
-        result["optional_info"] = optional_info
-        result["planning_ready"] = not planning_missing
+        # LLM只提取事实；是否可规划、缺失/无效/冲突字段由确定性规则计算。
+        result.update(evaluate_trip_intake(result))
 
         # 返回JSON字符串格式
         return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")

@@ -124,7 +124,7 @@ http://127.0.0.1:8000
 
 ## Skill 平台
 
-每个运行时 Skill 位于 `.claude/skills/<skill-name>/`：
+每个运行时 Skill 位于 `.agents/skills/<skill-name>/`：
 
 ```text
 SKILL.md             标准入口：name/description frontmatter + 工作流程
@@ -274,7 +274,7 @@ webui_new/
   static/                前端脚本和静态资源
 
 agents/                  意图识别与多智能体编排
-.claude/skills/          声明式 Skill 包
+.agents/skills/          声明式 Skill 包（Codex 自动发现）
 core/skill_definition.py 标准 Skill 元数据与 Hommey 扩展契约
 core/skill_store.py      Skill 启停和执行轨迹存储
 context/                 短期记忆和长期记忆

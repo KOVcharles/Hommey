@@ -371,9 +371,11 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[-1]["type"] == "done"
-    rendered = "".join(event.get("text", "") for event in events if event.get("type") == "chunk")
-    assert "住宿标准以公司制度为准" in rendered
-    assert "降级处理" in rendered
+    documents = [event["document"] for event in events if event.get("type") == "answer_document"]
+    assert len(documents) == 1
+    assert "住宿标准以公司制度为准" in documents[0]["plain_text"]
+    assert "降级处理" in documents[0]["plain_text"]
+    assert not any(event.get("type") == "chunk" for event in events)
     assert "Error in input stream" not in response.text
 
 

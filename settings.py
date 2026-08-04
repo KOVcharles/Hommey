@@ -53,6 +53,27 @@ LLM_CONFIG = {
 }
 
 
+COMPOSER_CONFIG = {
+    "enabled": _bool_env("HOMMEY_COMPOSER_ENABLED", True),
+    "api_key": os.getenv("HOMMEY_COMPOSER_API_KEY") or LLM_CONFIG["api_key"],
+    "model_name": os.getenv("HOMMEY_COMPOSER_MODEL_NAME") or LLM_CONFIG["model_name"],
+    "base_url": os.getenv("HOMMEY_COMPOSER_BASE_URL") or LLM_CONFIG["base_url"],
+    "temperature": _float_env("HOMMEY_COMPOSER_TEMPERATURE", 0.2),
+    "max_tokens": _int_env("HOMMEY_COMPOSER_MAX_TOKENS", 4096),
+}
+
+
+ORCHESTRATION_V2_CONFIG = {
+    # Phase one is deliberately limited to independent policy + public-info requests.
+    "enabled": _bool_env("HOMMEY_TASK_ORCHESTRATION_V2", True),
+}
+
+
+TRIP_INTAKE_CONFIG = {
+    "enabled": _bool_env("HOMMEY_TRIP_INTAKE_CARD", True),
+}
+
+
 SYSTEM_CONFIG = {
     "enable_llm": _bool_env("HOMMEY_ENABLE_LLM", True),
     "log_level": os.getenv("HOMMEY_LOG_LEVEL", "INFO"),
@@ -99,7 +120,7 @@ RAG_CONFIG = {
 
 
 SKILL_CONFIG = {
-    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".claude/skills"),
+    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".agents/skills"),
 }
 
 
@@ -111,7 +132,9 @@ RESILIENCE_CONFIG = {
     "max_agent_calls_per_request": _int_env("HOMMEY_MAX_AGENT_CALLS_PER_REQUEST", 8),
     "max_external_calls_per_request": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_REQUEST", 16),
     "max_external_calls_per_type": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_TYPE", 6),
-    "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 120.0),
+    # Full planning may include intent recognition, collection, parallel
+    # policy/public-info retrieval, planning, and compliance verification.
+    "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 240.0),
     "circuit_failure_threshold": _int_env("HOMMEY_CIRCUIT_FAILURE_THRESHOLD", 5),
     "circuit_recovery_timeout_sec": _float_env(
         "HOMMEY_CIRCUIT_RECOVERY_TIMEOUT_SEC",
