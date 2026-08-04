@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import uuid
+from contextlib import asynccontextmanager
 from typing import Optional
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
@@ -1428,24 +1429,22 @@ class WebHommeyManager:
                 await instance.initialize()
             return instance
 
-    async def process_message(
-        self,
-        user_id: str,
-        message: str,
-        *,
-        request_id: str | None = None,
-        attachment_ids: list[str] | None = None,
-        progress_callback=None,
-    ) -> dict:
-        """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。"""
-        instance = self.get(user_id)
-        if not instance or not instance.initialized:
-            from webui_new.core.errors import BusinessError
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+    @asynccontextmanager
+    async def _user_lock_scope(self, user_id: str):
+        """锁编排作用域：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
 
+        本地锁与分布式锁共用一个 deadline（per_user_lock_timeout_sec），本地锁获取也
+        纳入超时（asyncio.wait_for），避免本地锁无界等待；心跳续约失败（锁易主）时置
+        lock_lost 事件，调用方在关键点检查并中止处理；退出时逆序释放，任何一步释放
+        失败都不中断后续释放，本地锁必释放。
+
+        Yield: asyncio.Event —— 锁易主时被 set，调用方应在关键点检查并中止处理。
+        """
         rc = CONCURRENCY_CONFIG
+        deadline = time.monotonic() + float(rc.get("per_user_lock_timeout_sec", 60.0))
+        lock_lost = asyncio.Event()
         heartbeat = None
-        # 1) 进程内 per-user 锁（同一 worker 内不重复进 Redis）
+
         local_lock = self._per_user_lock(user_id)
         distributed_lock = create_distributed_lock(f"hommey:lock:user:{user_id}")
         semaphore = create_redis_semaphore()
@@ -1453,12 +1452,21 @@ class WebHommeyManager:
         acquired_distributed = False
         acquired_semaphore = False
 
-        # 进程内锁等待（本地等待不设超时，避免同一 worker 死锁；由外层 wait_for 兜底）
-        await local_lock.acquire()
+        # 1) 进程内 per-user 锁：统一 deadline 内获取，超时报 USER_QUEUE_TIMEOUT。
+        #    本地等待不设额外超时（同一 worker 内先到先得），由 deadline 兜底。
+        remaining = deadline - time.monotonic()
+        try:
+            await asyncio.wait_for(local_lock.acquire(), remaining)
+        except asyncio.TimeoutError:
+            raise UpstreamError(
+                "USER_QUEUE_TIMEOUT",
+                "您有请求正在处理，请稍候再试。",
+                retryable=True,
+                component=COMPONENT_LLM,
+            ) from None
 
         try:
-            # 2) 分布式锁：跨 worker 串行，带超时
-            deadline = time.monotonic() + float(rc.get("per_user_lock_timeout_sec", 60.0))
+            # 2) 分布式锁：跨 worker 串行，同一 deadline
             while not await distributed_lock.acquire():
                 if time.monotonic() >= deadline:
                     raise UpstreamError(
@@ -1470,12 +1478,13 @@ class WebHommeyManager:
                 await asyncio.sleep(float(rc.get("lock_retry_interval_sec", 0.2)))
             acquired_distributed = True
 
-            # 心跳续约：持锁期间每 lock_heartbeat_interval_sec 续一次
+            # 心跳续约：锁易主时置 lock_lost，主协程据此中止（Important 3）
             async def _heartbeat():
                 while True:
                     await asyncio.sleep(float(rc.get("lock_heartbeat_interval_sec", 15.0)))
                     if not await distributed_lock.renew():
-                        return  # 锁已易主，放弃
+                        lock_lost.set()
+                        return
 
             heartbeat = asyncio.create_task(_heartbeat())
 
@@ -1492,25 +1501,89 @@ class WebHommeyManager:
                 await asyncio.sleep(float(rc.get("lock_retry_interval_sec", 0.2)))
             acquired_semaphore = True
 
-            # 4) 调用实例处理（保持 HommeyWebInstance 原逻辑）
-            return await instance.process_message(
-                message,
-                request_id=request_id,
-                attachment_ids=attachment_ids,
-                progress_callback=progress_callback,
-            )
+            yield lock_lost
         finally:
+            # 释放链：任何一步失败都不中断后续释放，本地锁必释放（Important 2）
             if heartbeat is not None:
                 heartbeat.cancel()
                 try:
                     await heartbeat
-                except asyncio.CancelledError:
+                except (asyncio.CancelledError, Exception):
                     pass
-            if acquired_semaphore:
-                await semaphore.release()
-            if acquired_distributed:
-                await distributed_lock.release()
+            try:
+                if acquired_semaphore:
+                    await semaphore.release()
+            except Exception as e:
+                logger.warning("semaphore release failed user_id=%s: %s", user_id, sanitize_for_log(e))
+            try:
+                if acquired_distributed:
+                    await distributed_lock.release()
+            except Exception as e:
+                logger.warning("distributed lock release failed user_id=%s: %s", user_id, sanitize_for_log(e))
             local_lock.release()
+
+    @staticmethod
+    def _lock_lost_error() -> UpstreamError:
+        return UpstreamError(
+            "LOCK_LOST",
+            "会话已超时，请重新发送消息。",
+            retryable=True,
+            component=COMPONENT_LLM,
+        )
+
+    async def process_message(
+        self,
+        user_id: str,
+        message: str,
+        *,
+        request_id: str | None = None,
+        attachment_ids: list[str] | None = None,
+        progress_callback=None,
+    ) -> dict:
+        """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。"""
+        instance = self.get(user_id)
+        if not instance or not instance.initialized:
+            from webui_new.core.errors import BusinessError
+            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+
+        async with self._user_lock_scope(user_id) as lock_lost:
+            # 锁已易主：不启动新的处理（Important 3）
+            if lock_lost.is_set():
+                raise self._lock_lost_error()
+
+            # 与锁丢失事件竞争：锁易主即中止在途处理。
+            # instance.process_message 内部已有 request_timeout_sec 的 wait_for，取消是既有可接受语义。
+            process_task = asyncio.create_task(
+                instance.process_message(
+                    message,
+                    request_id=request_id,
+                    attachment_ids=attachment_ids,
+                    progress_callback=progress_callback,
+                )
+            )
+            lost_task = asyncio.create_task(lock_lost.wait())
+            try:
+                _, pending = await asyncio.wait(
+                    {process_task, lost_task},
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+            except BaseException:
+                # 外层取消（请求超时/关闭）：清理两个竞争任务，避免孤儿任务
+                process_task.cancel()
+                lost_task.cancel()
+                await asyncio.gather(process_task, lost_task, return_exceptions=True)
+                raise
+            if lock_lost.is_set():
+                process_task.cancel()
+                for task in pending:
+                    task.cancel()
+                await asyncio.gather(*pending, return_exceptions=True)
+                raise self._lock_lost_error()
+            lost_task.cancel()
+            for task in pending:
+                task.cancel()
+            await asyncio.gather(*pending, return_exceptions=True)
+            return process_task.result()
 
     async def stream_message(
         self,
@@ -1525,75 +1598,29 @@ class WebHommeyManager:
         生成器内部取锁（进程内锁 → 分布式锁 → 信号量），用 async for 转发
         instance.stream_message 的每个事件，finally 逆序释放。前端断连时
         asyncio.CancelledError 冒泡到生成器，finally 保证锁释放。
+
+        已知限制（Important 4）：instance.stream_message 内部用 create_task 起
+        run_request 任务，断连取消外层层叠时无法从外层触及并 cancel 内层 request_task，
+        LLM 工作可能继续执行到自然结束（队列无人消费）。不做 instance 内部结构调整，
+        该场景列为 Task 6/7 测试项。
         """
         instance = self.get(user_id)
         if not instance or not instance.initialized:
             from webui_new.core.errors import BusinessError
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
 
-        rc = CONCURRENCY_CONFIG
-        heartbeat = None
-        local_lock = self._per_user_lock(user_id)
-        distributed_lock = create_distributed_lock(f"hommey:lock:user:{user_id}")
-        semaphore = create_redis_semaphore()
-
-        acquired_distributed = False
-        acquired_semaphore = False
-
-        await local_lock.acquire()
-
-        try:
-            deadline = time.monotonic() + float(rc.get("per_user_lock_timeout_sec", 60.0))
-            while not await distributed_lock.acquire():
-                if time.monotonic() >= deadline:
-                    raise UpstreamError(
-                        "USER_QUEUE_TIMEOUT",
-                        "您有请求正在处理，请稍候再试。",
-                        retryable=True,
-                        component=COMPONENT_LLM,
-                    )
-                await asyncio.sleep(float(rc.get("lock_retry_interval_sec", 0.2)))
-            acquired_distributed = True
-
-            async def _heartbeat():
-                while True:
-                    await asyncio.sleep(float(rc.get("lock_heartbeat_interval_sec", 15.0)))
-                    if not await distributed_lock.renew():
-                        return
-
-            heartbeat = asyncio.create_task(_heartbeat())
-
-            sem_deadline = time.monotonic() + float(rc.get("semaphore_acquire_timeout_sec", 120.0))
-            while not await semaphore.acquire():
-                if time.monotonic() >= sem_deadline:
-                    raise UpstreamError(
-                        "GLOBAL_CONCURRENCY_LIMIT",
-                        "系统繁忙，请稍后再试。",
-                        retryable=True,
-                        component=COMPONENT_LLM,
-                    )
-                await asyncio.sleep(float(rc.get("lock_retry_interval_sec", 0.2)))
-            acquired_semaphore = True
-
-            # 持锁转发实例流事件到生成器结束
+        async with self._user_lock_scope(user_id) as lock_lost:
+            # 锁已易主：不再继续输出（Important 3）
+            if lock_lost.is_set():
+                raise self._lock_lost_error()
             async for event in instance.stream_message(
                 message,
                 request_id=request_id,
                 attachment_ids=attachment_ids,
             ):
+                if lock_lost.is_set():
+                    raise self._lock_lost_error()
                 yield event
-        finally:
-            if heartbeat is not None:
-                heartbeat.cancel()
-                try:
-                    await heartbeat
-                except asyncio.CancelledError:
-                    pass
-            if acquired_semaphore:
-                await semaphore.release()
-            if acquired_distributed:
-                await distributed_lock.release()
-            local_lock.release()
 
     def get_status(self, user_id: str) -> dict:
         instance = self.get(user_id)
