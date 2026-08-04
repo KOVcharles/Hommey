@@ -10,12 +10,14 @@
 
 ## Global Constraints
 
-- 不破坏现有接口：`CircuitBreaker.raise_if_open()/record_failure()/record_success()/get_status()`、`HommeyWebInstance.process_message()` 签名不变；现有测试必须通过。
-- Redis 客户端复用 `MEMORY_CONFIG.short_term` 的 host/port/password/db；新增协调层不新增依赖。
+- 不破坏现有接口：`HommeyWebInstance.process_message()` 签名不变；现有测试必须通过。`utils.circuit_breaker.CircuitBreaker`（同步类）保留不动，供遗留同步调用使用。
+- `RedisCircuitBreaker` 为 **async-native**（方法全为 `async def`，`raise_if_open`/`record_failure`/`record_success`/`get_status`），与旧同步 `CircuitBreaker` 鸭子类型不互通——调用点（`HommeyWebInstance` 等）须 `await`。这是已批准的裁决（A1）。
+- Redis 客户端复用 `MEMORY_CONFIG.short_term` 的 host/port/password/db；协调层运行时零新增依赖。测试依赖例外：`requirements.txt` 新增 `pytest-asyncio`（已批准裁决 B）。
 - 全部锁/信号量/熔断原语用 Lua 原子脚本，禁止多命令组合（避免非原子窗口）。
 - 同步 API 保持不变：`MemoryManager` 及记忆层方法不改签名，只新增 async 门面。
 - 配置新增 `CONCURRENCY_CONFIG`，默认值从 spec §8 复制。
 - 编排层内部逻辑不改动。
+- **测试运行方式**：测试在 `hommey-app` 容器内跑（源码已挂载到 /app，Redis/Postgres 为容器兄弟服务）。先一次性 `docker exec hommey-app pip install pytest-asyncio`（容器已联网安装），之后用 `docker exec hommey-app pytest tests/<file> -v` 运行。Task 2 会把 `pytest-asyncio` 写入 `requirements.txt`（供未来 build 固化），开发期无需 rebuild。
 
 ---
 
@@ -117,7 +119,7 @@ def test_facade_routes_to_sync_manager_and_returns_expected():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `python -m pytest tests/test_async_memory.py -v`
+Run: `docker exec hommey-app pytest tests/test_async_memory.py -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'context.async_memory'`
 
 - [ ] **Step 3: 实现门面**
@@ -172,7 +174,7 @@ class AsyncMemoryFacade:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `python -m pytest tests/test_async_memory.py -v`
+Run: `docker exec hommey-app pytest tests/test_async_memory.py -v`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
@@ -205,6 +207,22 @@ git commit -m "feat: add async memory facade over synchronous memory manager"
   - `def get_redis_coordination_client()` — 进程级共享 `redis.asyncio.Redis` 单例
   - `def create_distributed_lock(key: str)`, `def create_redis_semaphore()`, `def create_redis_circuit_breaker()`
 
+- [ ] **Step 0: 安装并固化 pytest-asyncio**
+
+在 `requirements.txt` 的 `# Test runner` 段加入：
+
+```
+pytest-asyncio==0.24.0
+```
+
+并在容器内安装（开发期无需 rebuild）：
+
+```bash
+docker exec hommey-app pip install pytest-asyncio==0.24.0
+```
+
+验证：`docker exec hommey-app python -c "import pytest_asyncio; print(pytest_asyncio.__version__)"` 输出 `0.24.0`。
+
 - [ ] **Step 1: 写失败测试**
 
 ```python
@@ -221,11 +239,17 @@ from utils.redis_coordination import (
 
 
 @pytest.fixture
-def client():
+async def client():
     c = get_redis_coordination_client()
     yield c
-    # 清理测试 key，避免污染
-    c.delete("test:lock:u1", "test:sem:g", "test:cb:state", "test:cb:count")
+    # 清理测试 key，避免污染（redis.asyncio 的 delete 是协程，需 await）
+    await c.delete(
+        "test:lock:u1",
+        "test:sem:g",
+        "hommey:cb:test:cb:state",
+        "hommey:cb:test:cb:opened_at",
+        "hommey:cb:test:cb:count",
+    )
 
 
 @pytest.mark.asyncio
@@ -273,24 +297,24 @@ async def test_circuit_breaker_state_machine(client):
     cb = RedisCircuitBreaker(
         "test:cb", failure_threshold=2, recovery_timeout_sec=1, half_open_successes=2
     )
-    assert cb.state == "closed"
-    assert cb.raise_if_open() is None  # 不抛
-    cb.record_failure()
-    cb.record_failure()
-    assert cb.state == "open"
+    assert await cb.state() == "closed"
+    await cb.raise_if_open()  # 不抛
+    await cb.record_failure()
+    await cb.record_failure()
+    assert await cb.state() == "open"
     with pytest.raises(Exception):
-        cb.raise_if_open()
+        await cb.raise_if_open()
     # 恢复超时后进入 half_open
     await asyncio.sleep(1.1)
-    assert cb.state == "half_open"
-    cb.record_success()
-    cb.record_success()
-    assert cb.state == "closed"
+    assert await cb.state() == "half_open"
+    await cb.record_success()
+    await cb.record_success()
+    assert await cb.state() == "closed"
 ```
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `python -m pytest tests/test_redis_coordination.py -v`
+Run: `docker exec hommey-app pytest tests/test_redis_coordination.py -v`
 Expected: FAIL，`ModuleNotFoundError: No module named 'utils.redis_coordination'`
 
 - [ ] **Step 3: 实现协调层**
@@ -469,6 +493,12 @@ return state or 'closed'
 
 
 class RedisCircuitBreaker:
+    """Async-native, Redis-backed circuit breaker shared across workers.
+
+    全部方法为 async；调用方须 await。与旧的同步 `utils.circuit_breaker.CircuitBreaker`
+    不互通，旧类保留给遗留同步调用。
+    """
+
     def __init__(
         self,
         name: str = "hommey",
@@ -493,12 +523,8 @@ class RedisCircuitBreaker:
         self._opened_at_key = f"hommey:cb:{name}:opened_at"
         self._count_key = f"hommey:cb:{name}:count"
 
-    @property
-    def state(self) -> str:
-        return self._sync_or_await(self._state())
-
-    def _state(self):
-        return self._client.eval(
+    async def state(self) -> str:
+        return await self._client.eval(
             _CB_STATE_LUA,
             3,
             self._state_key,
@@ -508,58 +534,42 @@ class RedisCircuitBreaker:
             self.recovery_timeout_sec,
         )
 
-    def allow_call(self) -> bool:
-        return self.state != "open"
+    async def allow_call(self) -> bool:
+        return await self.state() != "open"
 
-    def raise_if_open(self):
-        if not self.allow_call():
+    async def raise_if_open(self):
+        if not await self.allow_call():
             from utils.circuit_breaker import CircuitOpenError
             raise CircuitOpenError("服务暂时不可用，请稍后再试")
 
-    def record_failure(self):
-        return self._sync_or_await(
-            self._client.eval(
-                _CB_FAILURE_LUA,
-                3,
-                self._state_key,
-                self._opened_at_key,
-                self._count_key,
-                self.failure_threshold,
-                time.time(),
-            )
+    async def record_failure(self):
+        return await self._client.eval(
+            _CB_FAILURE_LUA,
+            3,
+            self._state_key,
+            self._opened_at_key,
+            self._count_key,
+            self.failure_threshold,
+            time.time(),
         )
 
-    def record_success(self):
-        return self._sync_or_await(
-            self._client.eval(
-                _CB_SUCCESS_LUA,
-                3,
-                self._state_key,
-                self._opened_at_key,
-                self._count_key,
-                self.half_open_successes,
-            )
+    async def record_success(self):
+        return await self._client.eval(
+            _CB_SUCCESS_LUA,
+            3,
+            self._state_key,
+            self._opened_at_key,
+            self._count_key,
+            self.half_open_successes,
         )
 
-    def get_status(self) -> dict:
+    async def get_status(self) -> dict:
         return {
-            "state": self.state,
-            "failure_count": self._sync_or_await(self._client.get(self._count_key)) or 0,
+            "state": await self.state(),
+            "failure_count": int(await self._client.get(self._count_key) or 0),
             "last_failure_time": None,
-            "opened_at": self._sync_or_await(self._client.get(self._opened_at_key)),
+            "opened_at": await self._client.get(self._opened_at_key),
         }
-
-    @staticmethod
-    def _sync_or_await(coro):
-        """Run a single redis.asyncio call inside an active loop (tests) or a fresh one."""
-        try:
-            import asyncio
-            loop = asyncio.get_event_loop()
-            if loop.is_running():
-                return coro  # caller must await
-        except RuntimeError:
-            pass
-        return asyncio.run(coro)
 
 
 # ── factory helpers ────────────────────────────────────────────────
@@ -583,11 +593,11 @@ def create_redis_circuit_breaker() -> RedisCircuitBreaker:
     return RedisCircuitBreaker()
 ```
 
-> 注意：`RedisCircuitBreaker.state/record_*` 的同步/异步双形态（`_sync_or_await`）为兼容现有同步调用点（`HommeyWebInstance` 里是同步调用 `record_success`）。在 async 上下文内应改为 `await client.eval(...)`，Task 4 会接好。
+> 注意：`RedisCircuitBreaker` 已按批准裁决（A1）做成 **async-native**。`HommeyWebInstance` 里现有同步调用 `cb.record_success()` / `cb.record_failure()` / `cb.raise_if_open()` 必须在 Task 6 改为 `await`（这些调用点本就在 async 方法内）。
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `python -m pytest tests/test_redis_coordination.py -v`
+Run: `docker exec hommey-app pytest tests/test_redis_coordination.py -v`
 Expected: PASS（需本地 Redis 或容器内 Redis 可达）
 
 - [ ] **Step 5: 提交**
@@ -678,7 +688,7 @@ git commit -m "feat: add concurrency config and multi-worker uvicorn support"
 - Consumes: `create_distributed_lock` / `create_redis_semaphore` / `create_redis_circuit_breaker`（Task 2）；`AsyncMemoryFacade`（Task 1）；`CONCURRENCY_CONFIG`（Task 3）
 - Produces:
   - `WebHommeyManager.process_message(user_id, ...) -> dict`
-  - `HommeyWebInstance.process_message(...)`（改名后同步测试兼容；保留 `reply_with_progress` 等既有方法）
+  - `HommeyWebInstance.process_message(...)`（**保留原名不动**，由 manager 入口包装调用；`reply_with_progress` 等既有方法不变）
   - SSE 断连路径在 `finally` 释放锁
 
 - [ ] **Step 1: 写失败测试**
@@ -727,7 +737,7 @@ async def test_manager_serializes_same_user_requests():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `python -m pytest tests/test_manager_concurrency.py -v`
+Run: `docker exec hommey-app pytest tests/test_manager_concurrency.py -v`
 Expected: FAIL，`AttributeError: 'WebHommeyManager' object has no attribute '_per_user_lock'`
 
 - [ ] **Step 3: 实现 manager 锁编排**
@@ -834,7 +844,7 @@ async def process_message(
         local_lock.release()
 ```
 
-> 注意：`HommeyWebInstance.process_message` 当前已是 `process_message`（含 budget/wait_for）。本任务将其改名为 `_process_message_impl` 由 manager 入口调用，或保留原名由 manager 直接调用（二选一，以不改动内部逻辑为原则——推荐**保留原名**，manager 直接调用，改动最小）。`instance.initialize()` 的初始化路径由 `get_or_create`+`initialize_user` 的进程内锁保护。
+> 注意：`HommeyWebInstance.process_message` 保持**原名不动**（含 budget/wait_for），由 manager 入口直接调用（已批准裁决）。`manager.process_message` 只做锁编排 + 调用 `instance.process_message`。`instance.initialize()` 的初始化路径由 `get_or_create`+`initialize_user` 的进程内锁保护。
 
 - [ ] **Step 4: 改 `chat.py` 路由**
 
@@ -867,7 +877,7 @@ async def stream_message(self, user_id: str, message: str, *, request_id=None, a
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `python -m pytest tests/test_manager_concurrency.py -v`
+Run: `docker exec hommey-app pytest tests/test_manager_concurrency.py -v`
 Expected: PASS
 
 - [ ] **Step 6: 提交**
@@ -913,7 +923,7 @@ def test_migrations_run_concurrently_without_duplicate():
 
 - [ ] **Step 2: 运行测试确认（未加锁时可能不失败但重复执行）**
 
-Run: `python -m pytest tests/test_migrations_concurrency.py -v`
+Run: `docker exec hommey-app pytest tests/test_migrations_concurrency.py -v`
 Expected: 当前通过（无锁也可通过，因无并发）；此测试验证加锁后并发仍安全
 
 - [ ] **Step 3: 加 advisory lock**
@@ -930,7 +940,7 @@ with psycopg.connect(dsn, autocommit=False, connect_timeout=5) as conn:
 
 - [ ] **Step 4: 运行测试确认通过**
 
-Run: `python -m pytest tests/test_migrations_concurrency.py -v`
+Run: `docker exec hommey-app pytest tests/test_migrations_concurrency.py -v`
 Expected: PASS
 
 - [ ] **Step 5: 提交**
@@ -986,7 +996,7 @@ async def test_facade_wraps_memory_manager():
 
 - [ ] **Step 2: 运行测试确认失败**
 
-Run: `python -m pytest tests/test_web_async_facade.py -v`
+Run: `docker exec hommey-app pytest tests/test_web_async_facade.py -v`
 Expected: 当前 `create_circuit_breaker` 返回旧 `CircuitBreaker`；断言可过但不满足"Redis 版"。改后断言 Redis 版。
 
 - [ ] **Step 3: `runtime.py` 改 `create_circuit_breaker` 返回 Redis 版**
@@ -1006,7 +1016,7 @@ def create_circuit_breaker() -> CircuitBreaker:
 
 - [ ] **Step 5: 运行测试确认通过**
 
-Run: `python -m pytest tests/test_web_async_facade.py tests/test_auth_routes.py tests/test_manager_concurrency.py -v`
+Run: `docker exec hommey-app pytest tests/test_web_async_facade.py tests/test_auth_routes.py tests/test_manager_concurrency.py -v`
 Expected: PASS（现有测试兼容）
 
 - [ ] **Step 6: 提交**
@@ -1047,7 +1057,7 @@ async def test_same_user_requests_serialize_across_manager():
 
 - [ ] **Step 2: 运行测试**
 
-Run: `python -m pytest tests/ -x -q`
+Run: `docker exec hommey-app pytest tests/ -x -q`
 Expected: 全部通过
 
 - [ ] **Step 3: 提交**
