@@ -78,6 +78,14 @@ def apply_all_migrations(postgres_dsn: str | None = None) -> int:
 
     applied = 0
     with psycopg.connect(dsn, autocommit=False, connect_timeout=5) as conn:
+        # 串行化多 uvicorn worker 并发启动时的迁移，避免并发 INSERT 触发
+        # schema_migrations 主键冲突。用 session 级 advisory lock（而非 xact lock）：
+        # xact lock 会在下方第一次 commit（CREATE TABLE/remap 之后）随事务结束释放，
+        # 无法覆盖逐文件 commit 的迁移循环。session 级锁跨 commit 保持、覆盖整个迁移
+        # 过程；连接在 with 块退出（含异常）时自动关闭，session 锁随之释放，无泄漏路径。
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(hashtext('hommey_migrations'))")
+
         with conn.cursor() as cur:
             cur.execute(
                 """
