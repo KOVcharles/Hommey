@@ -25,10 +25,11 @@ class StubProcess:
 
 class FakeDistributedLock:
     """模拟 create_distributed_lock 返回的分布式锁。"""
-    def __init__(self, key, acquire_result=True, renew_result=True):
+    def __init__(self, key, acquire_result=True, renew_result=True, renew_exc=None):
         self.key = key
         self.acquire_result = acquire_result
         self.renew_result = renew_result
+        self.renew_exc = renew_exc
         self.acquire_calls = 0
         self.released = False
 
@@ -37,6 +38,8 @@ class FakeDistributedLock:
         return self.acquire_result
 
     async def renew(self):
+        if self.renew_exc is not None:
+            raise self.renew_exc
         return self.renew_result
 
     async def release(self):
@@ -189,6 +192,30 @@ async def test_process_message_aborts_when_lock_lost(monkeypatch):
     lock = FakeDistributedLock("hommey:lock:user:u1", renew_result=False)
     _mock_redis(monkeypatch, lock=lock)
     # 心跳间隔远小于处理时长，保证续约失败先于处理完成被观察
+    _patch_concurrency(monkeypatch, lock_heartbeat_interval_sec=0.005)
+    holder = StubProcess()
+    manager._instances["u1"] = FakeInstance(holder.process)
+
+    with pytest.raises(UpstreamError) as excinfo:
+        await manager.process_message("u1", "m")
+    assert excinfo.value.code == "LOCK_LOST"
+    assert excinfo.value.retryable is True
+    assert lock.released is True  # 释放链仍执行
+
+
+@pytest.mark.asyncio
+async def test_process_message_aborts_when_heartbeat_renew_raises(monkeypatch):
+    """心跳 renew() 抛异常（瞬时 Redis 连接错误）也置 lock_lost，中止在途处理并释放锁。
+
+    防止 heartbeat 静默死亡：否则锁 TTL 过期后另一 worker 可取得同一用户锁，
+    跨 worker 同用户并发处理。
+    """
+    manager = WebHommeyManager()
+    lock = FakeDistributedLock(
+        "hommey:lock:user:u1",
+        renew_exc=ConnectionError("redis down"),
+    )
+    _mock_redis(monkeypatch, lock=lock)
     _patch_concurrency(monkeypatch, lock_heartbeat_interval_sec=0.005)
     holder = StubProcess()
     manager._instances["u1"] = FakeInstance(holder.process)

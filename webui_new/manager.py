@@ -1478,11 +1478,22 @@ class WebHommeyManager:
                 await asyncio.sleep(float(rc.get("lock_retry_interval_sec", 0.2)))
             acquired_distributed = True
 
-            # 心跳续约：锁易主时置 lock_lost，主协程据此中止（Important 3）
+            # 心跳续约：任何失败（renew 返回 False 或抛异常，如瞬时 Redis 连接错误）
+            # 都置 lock_lost，主协程据此中止（Important 3）。否则任务静默死亡，
+            # 锁 TTL 过期后另一 worker 可取得同一用户锁，跨 worker 并发处理。
             async def _heartbeat():
                 while True:
                     await asyncio.sleep(float(rc.get("lock_heartbeat_interval_sec", 15.0)))
-                    if not await distributed_lock.renew():
+                    try:
+                        renewed = await distributed_lock.renew()
+                    except Exception as e:
+                        logger.warning(
+                            "lock heartbeat renew failed user_id=%s: %s",
+                            user_id,
+                            sanitize_for_log(e),
+                        )
+                        renewed = False
+                    if not renewed:
                         lock_lost.set()
                         return
 
