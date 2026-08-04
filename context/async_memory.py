@@ -37,6 +37,9 @@ class AsyncMemoryFacade:
     async def get_recent_context(self, n_turns: int | None = None) -> list[dict]:
         return await asyncio.to_thread(self._m.short_term.get_recent_context, n_turns)
 
+    async def get_statistics(self) -> dict:
+        return await asyncio.to_thread(self._m.short_term.get_statistics)
+
     async def save_trip_history(self, trip_info: dict) -> None:
         await asyncio.to_thread(self._m.long_term.save_trip_history, trip_info)
 

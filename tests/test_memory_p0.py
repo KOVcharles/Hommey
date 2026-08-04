@@ -320,17 +320,14 @@ def test_orchestrator_does_not_persist_sensitive_preference():
 def test_dynamic_trip_context_prefers_the_most_recent_trip():
     instance = HommeyWebInstance("u1")
 
-    class LongTerm:
-        @staticmethod
-        def get_trip_history(limit=None):
-            return [
-                {"timestamp": "2025-01-01", "origin": "杭州", "destination": "旧城市"},
-                {"timestamp": "2026-01-01", "origin": "杭州", "destination": "新城市"},
-            ]
+    # 数据加载已切到 async facade（_get_relevant_trip_context 现为 async），
+    # 纯过滤/格式化逻辑抽到 _filter_relevant_trips，直接测纯函数。
+    trips = [
+        {"timestamp": "2025-01-01", "origin": "杭州", "destination": "旧城市"},
+        {"timestamp": "2026-01-01", "origin": "杭州", "destination": "新城市"},
+    ]
 
-    instance.memory_manager = type("Memory", (), {"long_term": LongTerm()})()
-
-    context = instance._get_relevant_trip_context("给我一些建议")
+    context = instance._filter_relevant_trips(trips, "给我一些建议")
 
     assert "新城市" in context
     assert "旧城市" not in context

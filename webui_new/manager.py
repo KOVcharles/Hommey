@@ -347,12 +347,11 @@ class HommeyWebInstance:
 
     async def _persist_user_message_async(self, content: str, metadata: dict) -> None:
         """Persist display text and attachment links through one safe boundary (async)."""
+        facade = self._ensure_async_memory()
+        if facade is None:
+            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
         try:
-            facade = self._ensure_async_memory()
-            if facade is not None:
-                await facade.add_message("user", content, metadata)
-            else:
-                self.memory_manager.add_message("user", content, metadata)
+            await facade.add_message("user", content, metadata)
         except AttachmentBindingError as exc:
             raise BusinessError(
                 "ATTACHMENT_BINDING_FAILED",
@@ -361,7 +360,7 @@ class HommeyWebInstance:
 
     async def _get_cached_summary(self) -> str:
         """Cache only query-independent memory; dynamic trip retrieval stays per request."""
-        stats = self.memory_manager.short_term.get_statistics()
+        stats = await self._ensure_async_memory().get_statistics()
         current_count = int(stats.get("message_version", stats.get("total_messages", 0)))
 
         # 仅在首次或消息数增长超过阈值时重新生成
@@ -1010,7 +1009,7 @@ class HommeyWebInstance:
         from agentscope.message import Msg
 
         long_term_summary = await self._get_cached_summary()
-        relevant_trip_context = self._get_relevant_trip_context(message)
+        relevant_trip_context = await self._get_relevant_trip_context(message)
         recent_context = await self.async_memory.get_recent_context(n_turns=5)
 
         context_messages = []
@@ -1056,10 +1055,15 @@ class HommeyWebInstance:
 
         return "\n".join(summary_parts) if summary_parts else ""
 
-    def _get_relevant_trip_context(self, user_input: str) -> str:
+    async def _get_relevant_trip_context(self, user_input: str) -> str:
         """Select recent and query-relevant trips without contaminating the static cache."""
+        all_trips = await self._ensure_async_memory().get_trip_history(limit=None)
+        return self._filter_relevant_trips(all_trips, user_input)
+
+    @staticmethod
+    def _filter_relevant_trips(all_trips: list[dict], user_input: str) -> str:
+        """Pure formatting/filter over a trips list (no I/O), shared by the async loader."""
         summary_parts = []
-        all_trips = self.memory_manager.long_term.get_trip_history(limit=None)
         if all_trips:
             all_trips = sorted(
                 all_trips,
