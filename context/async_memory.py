@@ -13,7 +13,7 @@ class AsyncMemoryFacade:
     def __init__(self, memory_manager):
         self._m = memory_manager
 
-    async def add_message(self, role: str, content: str, metadata: dict | None = None) -> str | False:
+    async def add_message(self, role: str, content: str, metadata: dict | None = None) -> str | bool:
         return await asyncio.to_thread(self._m.add_message, role, content, metadata)
 
     async def get_preference(self) -> dict:
