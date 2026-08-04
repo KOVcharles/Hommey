@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from agents.intention_agent import IntentionAgent
 from agents.lazy_agent_registry import LazyAgentRegistry
 from agents.orchestration_agent import OrchestrationAgent
-from settings import COMPOSER_CONFIG, LLM_CONFIG, RESILIENCE_CONFIG, SYSTEM_CONFIG
+from settings import COMPOSER_CONFIG, LLM_CONFIG, SYSTEM_CONFIG
 from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
 from utils.circuit_breaker import CircuitBreaker
@@ -115,10 +115,13 @@ def create_agent_runtime(
 
 
 def create_circuit_breaker() -> CircuitBreaker:
-    """Create the shared circuit breaker from resilience config."""
-    rc = RESILIENCE_CONFIG
-    return CircuitBreaker(
-        failure_threshold=rc.get("circuit_failure_threshold", 5),
-        recovery_timeout_sec=rc.get("circuit_recovery_timeout_sec", 60.0),
-        half_open_successes=rc.get("circuit_half_open_successes", 2),
-    )
+    """Create the process-shared Redis-backed circuit breaker.
+
+    Returns the async-native ``utils.redis_coordination.RedisCircuitBreaker``
+    (duck-typed against the legacy sync ``CircuitBreaker`` interface); callers
+    must ``await`` the async methods. The legacy synchronous class is kept for
+    remaining sync call paths.
+    """
+    from utils.redis_coordination import create_redis_circuit_breaker
+
+    return create_redis_circuit_breaker()

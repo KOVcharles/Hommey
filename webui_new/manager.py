@@ -25,6 +25,7 @@ from settings import (
     TRIP_INTAKE_CONFIG,
 )
 from context.memory_manager import MemoryManager
+from context.async_memory import AsyncMemoryFacade
 from runtime import create_agent_runtime, create_circuit_breaker
 from utils.circuit_breaker import CircuitBreaker, CircuitOpenError
 from utils.llm_resilience import retry_with_backoff
@@ -76,6 +77,7 @@ class HommeyWebInstance:
         self.user_id = user_id
         self.session_id = str(uuid.uuid4())[:8]
         self.memory_manager: Optional[MemoryManager] = None
+        self.async_memory: Optional[AsyncMemoryFacade] = None
         self.orchestrator: Optional[OrchestrationAgent] = None
         self.intention_agent: Optional[IntentionAgent] = None
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
@@ -104,6 +106,7 @@ class HommeyWebInstance:
 
             self.model = runtime.model
             self.memory_manager = runtime.memory_manager
+            self.async_memory = AsyncMemoryFacade(self.memory_manager)
             self.session_id = self.memory_manager.session_id
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
@@ -122,11 +125,21 @@ class HommeyWebInstance:
             logger.error("Init failed for user %s: %s", self.user_id, sanitize_for_log(e))
             raise
 
+    def _ensure_async_memory(self) -> Optional[AsyncMemoryFacade]:
+        """Lazily materialize the async facade once memory_manager is available.
+
+        测试/轻量适配常直接赋值 memory_manager 而不走 initialize()，这里惰性包装，
+        避免同步记忆 I/O 阻塞事件循环。
+        """
+        if self.async_memory is None and self.memory_manager is not None:
+            self.async_memory = AsyncMemoryFacade(self.memory_manager)
+        return self.async_memory
+
     async def get_preferences(self) -> dict:
         """获取用户偏好"""
         if not self.memory_manager:
             return {"preferences": [], "raw": {}}
-        prefs = self.memory_manager.long_term.get_preference()
+        prefs = await self._ensure_async_memory().get_preference()
         if not prefs:
             return {"preferences": [], "raw": {}}
         # 转换为前端友好格式
@@ -297,7 +310,7 @@ class HommeyWebInstance:
     async def get_active_trip(self) -> dict:
         if not self.memory_manager:
             return {"active_trip": None}
-        return {"active_trip": self.memory_manager.get_active_trip()}
+        return {"active_trip": await self._ensure_async_memory().get_active_trip()}
 
     @staticmethod
     def _is_simple_chitchat(message: str) -> bool:
@@ -332,10 +345,14 @@ class HommeyWebInstance:
                 "附件处理失败，请重试或移除附件",
             ) from exc
 
-    def _persist_user_message(self, content: str, metadata: dict) -> None:
-        """Persist display text and attachment links through one safe boundary."""
+    async def _persist_user_message_async(self, content: str, metadata: dict) -> None:
+        """Persist display text and attachment links through one safe boundary (async)."""
         try:
-            self.memory_manager.add_message("user", content, metadata)
+            facade = self._ensure_async_memory()
+            if facade is not None:
+                await facade.add_message("user", content, metadata)
+            else:
+                self.memory_manager.add_message("user", content, metadata)
         except AttachmentBindingError as exc:
             raise BusinessError(
                 "ATTACHMENT_BINDING_FAILED",
@@ -389,7 +406,7 @@ class HommeyWebInstance:
             self._total_messages = 0
         return rotated
 
-    def _handle_task_lifecycle_command(self, message: str) -> Optional[str]:
+    async def _handle_task_lifecycle_command(self, message: str) -> Optional[str]:
         """Handle explicit, narrowly-scoped current-task completion/cancellation commands."""
         normalized = "".join(message.strip().lower().split())
         cancel_commands = {
@@ -399,10 +416,10 @@ class HommeyWebInstance:
             "完成当前行程", "结束当前行程", "当前行程完成了", "这个行程完成了", "行程规划完成",
         }
         if normalized in cancel_commands:
-            cancelled = self.memory_manager.cancel_active_trip()
+            cancelled = await self._ensure_async_memory().cancel_active_trip()
             return "已取消当前行程任务。" if cancelled else "当前没有进行中的行程任务。"
         if normalized in complete_commands:
-            completed = self.memory_manager.complete_active_trip(reason="user_completed")
+            completed = await self._ensure_async_memory().complete_active_trip(reason="user_completed")
             return "已结束当前行程任务。" if completed else "当前没有进行中的行程任务。"
         return None
 
@@ -500,6 +517,7 @@ class HommeyWebInstance:
         metadata = {"request_id": request_id} if request_id else {}
         if self.memory_manager is not None:
             self.memory_manager.current_request_id = request_id
+        self._ensure_async_memory()
 
         normalized = self._normalize_input(message, attachment_ids)
         agent_query = normalized.agent_query
@@ -514,10 +532,10 @@ class HommeyWebInstance:
             "warnings": list(normalized.warnings),
         }
 
-        lifecycle_response = self._handle_task_lifecycle_command(message)
+        lifecycle_response = await self._handle_task_lifecycle_command(message)
         if lifecycle_response:
-            self._persist_user_message(display_message, user_metadata)
-            self.memory_manager.add_message("assistant", lifecycle_response, metadata)
+            await self._persist_user_message_async(display_message, user_metadata)
+            await self.async_memory.add_message("assistant", lifecycle_response, metadata)
             return {
                 "response": lifecycle_response,
                 "agents": [],
@@ -528,9 +546,9 @@ class HommeyWebInstance:
         # ═══ 优化 1: 简单闲聊直接处理，不经过 LLM ═══
         # 带附件时不走闲聊短路，避免附件问题被草率打发。
         if self._is_simple_chitchat(message) and not attachment_ids:
-            self._persist_user_message(display_message, user_metadata)
+            await self._persist_user_message_async(display_message, user_metadata)
             response = await self._handle_chitchat(message)
-            self.memory_manager.add_message("assistant", response, metadata)
+            await self.async_memory.add_message("assistant", response, metadata)
             return {
                 "response": response,
                 "agents": [],
@@ -561,7 +579,7 @@ class HommeyWebInstance:
             # 2. Intent recognition
             try:
                 if self.circuit_breaker:
-                    self.circuit_breaker.raise_if_open()
+                    await self.circuit_breaker.raise_if_open()
 
                 context_start = time.perf_counter()
                 context_messages = await context_future
@@ -580,7 +598,7 @@ class HommeyWebInstance:
                 )
                 timings["intent"] = time.perf_counter() - intent_start
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_success()
+                    await self.circuit_breaker.record_success()
             except ExecutionLimitExceeded:
                 raise
             except CircuitOpenError:
@@ -588,7 +606,7 @@ class HommeyWebInstance:
                 raise UpstreamError("CIRCUIT_OPEN", "服务暂时不可用，请稍后再试。", retryable=True, component=COMPONENT_LLM)
             except Exception as e:
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_failure()
+                    await self.circuit_breaker.record_failure()
                 logger.error("Intention agent failed: %s", sanitize_for_log(e))
                 record_upstream_error(COMPONENT_LLM, e, retryable=True)
                 raise UpstreamError(
@@ -611,7 +629,7 @@ class HommeyWebInstance:
 
         self._total_messages += 1
         # Persistence boundary: display text and attachment links commit together.
-        self._persist_user_message(display_message, user_metadata)
+        await self._persist_user_message_async(display_message, user_metadata)
 
         request_context = {
             "original_query": message,
@@ -641,7 +659,7 @@ class HommeyWebInstance:
                 timings["orchestration"] = time.perf_counter() - orchestration_start
                 self.orchestrator.record_task_results(intention_data, pipeline_output.results)
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_success()
+                    await self.circuit_breaker.record_success()
             except ExecutionLimitExceeded:
                 raise
             except CircuitOpenError:
@@ -654,7 +672,7 @@ class HommeyWebInstance:
                 )
             except Exception as e:
                 if self.circuit_breaker:
-                    self.circuit_breaker.record_failure()
+                    await self.circuit_breaker.record_failure()
                 logger.error("Task orchestration failed: %s", sanitize_for_log(e))
                 record_upstream_error(COMPONENT_LLM, e, retryable=True)
                 raise UpstreamError(
@@ -668,7 +686,7 @@ class HommeyWebInstance:
             response = pipeline_output.answer_document.plain_text
             assistant_metadata = dict(metadata)
             assistant_metadata["answer_document"] = answer_document
-            self.memory_manager.add_message("assistant", response, assistant_metadata)
+            await self.async_memory.add_message("assistant", response, assistant_metadata)
             agents = [
                 {
                     "name": result.agent_name,
@@ -704,7 +722,7 @@ class HommeyWebInstance:
                 )
             timings["orchestration"] = time.perf_counter() - orchestration_start
             if self.circuit_breaker:
-                self.circuit_breaker.record_success()
+                await self.circuit_breaker.record_success()
         except ExecutionLimitExceeded:
             raise
         except CircuitOpenError:
@@ -712,7 +730,7 @@ class HommeyWebInstance:
             raise UpstreamError("CIRCUIT_OPEN", "服务暂时不可用，请稍后再试。", retryable=True, component=COMPONENT_LLM)
         except Exception as e:
             if self.circuit_breaker:
-                self.circuit_breaker.record_failure()
+                await self.circuit_breaker.record_failure()
             logger.error("Orchestration failed: %s", sanitize_for_log(e))
             record_upstream_error(COMPONENT_LLM, e, retryable=True)
             raise UpstreamError(
@@ -733,7 +751,7 @@ class HommeyWebInstance:
         if result_data.get("status") == "no_agents" and not result_data.get("results"):
             if result_data.get("message"):
                 response = result_data["message"]
-                self.memory_manager.add_message("assistant", response, metadata)
+                await self.async_memory.add_message("assistant", response, metadata)
                 return {
                     "response": response,
                     "agents": [],
@@ -741,7 +759,7 @@ class HommeyWebInstance:
                     **input_result,
                 }
             response = await self._handle_chitchat(agent_query)
-            self.memory_manager.add_message("assistant", response, metadata)
+            await self.async_memory.add_message("assistant", response, metadata)
             return {
                 "response": response,
                 "agents": [],
@@ -757,7 +775,7 @@ class HommeyWebInstance:
             response = presentation_document["plain_text"]
             assistant_metadata = dict(metadata)
             assistant_metadata["presentation_document"] = presentation_document
-            self.memory_manager.add_message("assistant", response, assistant_metadata)
+            await self.async_memory.add_message("assistant", response, assistant_metadata)
         else:
             response = self._format_response(result_data)
             document = build_legacy_answer_document(result_data, response)
@@ -765,9 +783,9 @@ class HommeyWebInstance:
                 answer_document = document.model_dump(mode="json")
                 assistant_metadata = dict(metadata)
                 assistant_metadata["answer_document"] = answer_document
-                self.memory_manager.add_message("assistant", response, assistant_metadata)
+                await self.async_memory.add_message("assistant", response, assistant_metadata)
             else:
-                self.memory_manager.add_message("assistant", response, metadata)
+                await self.async_memory.add_message("assistant", response, metadata)
 
         # 6. Extract agent names
         agents = []
@@ -993,10 +1011,10 @@ class HommeyWebInstance:
 
         long_term_summary = await self._get_cached_summary()
         relevant_trip_context = self._get_relevant_trip_context(message)
-        recent_context = self.memory_manager.short_term.get_recent_context(n_turns=5)
+        recent_context = await self.async_memory.get_recent_context(n_turns=5)
 
         context_messages = []
-        active_trip = self.memory_manager.get_active_trip()
+        active_trip = await self.async_memory.get_active_trip()
         memory_parts = []
         if active_trip:
             memory_parts.extend(["【当前出差任务】", json.dumps(active_trip, ensure_ascii=False)])
@@ -1019,7 +1037,7 @@ class HommeyWebInstance:
     async def _get_long_term_summary(self) -> str:
         """Generate query-independent profile and historical-session summary."""
         summary_parts = []
-        prefs = self.memory_manager.long_term.get_preference()
+        prefs = await self.async_memory.get_preference()
         if prefs:
             pref_lines = ["【用户背景信息】（来自长期记忆）"]
             for pref_key, pref_value in prefs.items():
