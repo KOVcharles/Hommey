@@ -172,11 +172,12 @@ async def test_empty_text_with_attachment_is_valid_chat_input(client, monkeypatc
     class FakeInstance:
         initialized = True
 
-        async def process_message(self, message, request_id=None, attachment_ids=None):
-            calls.append((message, request_id, attachment_ids))
-            return {"response": "ok", "agents": [], "preferences_updated": False}
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        calls.append((user_id, message, request_id, attachment_ids))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
 
     monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
     response = await client.post(
         "/api/u1/chat",
         json={"message": "", "attachment_ids": ["att_1"]},
@@ -184,7 +185,7 @@ async def test_empty_text_with_attachment_is_valid_chat_input(client, monkeypatc
     )
 
     assert response.status_code == 200
-    assert calls == [("", "rid-attachment-chat", ["att_1"])]
+    assert calls == [("u1", "", "rid-attachment-chat", ["att_1"])]
 
 
 @pytest.mark.anyio
@@ -319,7 +320,14 @@ async def test_stream_error_event_contract(client, monkeypatch):
             yield {"type": "status", "message": "processing"}
             raise RuntimeError("api_key=secret-stream")
 
-    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    instance = FakeInstance()
+    monkeypatch.setattr(manager, "get", lambda _user_id: instance)
+
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(message, request_id=request_id):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
 
     response = await client.post(
         "/api/u1/chat/stream",
@@ -386,6 +394,14 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(
+            message, request_id=request_id, attachment_ids=attachment_ids
+        ):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
+
     response = await client.post(
         "/api/u1/chat/stream",
         json={"message": "我要去出差"},
@@ -445,6 +461,14 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
     instance.orchestrator = Orchestrator()
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
+
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(
+            message, request_id=request_id, attachment_ids=attachment_ids
+        ):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
 
     response = await client.post(
         "/api/u1/chat/stream",

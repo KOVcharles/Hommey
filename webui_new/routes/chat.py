@@ -49,8 +49,11 @@ def create_chat_router(manager):
         try:
             rid = request_id(request)
             logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(data.message))
-            result = await instance.process_message(
-                data.message, request_id=rid, attachment_ids=data.attachment_ids
+            result = await manager.process_message(
+                user_id,
+                data.message,
+                request_id=rid,
+                attachment_ids=data.attachment_ids,
             )
             safe_response = redact_sensitive_text(result.get("response", ""))
             logger.info("[%s] ◀ %s...", user_id, safe_response[:80])
@@ -74,11 +77,16 @@ def create_chat_router(manager):
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         async def event_stream():
-            """把 instance.stream_message() 的事件逐行编码为 NDJSON。"""
+            """把 manager.stream_message() 的事件逐行编码为 NDJSON。
+
+            manager.stream_message 在生成器内取锁（进程内锁 → 分布式锁 → 信号量），
+            持锁到流结束；前端断连时 CancelledError 冒泡到生成器，finally 释放锁。
+            """
             started_at = time.perf_counter()
             try:
                 logger.info("[%s] -> %s", user_id, redact_sensitive_text(data.message))
-                async for event in instance.stream_message(
+                async for event in manager.stream_message(
+                    user_id,
                     data.message,
                     request_id=request_id(request),
                     attachment_ids=data.attachment_ids,
