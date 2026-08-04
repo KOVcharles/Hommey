@@ -5,14 +5,32 @@
 """
 import logging
 
-from fastapi import APIRouter, Depends, UploadFile
+from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.params import File
 
+from settings import ATTACHMENT_CONFIG
 from utils.logging_safety import sanitize_for_log
 from webui_new.auth import User, require_path_user
-from webui_new.core.errors import AppError, InternalError
+from webui_new.core.errors import AppError, BusinessError, InternalError, request_id
 
 logger = logging.getLogger(__name__)
+
+
+async def _read_limited(file: UploadFile) -> bytes:
+    """Read at most the configured upload limit into request memory."""
+    max_bytes = int(ATTACHMENT_CONFIG["max_size_bytes"])
+    chunks: list[bytes] = []
+    total = 0
+    while chunk := await file.read(min(1024 * 1024, max_bytes + 1)):
+        total += len(chunk)
+        if total > max_bytes:
+            raise BusinessError(
+                "ATTACHMENT_TOO_LARGE",
+                f"单个文件超过 {max_bytes // (1024 * 1024)} MB 限制",
+                status_code=400,
+            )
+        chunks.append(chunk)
+    return b"".join(chunks)
 
 
 def create_attachments_router(attachment_service):
@@ -21,17 +39,19 @@ def create_attachments_router(attachment_service):
 
     @router.post("/api/{user_id}/attachments")
     async def upload_attachment(
+        request: Request,
         user_id: str,
         file: UploadFile = File(...),
         current_user: User = Depends(require_path_user),
     ):
-        content = await file.read()
+        content = await _read_limited(file)
         filename = file.filename or "upload"
         try:
             return attachment_service.upload(
                 user_id=str(current_user.id),
                 filename=filename,
                 content=content,
+                request_id=request_id(request) or None,
             ).model_dump()
         except AppError:
             raise

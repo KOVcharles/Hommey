@@ -83,11 +83,17 @@ class OrchestrationAgent(AgentBase):
     async def reply(
         self,
         x: Optional[Union[Msg, List[Msg]]] = None,
+        *,
         progress_callback=None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> Msg:
         """Execute with the caller's budget, or create one for non-Web entrypoints."""
         if current_execution_budget() is not None:
-            return await self._reply_impl(x, progress_callback=progress_callback)
+            return await self._reply_impl(
+                x,
+                progress_callback=progress_callback,
+                request_context=request_context,
+            )
 
         rc = RESILIENCE_CONFIG
         budget = ExecutionBudget(
@@ -98,20 +104,36 @@ class OrchestrationAgent(AgentBase):
         try:
             with execution_budget_scope(budget):
                 return await asyncio.wait_for(
-                    self._reply_impl(x, progress_callback=progress_callback),
+                    self._reply_impl(
+                        x,
+                        progress_callback=progress_callback,
+                        request_context=request_context,
+                    ),
                     timeout=rc.get("request_timeout_sec", 120.0),
                 )
         finally:
             logger.info("Orchestration execution budget: %s", budget.snapshot())
 
-    async def reply_with_progress(self, x, progress_callback) -> Msg:
+    async def reply_with_progress(
+        self,
+        x,
+        progress_callback,
+        *,
+        request_context: Optional[Dict[str, Any]] = None,
+    ) -> Msg:
         """Explicit progress-capable entrypoint used by streaming Web clients."""
-        return await self.reply(x, progress_callback=progress_callback)
+        return await self.reply(
+            x,
+            progress_callback=progress_callback,
+            request_context=request_context,
+        )
 
     async def _reply_impl(
         self,
         x: Optional[Union[Msg, List[Msg]]] = None,
+        *,
         progress_callback=None,
+        request_context: Optional[Dict[str, Any]] = None,
     ) -> Msg:
         """
         协调执行流程
@@ -182,7 +204,10 @@ class OrchestrationAgent(AgentBase):
         logger.info(f"Orchestrating {len(sorted_schedule)} agents")
 
         # 准备上下文信息
-        context = self.prepare_context(intention_data)
+        context = self.prepare_context(
+            intention_data,
+            request_context=request_context,
+        )
 
         # 按优先级分批执行；同一优先级并行，不同优先级顺序执行。
         results = []
@@ -344,7 +369,12 @@ class OrchestrationAgent(AgentBase):
             for task in tasks
         ]
 
-    def prepare_context(self, intention_data: Dict[str, Any]) -> Dict[str, Any]:
+    def prepare_context(
+        self,
+        intention_data: Dict[str, Any],
+        *,
+        request_context: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
         """
         准备上下文信息，供子智能体使用
 
@@ -354,11 +384,18 @@ class OrchestrationAgent(AgentBase):
         Returns:
             上下文字典
         """
+        request_context = request_context or {}
+        rewritten_query = intention_data.get("rewritten_query", "")
         context = {
             "reasoning": intention_data.get("reasoning", ""),
             "intents": intention_data.get("intents", []),
             "key_entities": intention_data.get("key_entities", {}),
-            "rewritten_query": intention_data.get("rewritten_query", "")
+            "rewritten_query": rewritten_query,
+            "original_query": request_context.get("original_query", rewritten_query),
+            # Attachment facts bypass the lossy intent-query rewrite.
+            "agent_query": request_context.get("agent_query", rewritten_query),
+            "attachment_sources": request_context.get("attachment_sources", []),
+            "attachment_warnings": request_context.get("attachment_warnings", []),
         }
 
         # 从记忆系统获取上下文

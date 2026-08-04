@@ -99,7 +99,7 @@ class IntentionAgent(AgentBase):
                 return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
 
         # 构建上下文
-        # 策略：长期记忆始终保留，短期对话全部保留（已在 cli.py 控制数量）
+        # 策略：长期记忆始终保留，短期对话由 MemoryManager 控制数量
         context_parts = []
         system_memory = None
         dialogue_history = []

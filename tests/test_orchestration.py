@@ -1,3 +1,5 @@
+"""Unit tests for orchestration ordering, failure handling, and request context."""
+
 import json
 import asyncio
 
@@ -18,6 +20,16 @@ class _ReplyAgent:
         if isinstance(reply, Exception):
             raise reply
         return Msg(name=self.name, content=json.dumps(reply), role="assistant")
+
+
+class _CapturingAgent(_ReplyAgent):
+    def __init__(self, name, replies):
+        super().__init__(name, replies)
+        self.last_input = None
+
+    async def reply(self, message):
+        self.last_input = json.loads(message.content)
+        return await super().reply(message)
 
 
 def test_orchestration_returns_no_agents_for_empty_schedule():
@@ -177,3 +189,33 @@ def test_agent_call_budget_turns_unbounded_execution_into_failure():
     assert payload["status"] == "failed"
     assert payload["results"][1]["error_code"] == "AGENT_CALL_LIMIT_EXCEEDED"
     assert second.calls == 0
+
+
+def test_attachment_context_bypasses_rewritten_query():
+    agent = _CapturingAgent("rag_knowledge", [{"answer": "ok"}])
+    orchestrator = OrchestrationAgent(
+        agent_registry={"rag_knowledge": agent},
+        memory_manager=None,
+    )
+
+    response = asyncio.run(
+        orchestrator.reply(
+            Msg(
+                name="intention",
+                content=json.dumps({
+                    "rewritten_query": "请总结附件",
+                    "agent_schedule": [{"agent_name": "rag_knowledge", "priority": 1}],
+                }),
+                role="assistant",
+            ),
+            request_context={
+                "original_query": "住宿上限是多少",
+                "agent_query": "住宿上限是多少\n附件正文：每天 500 元",
+                "attachment_sources": [{"filename": "policy.docx"}],
+            },
+        )
+    )
+
+    assert json.loads(response.content)["status"] == "completed"
+    assert agent.last_input["context"]["rewritten_query"] == "请总结附件"
+    assert "每天 500 元" in agent.last_input["context"]["agent_query"]

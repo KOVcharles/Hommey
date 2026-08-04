@@ -9,6 +9,13 @@ import json
 import logging
 import uuid
 
+from .preference_schema import (
+    PREFERENCE_LIST_COLUMNS,
+    PREFERENCE_SCALAR_COLUMNS,
+    normalize_list_preference,
+    normalize_scalar_preference,
+)
+
 from utils.memory_safety import (
     filter_safe_memory_mapping,
     is_safe_preference_value,
@@ -17,19 +24,6 @@ from utils.memory_safety import (
 )
 
 logger = logging.getLogger(__name__)
-
-
-PREFERENCE_SCALAR_COLUMNS = {
-    "home_location": "home_location",
-    "transportation_preference": "transportation_preference",
-    "seat_preference": "seat_preference",
-    "meal_preference": "meal_preference",
-    "budget_level": "budget_level",
-}
-PREFERENCE_LIST_COLUMNS = {
-    "hotel_brands": "hotel_brands",
-    "airlines": "airlines",
-}
 
 
 def _utc_now_iso() -> str:
@@ -327,7 +321,7 @@ class DisabledLongTermMemory(FileLongTermMemory):
         return None
 
 
-class PostgresLongTermMemory:
+class LegacyAutocommitPostgresLongTermMemory:
     """
     长期记忆：持久化用户信息
     - 用户偏好（家庭地址、酒店品牌、航空公司等）
@@ -765,33 +759,11 @@ class PostgresLongTermMemory:
 
     @staticmethod
     def _normalize_scalar_preference(value: Any) -> str:
-        """Normalize a core scalar preference without discarding legacy lists."""
-        if isinstance(value, (list, tuple, set)):
-            parts = [str(item).strip() for item in value if str(item).strip()]
-            normalized = "、".join(dict.fromkeys(parts))
-        elif isinstance(value, dict):
-            normalized = json.dumps(value, ensure_ascii=False, separators=(",", ":"))
-        else:
-            normalized = str(value).strip()
-        if not normalized:
-            raise ValueError("Core preference value cannot be empty")
-        return normalized
+        return normalize_scalar_preference(value)
 
     @staticmethod
     def _normalize_list_preference(value: Any) -> List[Any]:
-        """Normalize list preferences and preserve insertion order."""
-        values = list(value) if isinstance(value, (list, tuple, set)) else [value]
-        normalized: List[Any] = []
-        seen = set()
-        for item in values:
-            clean_item = item.strip() if isinstance(item, str) else item
-            if clean_item in (None, ""):
-                continue
-            marker = json.dumps(clean_item, ensure_ascii=False, sort_keys=True)
-            if marker not in seen:
-                seen.add(marker)
-                normalized.append(clean_item)
-        return normalized
+        return normalize_list_preference(value)
 
     def add_hotel_brand(self, brand: str):
         """添加酒店品牌偏好（追加到列表）"""
@@ -1209,6 +1181,28 @@ class PostgresLongTermMemory:
         logger.info("Cleared all history (chat + trips)")
 
         logger.warning(f"Deleted long-term memory data for user: {self.user_id}")
+
+
+class PostgresLongTermMemory:
+    """Compatibility constructor backed by the shared stage-1 repository pool.
+
+    The legacy autocommit implementation above is retained only as migration
+    reference. Runtime code and compatibility imports use this pooled adapter.
+    """
+
+    def __new__(cls, user_id: str, storage_path: str = "data/memory", postgres_dsn: str = ""):
+        from settings import MEMORY_CONFIG
+        from .memory_repository import PostgresCompatibilityStore, PostgresMemoryRepository
+        from .postgres_pool import get_postgres_pool
+
+        dsn = postgres_dsn or MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
+        repository = PostgresMemoryRepository(
+            get_postgres_pool(dsn),
+            raw_message_retention_days=MEMORY_CONFIG.get("retention", {}).get(
+                "raw_message_days", 14
+            ),
+        )
+        return PostgresCompatibilityStore(str(user_id), repository)
 
 
 LongTermMemory = PostgresLongTermMemory

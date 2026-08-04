@@ -1,8 +1,6 @@
 """
 MCP (Model Context Protocol) 集成模块
-提供双向 MCP 能力：
-- 消费者侧：通过 MCPManager 连接外部 MCP Server，消费其工具
-- 生产者侧：通过 HommeyMCPServer 将 Hommey 能力暴露为 MCP Server
+通过 MCPManager 连接外部 MCP Server，供 Web 后端消费工具。
 """
 from .mcp_config import MCPConfig, MCPServerConfig
 from .mcp_manager import MCPManager

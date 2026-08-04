@@ -8,14 +8,15 @@ HOMMEY_SKILLS_ROOT environment variable. It defaults to .agents/skills.
 """
 import importlib.util
 import inspect
+import logging
 import sys
 from pathlib import Path
 from typing import Any, Dict, Optional
 
 from agentscope.agent import AgentBase
-from rich.console import Console
-
 from settings import SKILL_CONFIG
+
+logger = logging.getLogger(__name__)
 
 
 class LazyAgentRegistry:
@@ -33,7 +34,6 @@ class LazyAgentRegistry:
         self.cache = cache
         self.memory_manager = memory_manager
         self.mcp_manager = mcp_manager
-        self.console = Console()
 
         project_root = Path(__file__).parent.parent.resolve()
         configured_root = skills_root or SKILL_CONFIG.get("root", ".agents/skills")
@@ -48,9 +48,7 @@ class LazyAgentRegistry:
 
     def _discover_skills(self) -> None:
         if not self.skills_root.exists():
-            self.console.print(
-                f"[yellow]Warning: Skills directory {self.skills_root} not found[/yellow]"
-            )
+            logger.warning("Skills directory %s not found", self.skills_root)
             return
 
         from utils.skill_loader import SkillLoader
@@ -85,7 +83,7 @@ class LazyAgentRegistry:
             )
 
         script_path = self._skill_map[skill_name]
-        self.console.print(f"[dim]Loading {agent_name} from skill {skill_name}...[/dim]")
+        logger.info("Loading %s from skill %s", agent_name, skill_name)
 
         try:
             safe_skill_name = skill_name.replace("-", "_")
@@ -127,10 +125,10 @@ class LazyAgentRegistry:
 
             agent_instance = agent_class(**init_params)
             self.cache[agent_name] = agent_instance
-            self.console.print(f"[dim]{agent_name} loaded[/dim]")
+            logger.info("%s loaded", agent_name)
             return agent_instance
         except Exception as exc:
-            self.console.print(f"[red]Failed to load {agent_name}: {exc}[/red]")
+            logger.exception("Failed to load %s: %s", agent_name, exc)
             raise
 
     def __contains__(self, agent_name: str) -> bool:

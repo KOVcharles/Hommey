@@ -1,10 +1,11 @@
-"""多模态输入 P0：normalize（agent_query/display_message 分离）与附件绑定的单元测试。
+"""多模态输入 P0：验证 agent_query/display_message 分离。
 
 用 stub repository 规避真实 Postgres，验证方案 §4.5 的核心约束：
 - agent_query 含附件上下文、被不可信边界包裹；display_message 只含文件名清单。
-- 归属/未就绪附件被拒绝；附件绑定到 message id。
+- 归属/未就绪附件被拒绝。
 """
 import pytest
+from datetime import datetime, timedelta, timezone
 
 from context.long_term_memory import FileLongTermMemory
 from multimodal import context_builder
@@ -17,32 +18,32 @@ from multimodal.service import AttachmentService
 from webui_new.core.errors import BusinessError
 
 
-def _attachment(aid, user_id="u1", status=ATTACHMENT_STATUS_READY, text="正文内容"):
+def _attachment(
+    aid,
+    user_id="u1",
+    status=ATTACHMENT_STATUS_READY,
+    text="正文内容",
+    expires_at=None,
+):
     return Attachment(
         id=aid, user_id=user_id, filename=f"{aid}.docx", mime_type="x", kind="document",
-        size_bytes=10, object_key=f"u1/{aid}", status=status,
+        size_bytes=10, object_key=f"u1/{aid}", status=status, expires_at=expires_at,
     ), Extraction(attachment_id=aid, content_text=text, char_count=len(text), structured={"pages": [1, 2]})
 
 
 class _StubRepo:
-    """记录调用的内存 repository，供 AttachmentService.normalize/bind 使用。"""
+    """记录调用的内存 repository，供 AttachmentService.normalize 使用。"""
 
     def __init__(self, attachments, extractions, user_id="u1"):
         self._att = {a.id: a for a in attachments}
         self._ext = {e.attachment_id: e for e in extractions}
         self._user_id = user_id
-        self.binds = []  # (message_id, [ids], user_id)
 
     def get_many(self, ids, user_id):
         return [a for a in self._att.values() if a.id in set(ids) and a.user_id == user_id]
 
     def get_extraction(self, aid):
         return self._ext.get(aid)
-
-    def bind(self, message_id, ids, user_id):
-        self.binds.append((message_id, list(ids), user_id))
-        return len(ids)
-
 
 # ── context_builder ───────────────────────────────────────────────
 
@@ -104,18 +105,20 @@ def test_normalize_rejects_foreign_attachment():
         service.normalize("问", ["att_1"], "other_user")
 
 
+def test_normalize_rejects_expired_attachment():
+    expired = (datetime.now(timezone.utc) - timedelta(minutes=1)).isoformat()
+    a1, e1 = _attachment("att_1", expires_at=expired)
+    service = AttachmentService(repository=_StubRepo([a1], [e1]))
+    with pytest.raises(BusinessError) as error:
+        service.normalize("问", ["att_1"], "u1")
+    assert error.value.code == "ATTACHMENT_EXPIRED"
+
+
 def test_normalize_without_attachments_returns_plain_text():
     service = AttachmentService(repository=_StubRepo([], []))
     normalized = service.normalize("你好", [], "u1")
     assert normalized.agent_query == "你好"
     assert normalized.display_message == "你好"
-
-
-def test_bind_forwards_to_repository():
-    repo = _StubRepo([], [])
-    service = AttachmentService(repository=repo)
-    service.bind(42, ["att_1", "att_2"], "u1")
-    assert repo.binds == [(42, ["att_1", "att_2"], "u1")]
 
 
 # ── 记忆层：add_chat_message 返回 id，且 get_chat_history 带回 id ──

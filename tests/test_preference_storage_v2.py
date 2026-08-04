@@ -1,4 +1,5 @@
-from context.long_term_memory import PostgresLongTermMemory
+from context.long_term_memory import LegacyAutocommitPostgresLongTermMemory
+from context.memory_repository import PostgresCompatibilityStore
 
 
 class RecordingCursor:
@@ -41,9 +42,28 @@ class RecordingConnection:
     def transaction(self):
         return RecordingTransaction()
 
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, tb):
+        return False
+
+
+class RecordingPool:
+    def __init__(self, connection):
+        self._connection = connection
+
+    def connection(self):
+        return self._connection
+
+
+class RepositoryStub:
+    def __init__(self, connection):
+        self.pool = RecordingPool(connection)
+
 
 def _memory(connection=None):
-    memory = object.__new__(PostgresLongTermMemory)
+    memory = object.__new__(LegacyAutocommitPostgresLongTermMemory)
     memory.user_id = "7"
     memory.conn = connection or RecordingConnection()
     memory._jsonb = lambda value: value
@@ -52,7 +72,7 @@ def _memory(connection=None):
 
 def test_migration_builds_one_row_per_user_without_jsonb_max():
     sql = (
-        __import__("pathlib").Path("webui_new/auth/migrations/0008_user_travel_preferences.sql")
+        __import__("pathlib").Path("webui_new/auth/migrations/0011_user_travel_preferences.sql")
         .read_text(encoding="utf-8")
     )
 
@@ -136,3 +156,37 @@ def test_get_preferences_falls_back_to_legacy_row_when_wide_row_missing():
 
     assert memory.get_preference() == {"home_location": "广州"}
     assert "FROM user_preferences" in connection.calls[1][0]
+
+
+def test_pooled_runtime_store_writes_typed_row_and_legacy_mirror():
+    connection = RecordingConnection()
+    store = PostgresCompatibilityStore("7", RepositoryStub(connection))
+
+    store.save_preference("home_location", "北京")
+
+    assert len(connection.calls) == 2
+    assert "INSERT INTO user_travel_preferences" in connection.calls[0][0]
+    assert connection.calls[0][1] == ("7", "北京", "home_location")
+    assert "INSERT INTO user_preferences" in connection.calls[1][0]
+
+
+def test_pooled_runtime_store_reads_typed_row():
+    connection = RecordingConnection(
+        fetchone_result={
+            "home_location": "北京",
+            "transportation_preference": "高铁",
+            "hotel_brands": ["亚朵"],
+            "airlines": [],
+            "seat_preference": "商务座",
+            "meal_preference": None,
+            "budget_level": None,
+            "extra_preferences": {"food": "不吃辣"},
+        }
+    )
+    store = PostgresCompatibilityStore("7", RepositoryStub(connection))
+
+    preferences = store.get_preference()
+
+    assert preferences["home_location"] == "北京"
+    assert preferences["hotel_brands"] == ["亚朵"]
+    assert preferences["food"] == "不吃辣"

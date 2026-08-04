@@ -1,3 +1,5 @@
+"""Regression tests for memory safety, idempotency, and session operations."""
+
 import time
 import types
 
@@ -336,21 +338,20 @@ def test_dynamic_trip_context_prefers_the_most_recent_trip():
 
 def test_web_session_rotates_after_idle_without_touching_long_term(monkeypatch):
     instance = HommeyWebInstance("u1")
-    rotations = []
 
     class Memory:
+        session_id = "durable-session-2"
+
         @staticmethod
-        def rotate_session(session_id):
-            rotations.append(session_id)
+        def ensure_active_session():
+            return True
 
     instance.memory_manager = Memory()
-    instance._last_activity_monotonic = 100.0
-    monkeypatch.setattr(time, "monotonic", lambda: 701.0)
 
     rotated = instance._ensure_active_session()
 
     assert rotated is True
-    assert rotations == [instance.session_id]
+    assert instance.session_id == "durable-session-2"
     assert instance._summary_cache is None
 
 

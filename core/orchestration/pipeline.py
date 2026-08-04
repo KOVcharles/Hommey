@@ -40,15 +40,17 @@ class MultiIntentPipeline:
         intention_data: Dict[str, Any],
         base_context: Dict[str, Any],
         progress: Optional[ProgressCallback] = None,
+        task_query: Optional[str] = None,
     ) -> PipelineOutput:
         await self._emit(progress, phase_event("decomposing", "tasks_decomposing"))
-        raw_tasks = await self.decomposer.decompose(original_query, intention_data)
+        decomposition_query = task_query or original_query
+        raw_tasks = await self.decomposer.decompose(decomposition_query, intention_data)
         try:
             tasks = self.validator.validate(raw_tasks, intention_data)
         except ValueError as exc:
             logger.warning("Rejected decomposed tasks; using deterministic fallback: %s", exc)
             raw_tasks = self.decomposer.fallback(
-                original_query,
+                decomposition_query,
                 [
                     item.get("type") for item in intention_data.get("intents", [])
                     if item.get("should_call_skill")

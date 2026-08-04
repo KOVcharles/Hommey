@@ -123,14 +123,14 @@ class ItineraryPlanningAgent(AgentBase):
             try:
                 data = json.loads(content)
                 context_info = data.get("context", {})
-                user_query = context_info.get("rewritten_query", "")
+                user_query = context_info.get("agent_query") or context_info.get("rewritten_query", "")
                 previous_results = data.get("previous_results", [])
                 user_preferences = context_info.get("user_preferences", {})
             except json.JSONDecodeError:
                 user_query = content
         elif isinstance(content, dict):
             context_info = content
-            user_query = content.get("rewritten_query", str(content))
+            user_query = content.get("agent_query") or content.get("rewritten_query", str(content))
             user_preferences = content.get("user_preferences", {})
 
         # 整合所有可用信息

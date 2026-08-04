@@ -68,6 +68,8 @@ def test_webui_routes_are_registered():
     assert "/api/{user_id}/onboarding/preference" in paths
     assert "/api/{user_id}/chat" in paths
     assert "/api/{user_id}/chat/stream" in paths
+    assert "/api/{user_id}/attachments" in paths
+    assert "/api/{user_id}/attachments/{attachment_id}" in paths
     assert "/api/{user_id}/sessions" in paths
     assert "/api/{user_id}/sessions/{session_id}" in paths
     assert "/api/{user_id}/sessions/{session_id}/activate" in paths
@@ -161,6 +163,28 @@ async def test_empty_message_error_contract(client, monkeypatch):
     assert _error(response.json())["code"] == "EMPTY_MESSAGE"
     assert _error(response.json())["message"] == "请输入消息或添加附件"
     assert _error(response.json())["request_id"] == "rid-empty"
+
+
+@pytest.mark.anyio
+async def test_empty_text_with_attachment_is_valid_chat_input(client, monkeypatch):
+    calls = []
+
+    class FakeInstance:
+        initialized = True
+
+        async def process_message(self, message, request_id=None, attachment_ids=None):
+            calls.append((message, request_id, attachment_ids))
+            return {"response": "ok", "agents": [], "preferences_updated": False}
+
+    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    response = await client.post(
+        "/api/u1/chat",
+        json={"message": "", "attachment_ids": ["att_1"]},
+        headers={"X-Request-ID": "rid-attachment-chat"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("", "rid-attachment-chat", ["att_1"])]
 
 
 @pytest.mark.anyio
@@ -329,7 +353,7 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
             pass
 
     class Orchestrator:
-        async def reply(self, _message):
+        async def reply(self, _message, request_context=None):
             return type(
                 "Result",
                 (),
@@ -393,7 +417,7 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
             pass
 
     class Orchestrator:
-        async def reply(self, _message):
+        async def reply(self, _message, request_context=None):
             return type(
                 "Result",
                 (),

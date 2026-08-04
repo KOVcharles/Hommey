@@ -87,6 +87,7 @@
     // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
     let pendingAttachments = [];
     let currentRequestId = '';
+    let retryRequestPending = false;
 
     const rotatingPrompts = [
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
@@ -129,7 +130,13 @@
     document.addEventListener('DOMContentLoaded', initialize);
 
     function bindEvents() {
-        chatInput.addEventListener('input', () => resizeInput(chatInput));
+        chatInput.addEventListener('input', () => {
+            resizeInput(chatInput);
+            if (retryRequestPending) {
+                resetRequestId();
+                retryRequestPending = false;
+            }
+        });
         homeInput.addEventListener('input', () => resizeInput(homeInput));
         chatInput.addEventListener('keydown', handleComposerKeydown);
         homeInput.addEventListener('keydown', handleComposerKeydown);
@@ -727,6 +734,10 @@
                     const chip = e.target.closest('.pending-chip');
                     const id = chip && chip.dataset.id;
                     pendingAttachments = pendingAttachments.filter((a) => a.id !== id && a.tmpId !== chip.dataset.tmpid);
+                    if (retryRequestPending) {
+                        resetRequestId();
+                        retryRequestPending = false;
+                    }
                     renderPendingAttachments();
                 });
             });
@@ -774,8 +785,10 @@
         const text = chatInput.value.trim();
         const hasAttachments = pendingAttachments.some((a) => a.status === 'ready');
         if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
-        const sendingAttachmentIds = pendingAttachments.filter((a) => a.status === 'ready').map((a) => a.id);
-        const sendingAttachments = pendingAttachments.filter((a) => a.status === 'ready').map((a) => ({ filename: a.filename, kind: a.kind }));
+        const sendingEntries = pendingAttachments.filter((a) => a.status === 'ready');
+        const sendingAttachmentIds = sendingEntries.map((a) => a.id);
+        const sendingAttachments = sendingEntries.map((a) => ({ filename: a.filename, kind: a.kind }));
+        let requestCompleted = false;
         enterChatView();
         addMessage('user', text, undefined, sendingAttachments);
         chatInput.value = '';
@@ -811,6 +824,7 @@
             let presentationRendered = false;
             let nextPlaceholder = '';
             let preferencesUpdated = false;
+            let responseSources = [];
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
             let buffer = '';
@@ -826,6 +840,12 @@
                     if (!event) continue;
                     if (event.type === 'error') throw createApiError(event, '处理失败，请重试');
                     if (event.type === 'status' || event.type === 'task_status') updateProcessingStatus(event);
+                    if (event.type === 'attachment_context') {
+                        responseSources = event.sources || [];
+                        if (event.warnings && event.warnings.length) {
+                            showToast(event.warnings.join('；'));
+                        }
+                    }
                     if (event.type === 'agents') updateAgentTags(event.agents);
                     if (event.type === 'answer_document') {
                         removeProcessingIndicator();
@@ -876,18 +896,35 @@
 
             removeProcessingIndicator();
             if (!streamMessage && !presentationRendered) addMessage('ai', '我收到了，但这次没有返回具体内容。');
+            if (streamMessage && responseSources.length) {
+                renderAttachmentCards(streamMessage.stack, responseSources);
+            }
             setComposerContext(nextPlaceholder);
             if (preferencesUpdated) await loadUserSummary();
             await Promise.all([loadActiveTrip(), loadSessions()]);
+            requestCompleted = true;
         } catch (err) {
             removeProcessingIndicator();
             addMessage('ai', formatDisplayError(err, '网络错误，请检查连接后重试。'));
+            // Preserve the body and request ID so an explicit retry remains idempotent.
+            chatInput.value = text;
+            const sendingIds = new Set(sendingAttachmentIds);
+            pendingAttachments = [
+                ...sendingEntries,
+                ...pendingAttachments.filter((entry) => !sendingIds.has(entry.id)),
+            ];
+            retryRequestPending = true;
+            renderPendingAttachments();
+            resizeInput(chatInput);
         } finally {
             isProcessing = false;
             sendBtn.disabled = false;
             setSendLoading(false);
             chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
-            resetRequestId();
+            if (requestCompleted) {
+                resetRequestId();
+                retryRequestPending = false;
+            }
             chatInput.focus();
         }
     }
@@ -1068,7 +1105,7 @@
         stack.appendChild(bubble);
         chatMessages.appendChild(row);
         scrollToBottom();
-        return { bubble, text: '' };
+        return { bubble, stack, text: '' };
     }
 
     function renderMessageInto(element, text) {

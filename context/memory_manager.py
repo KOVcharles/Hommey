@@ -3,9 +3,8 @@
 统一管理两层记忆，提供简单的API
 """
 from typing import Dict, Any
-from .short_term_memory import ShortTermMemory
-from .long_term_memory import DisabledLongTermMemory, FileLongTermMemory, PostgresLongTermMemory
-from settings import MEMORY_CONFIG
+import uuid
+from .memory_service import MemoryService
 from utils.memory_safety import filter_safe_memory_mapping, redact_sensitive_text, wrap_untrusted_memory
 import logging
 
@@ -30,60 +29,42 @@ class MemoryManager:
             llm_model: LLM模型实例（用于总结长期记忆）
         """
         self.user_id = user_id
-        self.session_id = session_id
         self.llm_model = llm_model
-
-        # 初始化两层记忆
-        self.short_term = self._create_short_term(session_id)
-        long_term_conf = MEMORY_CONFIG.get("long_term", {})
-        long_term_backend = long_term_conf.get("backend", "file").lower()
-        long_term_storage_path = long_term_conf.get("storage_path", storage_path)
-
-        if long_term_backend == "postgres":
-            self.long_term = PostgresLongTermMemory(
-                user_id=user_id,
-                storage_path=long_term_storage_path,
-                postgres_dsn=long_term_conf.get("postgres_dsn", ""),
-            )
-        elif long_term_backend == "disabled":
-            self.long_term = DisabledLongTermMemory(
-                user_id=user_id,
-                storage_path=long_term_storage_path,
-            )
-        elif long_term_backend == "file":
-            self.long_term = FileLongTermMemory(
-                user_id=user_id,
-                storage_path=long_term_storage_path,
-            )
-        else:
-            raise ValueError(
-                f"Unsupported long-term memory backend: {long_term_backend}. "
-                "Use 'file', 'postgres', or 'disabled'."
-            )
+        self.memory_service = MemoryService(
+            user_id=user_id,
+            requested_session_id=session_id,
+            storage_path=storage_path,
+        )
+        self.session_id = self.memory_service.session_id
+        self.short_term = self.memory_service.short_term
+        self.long_term = self.memory_service.long_term
+        # Stage-2 domains are exposed separately so legacy preference APIs stay unchanged.
+        self.profile_repository = self.memory_service.profile_repository
+        self.current_request_id: str | None = None
+        self._current_turn_id: str | None = None
 
         logger.info(f"Memory manager initialized for user {user_id}, session {session_id}")
 
-    def _create_short_term(self, session_id: str) -> ShortTermMemory:
-        memory_conf = MEMORY_CONFIG.get("short_term", {})
-        return ShortTermMemory(
-            user_id=self.user_id,
-            session_id=session_id,
-            max_turns=memory_conf.get("max_turns", 10),
-            redis_host=memory_conf.get("redis_host", "127.0.0.1"),
-            redis_port=memory_conf.get("redis_port", 6379),
-            redis_db=memory_conf.get("redis_db", 0),
-            redis_password=memory_conf.get("redis_password"),
-            key_prefix=memory_conf.get("redis_key_prefix", "hommey:short_term"),
-            backend=memory_conf.get("backend", "memory"),
-            redis_ttl_sec=memory_conf.get("redis_ttl_sec", 86400),
-        )
-
-    def rotate_session(self, session_id: str) -> None:
+    def rotate_session(self, session_id: str) -> str:
         """Start a new short-term session while preserving long-term memory."""
         previous_session = self.session_id
-        self.session_id = session_id
-        self.short_term = self._create_short_term(session_id)
-        logger.info("Rotated memory session: %s -> %s", previous_session, session_id)
+        self.session_id = self.memory_service.rotate_session(session_id, reason="manual")
+        self.short_term = self.memory_service.short_term
+        logger.info("Rotated memory session: %s -> %s", previous_session, self.session_id)
+        return self.session_id
+
+    def activate_session(self, session_id: str) -> str:
+        """Switch to an existing session and rebuild its recent-memory view."""
+        self.session_id = self.memory_service.activate_session(session_id)
+        self.short_term = self.memory_service.short_term
+        return self.session_id
+
+    def ensure_active_session(self) -> bool:
+        """Resume or rotate the durable session according to the idle timeout."""
+        rotated = self.memory_service.ensure_active_session()
+        self.session_id = self.memory_service.session_id
+        self.short_term = self.memory_service.short_term
+        return rotated
 
     # ========== 短期记忆操作 ==========
 
@@ -97,30 +78,29 @@ class MemoryManager:
             metadata: 元数据
 
         Returns:
-            新写入消息的 id（用于附件绑定等）；幂等冲突（重复 request_id）时返回 False。
+            新写入或幂等命中的消息 id；写入失败时返回 False。
         """
+        metadata = dict(metadata or {})
         safe_content = redact_sensitive_text(content)
+        if role == "user":
+            self.current_request_id = metadata.get("request_id") or uuid.uuid4().hex
+            self._current_turn_id = metadata.get("turn_id")
+        else:
+            self.current_request_id = metadata.get("request_id") or self.current_request_id or uuid.uuid4().hex
+        metadata["request_id"] = self.current_request_id
+        if self._current_turn_id:
+            metadata["turn_id"] = self._current_turn_id
 
-        # 先写长期事实源；幂等冲突时不重复写短期窗口。
-        persisted = self.long_term.add_chat_message(
-            role,
-            safe_content,
-            self.session_id,
-            metadata=metadata,
-        )
-        if persisted is not False:
-            self.short_term.add_message(role, safe_content, metadata)
-        return persisted
+        result = self.memory_service.append_message(role, safe_content, metadata)
+        if result.get("turn_id"):
+            self._current_turn_id = result["turn_id"]
+        return result.get("message_id") or False
 
     def get_recorded_response(self, request_id: str) -> str | None:
         """Return a completed assistant response for an idempotent retry."""
         if not request_id:
             return None
-        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
-        for row in reversed(rows):
-            if row.get("role") == "assistant":
-                return row.get("content") or None
-        return None
+        return self.memory_service.get_recorded_response(request_id)
 
     def get_recorded_answer_document(self, request_id: str) -> dict | None:
         """Return the structured answer saved for an idempotent retry, when present."""
@@ -233,7 +213,7 @@ class MemoryManager:
 
     def end_session(self):
         """结束会话"""
-        self.short_term.clear()
+        self.memory_service.close_session(reason="manual")
         logger.info(f"Session ended: {self.session_id}")
 
     async def get_long_term_summary_async(self, max_messages: int = 20) -> str:

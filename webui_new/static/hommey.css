@@ -928,6 +928,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     font-size: 14px;
     font-weight: 620;
 }
+.auth-mobile-brand { display: none; }
 .auth-story {
     width: min(620px, 90%);
     margin: auto;
@@ -1096,6 +1097,14 @@ html[data-motion="off"] *::after {
     .auth-page { grid-template-columns: 1fr; }
     .auth-visual { display: none; }
     .auth-panel { min-height: 100vh; padding: 24px; border-left: 0; }
+    .auth-mobile-brand {
+        margin-bottom: 34px;
+        display: flex;
+        align-items: center;
+        gap: 9px;
+        font-size: 14px;
+        font-weight: 620;
+    }
 }
 
 /* ── 多模态附件（P0）────────────────────────────────────────── */

@@ -1,0 +1,19 @@
+services:
+  postgres-test:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: hommey
+      POSTGRES_PASSWORD: hommey-test
+      POSTGRES_DB: hommey_test
+    ports:
+      - "55432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hommey -d hommey_test"]
+      interval: 2s
+      timeout: 2s
+      retries: 20
+
+  redis-test:
+    image: redis:7-alpine
+    ports:
+      - "56379:6379"

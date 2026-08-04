@@ -74,7 +74,7 @@ class MemoryQueryAgent(AgentBase):
 
         # 获取用户查询
         context = input_data.get("context", {})
-        user_query = context.get("rewritten_query", "")
+        user_query = context.get("agent_query") or context.get("rewritten_query", "")
         if not user_query:
             # 尝试从 recent_dialogue 获取最后一条用户消息
             recent_dialogue = context.get("recent_dialogue", [])

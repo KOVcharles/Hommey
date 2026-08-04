@@ -153,6 +153,26 @@ class ShortTermMemory:
             self.message_version = 0
         logger.info("Short-term memory cleared")
 
+    def replace_messages(self, messages: List[Dict[str, Any]], message_version: int = 0):
+        """Replace the bounded cache from the PostgreSQL fact source."""
+        max_messages = self.max_turns * 2
+        bounded = [dict(message) for message in messages[-max_messages:]]
+        if self.backend == "redis":
+            pipeline = self.redis_client.pipeline(transaction=True)
+            pipeline.delete(self.redis_key, self.redis_version_key)
+            if bounded:
+                pipeline.rpush(
+                    self.redis_key,
+                    *(json.dumps(message, ensure_ascii=False) for message in bounded),
+                )
+                pipeline.expire(self.redis_key, self.redis_ttl_sec)
+            pipeline.set(self.redis_version_key, max(int(message_version), 0))
+            pipeline.expire(self.redis_version_key, self.redis_ttl_sec)
+            pipeline.execute()
+        else:
+            self.messages = bounded
+            self.message_version = max(int(message_version), len(bounded))
+
     def get_statistics(self) -> Dict[str, Any]:
         """获取统计信息"""
         if self.backend == "redis":

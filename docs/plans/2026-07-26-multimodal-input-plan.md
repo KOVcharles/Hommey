@@ -45,8 +45,8 @@ RawInput(text, attachment_ids)
 ```
 
 - `agent_query`：用户文本 + 经预算裁剪的附件上下文（提取文本、页码/时间戳引用），是传给现有意图识别、编排和文本模型的唯一输入。
-- `display_message`：用户字面原文 + 紧凑附件清单（文件名 + id），是写入 `chat_history.content`、短期记忆和前端历史的唯一内容；**绝不**把 `agent_query` 或附件全文存进记忆。
-- `sources`：前端展示来源、会话附件关联（`chat_message_attachments`）和页码/时间戳引用。
+- `display_message`：用户字面原文 + 紧凑附件清单（文件名 + id），是写入 `conversation_messages.content`、短期记忆和前端历史的唯一内容；**绝不**把 `agent_query` 或附件全文存进记忆。
+- `sources`：前端展示来源、会话附件关联（当前事实表为 `conversation_message_attachments`）和页码/时间戳引用。
 
 这样既不要求当前模型直接接收语音或 Word 文件，也避免附件全文污染会话记忆（详见 4.5）。
 
@@ -168,19 +168,19 @@ X-Request-ID: 4eead3d2-0a67-4c2c-a017-a22e6b8798fc
 
 ### 4.4 持久化
 
-新增迁移 `webui_new/auth/migrations/0005_multimodal_attachments.sql`，建议包含：
+附件元数据由已发布的 `0005_multimodal_attachments.sql` 创建；UUID 消息关联由 `0007_conversation_message_attachments.sql` 补充：
 
 - `attachments`：`id`、`user_id`、`session_id`、`request_id`、原文件名、探测后的 MIME、`kind`、字节数、SHA-256、对象键、状态、错误码、创建/过期时间。
 - `attachment_extractions`：`attachment_id`、解析器版本、语言、纯文本、结构化 JSON（页码/段落/时间戳）、字符数、提取时间。大文本可以放对象存储，表中只保留摘要和对象键。
-- `chat_message_attachments`：以 `chat_history.id` 作为外键，关联用户消息和附件；唯一约束为 `(chat_history_id, attachment_id)`。
+- `conversation_message_attachments`：以 `conversation_messages.message_id UUID` 作为外键，关联用户消息和附件；附件只能绑定到一条消息。旧 `chat_message_attachments` 仅为兼容已发布迁移保留，运行时不再写入。
 
-因此要给 `FileLongTermMemory` 与 `PostgresLongTermMemory` 增加“新增消息并返回 message id”或专用 `bind_attachments_to_message()` 方法。不能只把附件名称拼入 `chat_history.content`，否则权限、删除和审计均无法正确处理。绑定发生在 `display_message` 对应的 message id 上，扩展后的 `agent_query` 不入库（见 4.5）。删除会话/清空历史时应删除关联记录；原对象执行延迟清理，避免正在处理的任务读到已删除文件。
+记忆层的 `append_message()` 返回 UUID message id，并在同一事务内完成消息写入和附件绑定。不能只把附件名称拼入消息内容，否则权限、删除和审计均无法正确处理。绑定发生在 `display_message` 对应的 message id 上，扩展后的 `agent_query` 不入库（见 4.5）。删除会话/清空历史时删除关联记录；原对象执行延迟清理，避免正在处理的任务读到已删除文件。
 
 本地 file-memory 开发模式可把附件元数据写入用户 JSON，并将文件保存在 `data/uploads/{user_id}/{attachment_id}`；生产环境使用 MinIO/S3 私有桶，禁止通过静态目录直接访问。
 
 ### 4.5 记忆写入：扩展 query 与简短消息的分离
 
-当前 `HommeyWebInstance.process_message(message: str)` 用同一个 `message` 既喂下游 Agent 又写记忆——它在 `self.memory_manager.add_message("user", message, ...)` 处把入参原样写入 `chat_history.content` 与短期窗口。若直接把扩展后的 `agent_query`（用户文本 + 附件提取全文）作为 `message` 传入，每一轮都会把附件正文写进长期记忆，导致：历史被文档全文撑爆、短期窗口 token 飞涨、`redact_sensitive_text` 对整篇文档脱敏既慢又失真、前端历史渲染成一整段文档文本。
+改造前 `HommeyWebInstance.process_message(message: str)` 用同一个 `message` 既喂下游 Agent 又写记忆。若直接把扩展后的 `agent_query`（用户文本 + 附件提取全文）写入事实表与短期窗口，每一轮都会把附件正文写进长期记忆，导致：历史被文档全文撑爆、短期窗口 token 飞涨、`redact_sensitive_text` 对整篇文档脱敏既慢又失真、前端历史渲染成一整段文档文本。
 
 因此 `process_message` 的入参必须能区分两个值，且二者去向不同：
 
@@ -189,12 +189,12 @@ X-Request-ID: 4eead3d2-0a67-4c2c-a017-a22e6b8798fc
 | `agent_query` | 用户原文 + 经预算裁剪的附件上下文 | 意图识别 / 编排 / 文本模型，仅当次请求 |
 | `display_message` | 用户字面原文 + 紧凑附件清单（文件名 + id） | `add_message("user", ...)`、短期记忆、前端历史 |
 
-附件全文只存在于 `attachment_extractions`（正文置对象存储）中，由 `AttachmentContextBuilder` 在需要的那一轮临时拼入 `agent_query`，从不进 `chat_history.content`。消息与附件的关联由 `chat_message_attachments` 承载（见 4.4），绑定到 `display_message` 对应的 message id。
+附件全文只存在于 `attachment_extractions`（正文置对象存储）中，由 `AttachmentContextBuilder` 在需要的那一轮临时拼入 `agent_query`，从不进 `conversation_messages.content`。消息与附件的关联由 `conversation_message_attachments` 承载（见 4.4），绑定到 `display_message` 对应的 UUID message id。
 
 落地约束：
 
 - `process_message` 不再用单一 `message` 同时承担“喂 Agent”和“写记忆”：`add_message("user", ...)` 只写 `display_message`；意图/编排收 `agent_query`。
-- 多轮引用：用户后续追问“刚才那份文件第 3 页”时，短期记忆里只有 `display_message`、没有附件正文；靠 `chat_message_attachments` 关联定位附件，再由 `context_builder` 从 `attachment_extractions` 重新拼入当轮 `agent_query`。
+- 多轮引用：用户后续追问“刚才那份文件第 3 页”时，短期记忆里只有 `display_message`、没有附件正文；靠 `conversation_message_attachments` 关联定位附件，再由 `context_builder` 从 `attachment_extractions` 重新拼入当轮 `agent_query`。
 - 复用现状：`PostgresLongTermMemory.add_chat_message` 的 SQL 已含 `RETURNING id` 但被丢弃、方法返回布尔——改造时直接复用该 id 供附件绑定，并同步修正 `FileLongTermMemory` 的返回值。
 - 失败可见性：若请求在意图/编排阶段失败，留下“已绑定附件但无 assistant 回复”的半回合时，附件记录的可见性与清理策略需与本节及 4.3 的过期清理一致。
 - 与 LangGraph 计划一致：本节把“什么该被持久化”收口到记忆写入处，记忆层是消息落库的单一职责方（见 3.1）。
@@ -259,7 +259,7 @@ multimodal/
 | `rag/parser.py`、`rag/config.py`、`requirements.txt` | 加 DOCX/PDF-OCR 所需解析器与可选依赖；保持 RAG 入库与会话附件职责分离。 |
 | `context/long_term_memory.py`、`context/memory_manager.py` | 支持消息-附件关联、历史查询的附件元数据、会话删除级联与本地开发存储。 |
 | `docker/Dockerfile`、`docker/docker-compose.yml` | 安装/连接受控的 DOC 转换、OCR、队列 worker 和对象存储；生产环境建议独立 worker 容器。 |
-| `webui_new/auth/migrations/0005_multimodal_attachments.sql`（新增） | 创建附件、提取结果和消息关联表，以及索引、清理任务需要的过期时间索引。 |
+| `webui_new/auth/migrations/0005_multimodal_attachments.sql`、`0007_conversation_message_attachments.sql` | 创建附件与提取结果；补充 UUID 消息关联表和相关索引。 |
 
 ## 7. 安全、成本与运行要求
 
@@ -275,6 +275,9 @@ multimodal/
 ### P0：基础设施和纯文本附件
 
 实现上传、私有存储、附件状态、TXT/MD/DOCX 解析、`attachment_ids` 聊天契约、消息关联和前端附件卡片。解析在请求内同步完成（TXT/MD/DOCX 为毫秒级），本期不引入异步队列与 worker。验收：上传一份 DOCX 并提问时，回答能引用正确段落；纯文本聊天回归通过。
+
+> 状态：已于 2026-07-31 完成。实现、迁移、测试与部署结果见
+> `docs/changelog/2026-07-31-multimodal-p0-completion-report.md`。
 
 ### P1：语音与 PDF
 
