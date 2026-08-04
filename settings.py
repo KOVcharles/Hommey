@@ -145,6 +145,26 @@ RESILIENCE_CONFIG = {
 }
 
 
+CONCURRENCY_CONFIG = {
+    # 全局并发上限：RedisSemaphore 允许同时进行中的请求数。
+    "global_concurrency_limit": _int_env("HOMMEY_GLOBAL_CONCURRENCY_LIMIT", 8),
+    # 同用户分布式锁等待超时（秒）。超过则返回用户排队超时。
+    "per_user_lock_timeout_sec": _float_env("HOMMEY_PER_USER_LOCK_TIMEOUT_SEC", 60.0),
+    # 全局信号量获取超时（秒）。
+    "semaphore_acquire_timeout_sec": _float_env("HOMMEY_SEMAPHORE_ACQUIRE_TIMEOUT_SEC", 120.0),
+    # 分布式锁 TTL（秒），每次续约重设。
+    "distributed_lock_ttl_sec": _float_env("HOMMEY_DISTRIBUTED_LOCK_TTL_SEC", 45.0),
+    # 心跳续约间隔（秒）。
+    "lock_heartbeat_interval_sec": _float_env("HOMMEY_LOCK_HEARTBEAT_INTERVAL_SEC", 15.0),
+    # 拿锁重试 sleep 间隔（秒）。
+    "lock_retry_interval_sec": _float_env("HOMMEY_LOCK_RETRY_INTERVAL_SEC", 0.2),
+    # 信号量计数 TTL（秒），防 worker 崩溃泄漏计数。
+    # 必须 >= RESILIENCE_CONFIG.request_timeout_sec（默认 240），否则长时间请求
+    # 超过 TTL 会导致计数 key 过期、并发上限被静默突破（Task 2 review 实测复现）。
+    "semaphore_ttl_sec": _int_env("HOMMEY_SEMAPHORE_TTL_SEC", 240),
+}
+
+
 MEMORY_CONFIG = {
     "short_term": {
         "backend": os.getenv("HOMMEY_SHORT_TERM_BACKEND", "memory").lower(),
