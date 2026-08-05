@@ -38,11 +38,12 @@ def create_chat_router(manager):
     async def send_message(
         request: Request, user_id: str, data: ChatRequest, current_user: User = Depends(require_path_user)
     ):
-        """发送消息并获取回复"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        """发送消息并获取回复。
 
+        不做 NOT_INITIALIZED 预检查：未初始化/跨 worker（实例在另一 worker）时
+        由 manager.process_message 内部懒初始化。会话列表等不走统一入口的路由
+        仍保留预检查。
+        """
         if not data.message.strip() and not data.attachment_ids:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
@@ -68,11 +69,11 @@ def create_chat_router(manager):
     async def stream_message(
         request: Request, user_id: str, data: ChatRequest, current_user: User = Depends(require_path_user)
     ):
-        """Stream chat progress and response chunks as newline-delimited JSON."""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        """Stream chat progress and response chunks as newline-delimited JSON.
 
+        不做 NOT_INITIALIZED 预检查：未初始化/跨 worker（实例在另一 worker）时
+        由 manager.stream_message 内部懒初始化。
+        """
         if not data.message.strip() and not data.attachment_ids:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 

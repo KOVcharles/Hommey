@@ -116,8 +116,37 @@ async def test_init_error_hides_raw_exception(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_chat_not_initialized_error_contract(client, monkeypatch):
+async def test_chat_not_initialized_route_defers_to_manager_lazy_init(client, monkeypatch):
+    """路由层不再预检查 NOT_INITIALIZED：未初始化/跨 worker（本 worker 无实例）时，
+    请求直达 manager.process_message，由其内部懒初始化。"""
+    calls = []
+
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        calls.append((user_id, message, request_id, attachment_ids))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
+
+    monkeypatch.setattr(manager, "get", lambda _user_id: None)  # 模拟本 worker 无实例
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
+
+    response = await client.post(
+        "/api/u1/chat",
+        json={"message": "hello"},
+        headers={"X-Request-ID": "rid-chat"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("u1", "hello", "rid-chat", [])]  # ChatRequest.attachment_ids 默认 []
+
+
+@pytest.mark.anyio
+async def test_chat_lazy_init_failure_still_returns_not_initialized(client, monkeypatch):
+    """manager 懒初始化后仍无实例（初始化失败）时，NOT_INITIALIZED 仍以 400 透传给客户端。"""
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        from webui_new.core.errors import BusinessError
+        raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+
     monkeypatch.setattr(manager, "get", lambda _user_id: None)
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
 
     response = await client.post(
         "/api/u1/chat",
