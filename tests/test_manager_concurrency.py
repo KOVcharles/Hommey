@@ -225,3 +225,53 @@ async def test_process_message_aborts_when_heartbeat_renew_raises(monkeypatch):
     assert excinfo.value.code == "LOCK_LOST"
     assert excinfo.value.retryable is True
     assert lock.released is True  # 释放链仍执行
+
+
+class FakeStreamInstance:
+    """已初始化的流式实例替身：转发 stream_message。"""
+    def __init__(self):
+        self.initialized = True
+
+    async def stream_message(self, message, request_id=None, attachment_ids=None):
+        yield {"type": "status", "phase": "done"}
+        yield {"type": "done", "preferences_updated": False, "timings": {}}
+
+
+@pytest.mark.asyncio
+async def test_process_message_lazy_initializes_missing_instance(monkeypatch):
+    """跨 worker 场景：当前 worker 无该用户实例时，process_message 先懒初始化再处理（不 deadlock）。"""
+    manager = WebHommeyManager()
+    _mock_redis(monkeypatch)
+    holder = StubProcess()
+    init_calls = []
+
+    async def fake_initialize_user(user_id):
+        init_calls.append(user_id)
+        manager._instances[user_id] = FakeInstance(holder.process)
+
+    monkeypatch.setattr(manager, "initialize_user", fake_initialize_user)
+
+    result = await manager.process_message("u1", "hello")
+
+    assert init_calls == ["u1"]
+    assert result["response"] == "hello"
+    assert holder.max_active == 1
+
+
+@pytest.mark.asyncio
+async def test_stream_message_lazy_initializes_missing_instance(monkeypatch):
+    """跨 worker 场景：stream_message 无该用户实例时同样懒初始化后再流式转发。"""
+    manager = WebHommeyManager()
+    _mock_redis(monkeypatch)
+    init_calls = []
+
+    async def fake_initialize_user(user_id):
+        init_calls.append(user_id)
+        manager._instances[user_id] = FakeStreamInstance()
+
+    monkeypatch.setattr(manager, "initialize_user", fake_initialize_user)
+
+    events = [e async for e in manager.stream_message("u1", "hello")]
+
+    assert init_calls == ["u1"]
+    assert events[-1]["type"] == "done"

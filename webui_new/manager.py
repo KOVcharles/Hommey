@@ -930,11 +930,19 @@ class HommeyWebInstance:
 
         yield {"type": "status", "phase": "analyzing", "message_key": "request_analyzing"}
         request_task = asyncio.create_task(run_request())
-        while True:
-            event = await queue.get()
-            if event is None:
-                break
-            yield event
+        try:
+            while True:
+                event = await queue.get()
+                if event is None:
+                    break
+                yield event
+        finally:
+            # 生成器被关闭/取消（前端断连、外层取消）时，取消内层 request_task，
+            # 避免孤儿任务在无锁状态下继续运行、写记忆并占用全局信号量计数。
+            # 正常完成路径下（run_request 已自然结束）cancel 对已完成任务无效，
+            # gather(return_exceptions=True) 吞掉 CancelledError/异常，二者均无害。
+            request_task.cancel()
+            await asyncio.gather(request_task, return_exceptions=True)
         await request_task
         result = result_holder["result"]
 
@@ -1573,16 +1581,26 @@ class WebHommeyManager:
         attachment_ids: list[str] | None = None,
         progress_callback=None,
     ) -> dict:
-        """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。"""
+        """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
+
+        取锁前懒初始化：跨 worker 场景下当前 worker 可能没有该用户实例（onboarding
+        落在另一 worker），此时在取锁前复用 _per_user_lock 调用 initialize_user，
+        与后续取锁分属不同锁段，避免 asyncio.Lock 不可重入造成的死锁。
+        """
         instance = self.get(user_id)
         if not instance or not instance.initialized:
-            from webui_new.core.errors import BusinessError
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+            await self.initialize_user(user_id)
 
         async with self._user_lock_scope(user_id) as lock_lost:
             # 锁已易主：不启动新的处理（Important 3）
             if lock_lost.is_set():
                 raise self._lock_lost_error()
+
+            # 锁内重新获取实例；初始化后仍无实例则兜底报 NOT_INITIALIZED。
+            instance = self.get(user_id)
+            if not instance or not instance.initialized:
+                from webui_new.core.errors import BusinessError
+                raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
 
             # 与锁丢失事件竞争：锁易主即中止在途处理。
             # instance.process_message 内部已有 request_timeout_sec 的 wait_for，取消是既有可接受语义。
@@ -1630,22 +1648,25 @@ class WebHommeyManager:
 
         生成器内部取锁（进程内锁 → 分布式锁 → 信号量），用 async for 转发
         instance.stream_message 的每个事件，finally 逆序释放。前端断连时
-        asyncio.CancelledError 冒泡到生成器，finally 保证锁释放。
-
-        已知限制（Important 4）：instance.stream_message 内部用 create_task 起
-        run_request 任务，断连取消外层层叠时无法从外层触及并 cancel 内层 request_task，
-        LLM 工作可能继续执行到自然结束（队列无人消费）。不做 instance 内部结构调整，
-        该场景列为 Task 6/7 测试项。
+        asyncio.CancelledError 冒泡到生成器，finally 保证锁释放；同时
+        instance.stream_message 自身的 try/finally 会 cancel 内层 request_task，
+        断连后不再有无锁孤儿任务继续跑 LLM/写记忆。
         """
+        # 取锁前懒初始化（与取锁分属不同锁段，避免 _per_user_lock 死锁）：
+        # 跨 worker 场景当前 worker 可能没有该用户实例。
         instance = self.get(user_id)
         if not instance or not instance.initialized:
-            from webui_new.core.errors import BusinessError
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+            await self.initialize_user(user_id)
 
         async with self._user_lock_scope(user_id) as lock_lost:
             # 锁已易主：不再继续输出（Important 3）
             if lock_lost.is_set():
                 raise self._lock_lost_error()
+            # 锁内重新获取实例；初始化后仍无实例则兜底报 NOT_INITIALIZED。
+            instance = self.get(user_id)
+            if not instance or not instance.initialized:
+                from webui_new.core.errors import BusinessError
+                raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
             async for event in instance.stream_message(
                 message,
                 request_id=request_id,
