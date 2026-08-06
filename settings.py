@@ -196,6 +196,13 @@ MEMORY_CONFIG = {
         "dual_write": _bool_env("HOMMEY_MEMORY_V2_DUAL_WRITE", False),
         "read_mode": os.getenv("HOMMEY_MEMORY_V2_READ_MODE", "legacy").lower(),
     },
+    # 增量会话摘要（v1）：读取路径惰性生成，水位推进驱动；max_turns 或 max_chars 谁先到谁触发。
+    "summary": {
+        "enabled": _bool_env("HOMMEY_SUMMARY_ENABLED", True),
+        "max_turns": _int_env("HOMMEY_SUMMARY_MAX_TURNS", 5),
+        "max_chars": _int_env("HOMMEY_SUMMARY_MAX_CHARS", 6000),
+        "prompt_version": os.getenv("HOMMEY_SUMMARY_PROMPT_VERSION", "segment-v1"),
+    },
 }
 
 

@@ -258,6 +258,8 @@ class HommeyWebInstance:
         self.session_id = session_id
         self._last_activity_monotonic = time.monotonic()
         self._total_messages = len(payload["messages"])
+        self._summary_cache = None  # 摘要按会话归属，切换会话后失效
+        self._summary_msg_count = 0
         return payload
 
     def rename_chat_session(self, session_id: str, title: str) -> None:
@@ -359,22 +361,26 @@ class HommeyWebInstance:
             ) from exc
 
     async def _get_cached_summary(self) -> str:
-        """Cache only query-independent memory; dynamic trip retrieval stays per request."""
-        stats = await self._ensure_async_memory().get_statistics()
-        current_count = int(stats.get("message_version", stats.get("total_messages", 0)))
+        """Cache only query-independent memory; dynamic trip retrieval stays per request.
 
-        # 仅在首次或消息数增长超过阈值时重新生成
-        if self._summary_cache is None or current_count - self._summary_msg_count >= 5:
+        缓存键为 message_version（memory_versions.namespace='messages'，每条新消息 +1），
+        每条新消息恰好刷新一次；_get_long_term_summary 内部先跑便宜的 claim，未达阈值
+        不会触发 LLM。
+        """
+        stats = await self._ensure_async_memory().get_statistics()
+        current_version = int(stats.get("message_version", stats.get("total_messages", 0)))
+
+        if self._summary_cache is None or current_version != self._summary_msg_count:
             summary = await self._get_long_term_summary()
             if summary:
                 self._summary_cache = summary
-                self._summary_msg_count = current_count
+                self._summary_msg_count = current_version
                 return summary
             elif self._summary_cache is not None:
-                self._summary_msg_count = current_count
+                self._summary_msg_count = current_version
                 return self._summary_cache
             self._summary_cache = ""
-            self._summary_msg_count = current_count
+            self._summary_msg_count = current_version
             return ""
 
         return self._summary_cache or ""
@@ -1056,12 +1062,26 @@ class HommeyWebInstance:
             if len(pref_lines) > 1:
                 summary_parts.extend(pref_lines)
 
-        chat_summary = await self.memory_manager.get_long_term_summary_async(max_messages=20)
-        if chat_summary:
+        # 持久化增量摘要：惰性认领 + 读回，未达阈值不触发 LLM。
+        summaries = await self.memory_manager.ensure_session_summaries()
+        composed = self._compose_session_summaries(summaries)
+        if composed:
             summary_parts.append("\n【历史会话总结】")
-            summary_parts.append(chat_summary)
+            summary_parts.append(composed)
 
         return "\n".join(summary_parts) if summary_parts else ""
+
+    @staticmethod
+    def _compose_session_summaries(summaries: list, max_segments: int = 12) -> str:
+        """拼接近段摘要为系统提示片段（摘要按 created_at 升序返回，取最近 N 段）。"""
+        recent = summaries[-max_segments:] if summaries else []
+        lines = []
+        for seg in recent:
+            header = f"[会话 {str(seg['session_id'])[:8]} · 第{seg['segment_no']}段]"
+            lines.append(header)
+            lines.append(seg["summary_text"] or "")
+            lines.append("")
+        return "\n".join(lines).strip()
 
     async def _get_relevant_trip_context(self, user_input: str) -> str:
         """Select recent and query-relevant trips without contaminating the static cache."""

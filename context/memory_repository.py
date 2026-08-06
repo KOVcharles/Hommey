@@ -93,6 +93,25 @@ class MessageRecord:
         )
 
 
+@dataclass(frozen=True)
+class ClaimedSummaryRange:
+    """A contiguous range of conversation_messages claimed for summarization.
+
+    Returned by :meth:`PostgresMemoryRepository.claim_summary_range`. ``segment_no``
+    equals ``source_sequence_from``: deterministic, monotonic, and unique among
+    successful inserts (the watermark is the single authority).
+    """
+
+    summary_id: uuid.UUID
+    user_id: str
+    session_id: uuid.UUID
+    segment_no: int
+    source_sequence_from: int
+    source_sequence_to: int
+    source_message_count: int
+    messages: list[tuple[int, str, str]]  # (sequence_no, role, content)
+
+
 class PostgresMemoryRepository:
     """Transactional fact-source access for sessions and messages."""
 
@@ -476,6 +495,218 @@ class PostgresMemoryRepository:
                 row = cur.fetchone()
         return int(row["version"]) if row else 0
 
+    # ========== 增量会话摘要 ==========
+
+    @staticmethod
+    def _accumulate_segment(
+        rows: list[tuple[int, str, str]],
+        max_messages: int,
+        max_chars: int,
+    ) -> list[tuple[int, str, str]] | None:
+        """Greedily take messages until ``max_messages`` or ``max_chars`` is reached.
+
+        Character count is the size measurement (the ``token_count`` column is
+        never populated in this codebase). Returns ``None`` if the whole backlog
+        is below both thresholds — in that case nothing is summarized yet.
+        """
+        total_chars = 0
+        chosen: list[tuple[int, str, str]] = []
+        for seq, role, content in rows:
+            total_chars += len(content or "")
+            chosen.append((seq, role, content))
+            if len(chosen) >= max_messages or total_chars >= max_chars:
+                break
+        if len(chosen) < max_messages and total_chars < max_chars:
+            return None
+        return chosen
+
+    def claim_summary_range(
+        self,
+        user_id: str,
+        session_id: str | uuid.UUID,
+        *,
+        max_turns: int = 5,
+        max_chars: int = 6000,
+    ) -> ClaimedSummaryRange | None:
+        """Claim the next unsummarized message range for this session.
+
+        Concurrency contract: the per-user advisory lock (:meth:`_lock_user`)
+        serializes all claim transactions for one user across threads/processes,
+        and the watermark is advanced inside the same transaction, so a second
+        claim always reads the first's committed watermark and continues from
+        ``to + 1`` — ranges are disjoint by construction. ``FOR UPDATE`` on the
+        session row also serializes against ``append_message`` (which takes the
+        same lock), giving a consistent ``last_sequence`` snapshot.
+
+        Trade-off (see plan C1): if a crash happens between claim and insert,
+        the claimed range is skipped (no self-heal) in exchange for the hard
+        disjointness guarantee. Raw messages are unaffected.
+        """
+        sid = stable_uuid(session_id, namespace="session")
+        max_messages = max(int(max_turns), 1) * 2  # 1 turn = user + assistant pair
+
+        with self.pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    self._lock_user(cur, user_id)
+                    cur.execute(
+                        """
+                        SELECT summary_watermark, last_sequence
+                        FROM conversation_sessions
+                        WHERE user_id = %s AND session_id = %s
+                        FOR UPDATE
+                        """,
+                        (user_id, sid),
+                    )
+                    session = cur.fetchone()
+                    if not session:
+                        raise ValueError("Session not found for summary claim")
+                    watermark = int(session["summary_watermark"])
+                    last_sequence = int(session["last_sequence"])
+
+                    from_seq = watermark + 1  # watermark is the single authority (C1)
+                    if from_seq > last_sequence:
+                        return None  # nothing unsummarized
+
+                    cur.execute(
+                        """
+                        SELECT sequence_no, role, content
+                        FROM conversation_messages
+                        WHERE user_id = %s AND session_id = %s
+                          AND sequence_no BETWEEN %s AND %s
+                          AND deleted_at IS NULL
+                        ORDER BY sequence_no ASC
+                        """,
+                        (user_id, sid, from_seq, last_sequence),
+                    )
+                    rows = cur.fetchall()
+                    if not rows:
+                        return None
+                    # dict_row cursors return dicts; normalize to tuples for the pure helper.
+                    tuple_rows = [
+                        (int(row["sequence_no"]), row["role"], row["content"])
+                        for row in rows
+                    ]
+                    chosen = self._accumulate_segment(tuple_rows, max_messages, max_chars)
+                    if chosen is None:
+                        return None  # below both thresholds: don't advance
+
+                    to_seq = int(chosen[-1][0])
+                    cur.execute(
+                        """
+                        UPDATE conversation_sessions
+                        SET summary_watermark = %s
+                        WHERE user_id = %s AND session_id = %s
+                        """,
+                        (to_seq, user_id, sid),
+                    )
+                    return ClaimedSummaryRange(
+                        summary_id=uuid.uuid4(),
+                        user_id=user_id,
+                        session_id=sid,
+                        segment_no=from_seq,
+                        source_sequence_from=from_seq,
+                        source_sequence_to=to_seq,
+                        source_message_count=len(chosen),
+                        messages=list(chosen),
+                    )
+
+    def insert_session_summary(
+        self,
+        *,
+        user_id: str,
+        summary_id: uuid.UUID,
+        session_id: str | uuid.UUID,
+        segment_no: int,
+        summary_text: str,
+        source_sequence_from: int,
+        source_sequence_to: int,
+        source_message_count: int,
+        model_name: str | None = None,
+        prompt_version: str | None = None,
+        summary_data: dict | None = None,
+    ) -> None:
+        """Idempotently persist one summary segment (upsert on the range key)."""
+        from psycopg.types.json import Jsonb
+
+        sid = stable_uuid(session_id, namespace="session")
+        with self.pool.connection() as conn:
+            with conn.transaction():
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        INSERT INTO session_summaries (
+                            summary_id, user_id, session_id, segment_no,
+                            summary_text, summary_data,
+                            source_sequence_from, source_sequence_to,
+                            source_message_count, model_name, prompt_version, status
+                        )
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, 'done')
+                        ON CONFLICT (session_id, source_sequence_from, source_sequence_to)
+                        DO UPDATE SET
+                            summary_text = EXCLUDED.summary_text,
+                            summary_data = EXCLUDED.summary_data,
+                            model_name = EXCLUDED.model_name,
+                            prompt_version = EXCLUDED.prompt_version,
+                            status = 'done',
+                            updated_at = NOW()
+                        """,
+                        (
+                            summary_id,
+                            user_id,
+                            sid,
+                            int(segment_no),
+                            summary_text,
+                            Jsonb(summary_data or {}),
+                            int(source_sequence_from),
+                            int(source_sequence_to),
+                            int(source_message_count),
+                            model_name,
+                            prompt_version,
+                        ),
+                    )
+
+    def get_session_summaries(
+        self,
+        user_id: str,
+        session_id: str | uuid.UUID | None = None,
+        *,
+        limit: int | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return finished summary segments, oldest first, optionally per session."""
+        sql = """
+            SELECT summary_id, user_id, session_id, segment_no, summary_text,
+                   summary_data, source_sequence_from, source_sequence_to,
+                   source_message_count, model_name, prompt_version, created_at
+            FROM session_summaries
+            WHERE user_id = %s AND status = 'done'
+        """
+        params: list[Any] = [user_id]
+        if session_id is not None:
+            sql += " AND session_id = %s"
+            params.append(stable_uuid(session_id, namespace="session"))
+        sql += " ORDER BY created_at ASC"
+        if limit is not None:
+            sql += " LIMIT %s"
+            params.append(int(limit))
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(sql, params)
+                rows = cur.fetchall()
+        return [
+            {
+                "summary_id": str(row["summary_id"]),
+                "session_id": str(row["session_id"]),
+                "segment_no": int(row["segment_no"]),
+                "summary_text": row["summary_text"],
+                "source_sequence_from": int(row["source_sequence_from"]),
+                "source_sequence_to": int(row["source_sequence_to"]),
+                "source_message_count": int(row["source_message_count"]),
+                "created_at": row["created_at"].isoformat(),
+            }
+            for row in rows
+        ]
+
 
 class PostgresCompatibilityStore:
     """Stage-1 adapter for preference, trip and task APIs used by existing agents."""
@@ -544,6 +775,10 @@ class PostgresCompatibilityStore:
                         (self.user_id, sid),
                     )
                     cur.execute(
+                        "DELETE FROM session_summaries WHERE user_id = %s AND session_id = %s",
+                        (self.user_id, sid),
+                    )
+                    cur.execute(
                         "DELETE FROM chat_session_titles WHERE user_id = %s AND session_id = %s",
                         (self.user_id, session_id),
                     )
@@ -566,13 +801,18 @@ class PostgresCompatibilityStore:
                         (self.user_id,),
                     )
                     cur.execute(
+                        "DELETE FROM session_summaries WHERE user_id = %s",
+                        (self.user_id,),
+                    )
+                    cur.execute(
                         "DELETE FROM chat_session_titles WHERE user_id = %s",
                         (self.user_id,),
                     )
                     cur.execute(
                         """
                         UPDATE conversation_sessions
-                        SET status = 'closed', closed_at = NOW(), close_reason = 'cleared'
+                        SET status = 'closed', closed_at = NOW(), close_reason = 'cleared',
+                            summary_watermark = 0
                         WHERE user_id = %s AND status = 'active'
                         """,
                         (self.user_id,),
@@ -915,6 +1155,7 @@ class PostgresCompatibilityStore:
                 with conn.cursor() as cur:
                     for table in (
                         "conversation_messages",
+                        "session_summaries",
                         "conversation_sessions",
                         "memory_versions",
                         "user_preferences",
