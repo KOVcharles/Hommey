@@ -50,6 +50,39 @@
     let rotationTimer;
     let rotationIndex = 0;
     let toastTimer;
+    let processingStatusTimer;
+    let processingStatusQueue = [];
+    let lastProcessingStatusAt = 0;
+    let contextualPlaceholder = '';
+    let scrollIdleTimer;
+
+    const progressMessages = {
+        request_analyzing: '正在理解你的需求',
+        tasks_decomposing: '正在拆分差旅标准与外部信息',
+        policy_searching: '正在检索适用的差旅制度',
+        travel_info_searching: '正在查询目的地天气与出行信息',
+        memory_searching: '正在查找相关差旅记录',
+        preference_updating: '正在更新你的差旅偏好',
+        trip_details_collecting: '正在整理行程信息',
+        trip_planning: '正在生成行程安排',
+        compliance_checking: '正在核对差旅合规性',
+        task_completed: '一项信息已经准备好，继续整理中',
+        task_failed: '部分信息暂时不可用，继续处理其他内容',
+        answer_composing: '正在把结果整理成清晰的卡片',
+        answer_ready: '信息已整理完成',
+        task_running: '正在处理相关信息',
+        queued: '任务已经排好，马上开始',
+    };
+
+    const progressAgentLabels = {
+        rag_knowledge: '差旅标准',
+        information_query: '天气与出行',
+        memory_query: '差旅记录',
+        preference: '偏好',
+        event_collection: '行程信息',
+        itinerary_planning: '行程规划',
+        trip_compliance: '合规检查',
+    };
 
     // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
     let pendingAttachments = [];
@@ -165,12 +198,22 @@
         promptRotator.addEventListener('mouseleave', startPromptRotation);
         promptRotator.addEventListener('focusin', stopPromptRotation);
         promptRotator.addEventListener('focusout', startPromptRotation);
+        document.addEventListener('hommey:fill-composer', handlePresentationFill);
+        chatMessages.addEventListener('scroll', markConversationScrolling, { passive: true });
 
         document.addEventListener('click', (event) => {
             if (!sessionPopover.contains(event.target) && !event.target.closest('.session-more')) {
                 sessionPopover.hidden = true;
             }
         });
+    }
+
+    function markConversationScrolling() {
+        chatMessages.classList.add('is-scrolling');
+        clearTimeout(scrollIdleTimer);
+        scrollIdleTimer = setTimeout(() => {
+            chatMessages.classList.remove('is-scrolling');
+        }, 900);
     }
 
     async function initialize() {
@@ -392,6 +435,7 @@
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
             activeSessionId = data.session_id || '';
             chatMessages.replaceChildren();
+            setComposerContext('');
             showHome();
             await loadSessions();
         } catch (err) {
@@ -408,12 +452,25 @@
             );
             activeSessionId = sessionId;
             chatMessages.replaceChildren();
-            (data.messages || []).forEach((message) => {
+            const messages = data.messages || [];
+            messages.forEach((message) => {
                 const role = message.role === 'assistant' ? 'ai' : message.role;
                 if (role === 'ai' || role === 'user') {
-                    addMessage(role, message.content || '', message.timestamp, message.attachments);
+                    if (role === 'ai' && message.answer_document) {
+                        addAnswerMessage(message.answer_document, message.timestamp);
+                    } else if (role === 'ai' && message.presentation_document) {
+                        addPresentationMessage(message.presentation_document, message.timestamp);
+                    } else {
+                        addMessage(role, message.content || '', message.timestamp, message.attachments);
+                    }
                 }
             });
+            const latest = messages[messages.length - 1];
+            setComposerContext(
+                latest?.presentation_document?.type === 'trip_intake'
+                    ? latest.presentation_document.input_placeholder
+                    : ''
+            );
             enterChatView();
             await loadSessions();
         } catch (err) {
@@ -764,6 +821,8 @@
             if (!response.body) throw new Error('当前浏览器不支持流式响应');
 
             let streamMessage = null;
+            let presentationRendered = false;
+            let nextPlaceholder = '';
             let preferencesUpdated = false;
             let responseSources = [];
             const reader = response.body.getReader();
@@ -780,6 +839,7 @@
                     const event = parseStreamLine(line);
                     if (!event) continue;
                     if (event.type === 'error') throw createApiError(event, '处理失败，请重试');
+                    if (event.type === 'status' || event.type === 'task_status') updateProcessingStatus(event);
                     if (event.type === 'attachment_context') {
                         responseSources = event.sources || [];
                         if (event.warnings && event.warnings.length) {
@@ -787,6 +847,17 @@
                         }
                     }
                     if (event.type === 'agents') updateAgentTags(event.agents);
+                    if (event.type === 'answer_document') {
+                        removeProcessingIndicator();
+                        addAnswerMessage(event.document);
+                        presentationRendered = true;
+                    }
+                    if (event.type === 'presentation_document') {
+                        removeProcessingIndicator();
+                        addPresentationMessage(event.document);
+                        presentationRendered = true;
+                        nextPlaceholder = event.document?.input_placeholder || '';
+                    }
                     if (event.type === 'chunk') {
                         if (!streamMessage) {
                             removeProcessingIndicator();
@@ -801,6 +872,18 @@
             }
 
             const tail = parseStreamLine(buffer);
+            if (tail && (tail.type === 'status' || tail.type === 'task_status')) updateProcessingStatus(tail);
+            if (tail && tail.type === 'answer_document') {
+                removeProcessingIndicator();
+                addAnswerMessage(tail.document);
+                presentationRendered = true;
+            }
+            if (tail && tail.type === 'presentation_document') {
+                removeProcessingIndicator();
+                addPresentationMessage(tail.document);
+                presentationRendered = true;
+                nextPlaceholder = tail.document?.input_placeholder || '';
+            }
             if (tail && tail.type === 'chunk') {
                 if (!streamMessage) {
                     removeProcessingIndicator();
@@ -812,10 +895,11 @@
             if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
 
             removeProcessingIndicator();
-            if (!streamMessage) addMessage('ai', '我收到了，但这次没有返回具体内容。');
+            if (!streamMessage && !presentationRendered) addMessage('ai', '我收到了，但这次没有返回具体内容。');
             if (streamMessage && responseSources.length) {
                 renderAttachmentCards(streamMessage.stack, responseSources);
             }
+            setComposerContext(nextPlaceholder);
             if (preferencesUpdated) await loadUserSummary();
             await Promise.all([loadActiveTrip(), loadSessions()]);
             requestCompleted = true;
@@ -836,7 +920,7 @@
             isProcessing = false;
             sendBtn.disabled = false;
             setSendLoading(false);
-            chatInput.placeholder = defaultPlaceholder;
+            chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
             if (requestCompleted) {
                 resetRequestId();
                 retryRequestPending = false;
@@ -857,11 +941,15 @@
     }
 
     function addMessage(role, text, timestamp, attachments) {
+        if (role === 'ai') collapseTripIntakeCards();
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
         bubble.className = `msg-bubble ${role}`;
-        if (text) renderMessageInto(bubble, text);
+        if (text) {
+            if (role === 'user') renderUserMessageInto(bubble, text);
+            else renderMessageInto(bubble, text);
+        }
         stack.appendChild(bubble);
         if (role === 'user' && attachments && attachments.length) {
             renderAttachmentCards(stack, attachments);
@@ -870,6 +958,62 @@
         chatMessages.appendChild(row);
         scrollToBottom();
         return row;
+    }
+
+    function addAnswerMessage(documentData, timestamp) {
+        collapseTripIntakeCards();
+        if (!window.HommeyAnswerCard || !documentData) {
+            return addMessage('ai', documentData?.plain_text || '查询结果已生成。', timestamp);
+        }
+        const row = createMessageShell('ai');
+        const stack = row.querySelector('.msg-stack');
+        stack.appendChild(window.HommeyAnswerCard.create(documentData));
+        if (timestamp) stack.appendChild(createTime(timestamp));
+        chatMessages.appendChild(row);
+        scrollToBottom();
+        return row;
+    }
+
+    function addPresentationMessage(documentData, timestamp) {
+        if (!documentData || documentData.type !== 'trip_intake' || !window.HommeyTripIntakeCard) {
+            return addMessage('ai', documentData?.plain_text || '请补充行程信息。', timestamp);
+        }
+        collapseTripIntakeCards();
+        const row = createMessageShell('ai');
+        const stack = row.querySelector('.msg-stack');
+        stack.appendChild(window.HommeyTripIntakeCard.create(documentData));
+        if (timestamp) stack.appendChild(createTime(timestamp));
+        chatMessages.appendChild(row);
+        scrollToBottom();
+        return row;
+    }
+
+    function collapseTripIntakeCards() {
+        document.querySelectorAll('.trip-intake-card:not(.is-collapsed)').forEach((card) => {
+            const title = card.querySelector('.trip-intake-heading h2');
+            if (title && !card.dataset.originalTitle) card.dataset.originalTitle = title.textContent || '行程信息';
+            card.classList.add('is-collapsed');
+            if (title) title.textContent = '已更新行程信息';
+            card.setAttribute('aria-label', '已更新行程信息，点击展开');
+            const header = card.querySelector('.trip-intake-header');
+            if (header && !header.dataset.toggleBound) {
+                header.dataset.toggleBound = 'true';
+                header.setAttribute('role', 'button');
+                header.tabIndex = 0;
+                const toggle = () => {
+                    const collapsed = card.classList.toggle('is-collapsed');
+                    if (title) title.textContent = collapsed ? '已更新行程信息' : card.dataset.originalTitle;
+                    card.setAttribute('aria-label', collapsed ? '已更新行程信息，点击展开' : card.dataset.originalTitle);
+                };
+                header.addEventListener('click', toggle);
+                header.addEventListener('keydown', (event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        toggle();
+                    }
+                });
+            }
+        });
     }
 
     function showProcessingIndicator(agents) {
@@ -884,7 +1028,7 @@
         renderAgentTagsInto(tags, agents);
         const text = document.createElement('div');
         text.className = 'thinking-text';
-        text.textContent = '正在整理';
+        text.textContent = progressMessages.request_analyzing;
         const dots = document.createElement('div');
         dots.className = 'typing-dots';
         dots.innerHTML = '<i class="typing-dot"></i><i class="typing-dot"></i><i class="typing-dot"></i>';
@@ -895,7 +1039,45 @@
     }
 
     function removeProcessingIndicator() {
+        clearTimeout(processingStatusTimer);
+        processingStatusQueue = [];
+        lastProcessingStatusAt = 0;
         document.getElementById('processingIndicator')?.remove();
+    }
+
+    function updateProcessingStatus(event) {
+        const indicator = document.getElementById('processingIndicator');
+        if (!indicator) return;
+        const message = progressMessages[event.message_key] || event.message || '正在整理';
+        const current = indicator.querySelector('.thinking-text')?.textContent;
+        if (message && message !== current && !processingStatusQueue.includes(message)) {
+            processingStatusQueue.push(message);
+            flushProcessingStatus();
+        }
+        if (event.type === 'task_status' && event.intent && event.phase === 'running') {
+            const label = progressAgentLabels[event.intent];
+            if (label) updateAgentTags([{ name: event.intent, display: label }]);
+        }
+    }
+
+    function flushProcessingStatus() {
+        if (processingStatusTimer || !processingStatusQueue.length) return;
+        const elapsed = Date.now() - lastProcessingStatusAt;
+        const delay = Math.max(0, 650 - elapsed);
+        processingStatusTimer = setTimeout(() => {
+            processingStatusTimer = null;
+            const text = document.querySelector('#processingIndicator .thinking-text');
+            if (!text) return;
+            const next = processingStatusQueue.shift();
+            text.classList.add('is-changing');
+            setTimeout(() => {
+                if (!text.isConnected) return;
+                text.textContent = next;
+                text.classList.remove('is-changing');
+                lastProcessingStatusAt = Date.now();
+                flushProcessingStatus();
+            }, 160);
+        }, delay);
     }
 
     function updateAgentTags(agents) {
@@ -915,6 +1097,7 @@
     }
 
     function createStreamingMessage() {
+        collapseTripIntakeCards();
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
@@ -939,6 +1122,26 @@
             else fragment.appendChild(document.createTextNode(part));
         });
         element.appendChild(fragment);
+    }
+
+    function renderUserMessageInto(element, text) {
+        element.replaceChildren(document.createTextNode(String(text || '')));
+    }
+
+    function setComposerContext(placeholder) {
+        contextualPlaceholder = String(placeholder || '');
+        if (!isProcessing) chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
+    }
+
+    function handlePresentationFill(event) {
+        const value = String(event.detail?.text || '').trim();
+        if (!value || isProcessing || isOnboarding) return;
+        enterChatView();
+        const current = chatInput.value.trim();
+        chatInput.value = current ? `${current}，${value}` : value;
+        resizeInput(chatInput);
+        chatInput.focus();
+        chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
     }
 
     function createStrong(text) {

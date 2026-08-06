@@ -53,6 +53,27 @@ LLM_CONFIG = {
 }
 
 
+COMPOSER_CONFIG = {
+    "enabled": _bool_env("HOMMEY_COMPOSER_ENABLED", True),
+    "api_key": os.getenv("HOMMEY_COMPOSER_API_KEY") or LLM_CONFIG["api_key"],
+    "model_name": os.getenv("HOMMEY_COMPOSER_MODEL_NAME") or LLM_CONFIG["model_name"],
+    "base_url": os.getenv("HOMMEY_COMPOSER_BASE_URL") or LLM_CONFIG["base_url"],
+    "temperature": _float_env("HOMMEY_COMPOSER_TEMPERATURE", 0.2),
+    "max_tokens": _int_env("HOMMEY_COMPOSER_MAX_TOKENS", 4096),
+}
+
+
+ORCHESTRATION_V2_CONFIG = {
+    # Phase one is deliberately limited to independent policy + public-info requests.
+    "enabled": _bool_env("HOMMEY_TASK_ORCHESTRATION_V2", True),
+}
+
+
+TRIP_INTAKE_CONFIG = {
+    "enabled": _bool_env("HOMMEY_TRIP_INTAKE_CARD", True),
+}
+
+
 SYSTEM_CONFIG = {
     "enable_llm": _bool_env("HOMMEY_ENABLE_LLM", True),
     "log_level": os.getenv("HOMMEY_LOG_LEVEL", "INFO"),
@@ -99,7 +120,7 @@ RAG_CONFIG = {
 
 
 SKILL_CONFIG = {
-    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".claude/skills"),
+    "root": os.getenv("HOMMEY_SKILLS_ROOT", ".agents/skills"),
 }
 
 
@@ -111,7 +132,9 @@ RESILIENCE_CONFIG = {
     "max_agent_calls_per_request": _int_env("HOMMEY_MAX_AGENT_CALLS_PER_REQUEST", 8),
     "max_external_calls_per_request": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_REQUEST", 16),
     "max_external_calls_per_type": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_TYPE", 6),
-    "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 120.0),
+    # Full planning may include intent recognition, collection, parallel
+    # policy/public-info retrieval, planning, and compliance verification.
+    "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 240.0),
     "circuit_failure_threshold": _int_env("HOMMEY_CIRCUIT_FAILURE_THRESHOLD", 5),
     "circuit_recovery_timeout_sec": _float_env(
         "HOMMEY_CIRCUIT_RECOVERY_TIMEOUT_SEC",
@@ -119,6 +142,26 @@ RESILIENCE_CONFIG = {
     ),
     "circuit_half_open_successes": _int_env("HOMMEY_CIRCUIT_HALF_OPEN_SUCCESSES", 2),
     "health_check_timeout_sec": _float_env("HOMMEY_HEALTH_CHECK_TIMEOUT_SEC", 10.0),
+}
+
+
+CONCURRENCY_CONFIG = {
+    # 全局并发上限：RedisSemaphore 允许同时进行中的请求数。
+    "global_concurrency_limit": _int_env("HOMMEY_GLOBAL_CONCURRENCY_LIMIT", 8),
+    # 同用户分布式锁等待超时（秒）。超过则返回用户排队超时。
+    "per_user_lock_timeout_sec": _float_env("HOMMEY_PER_USER_LOCK_TIMEOUT_SEC", 60.0),
+    # 全局信号量获取超时（秒）。
+    "semaphore_acquire_timeout_sec": _float_env("HOMMEY_SEMAPHORE_ACQUIRE_TIMEOUT_SEC", 120.0),
+    # 分布式锁 TTL（秒），每次续约重设。
+    "distributed_lock_ttl_sec": _float_env("HOMMEY_DISTRIBUTED_LOCK_TTL_SEC", 45.0),
+    # 心跳续约间隔（秒）。
+    "lock_heartbeat_interval_sec": _float_env("HOMMEY_LOCK_HEARTBEAT_INTERVAL_SEC", 15.0),
+    # 拿锁重试 sleep 间隔（秒）。
+    "lock_retry_interval_sec": _float_env("HOMMEY_LOCK_RETRY_INTERVAL_SEC", 0.2),
+    # 信号量计数 TTL（秒），防 worker 崩溃泄漏计数。
+    # 必须 >= RESILIENCE_CONFIG.request_timeout_sec（默认 240），否则长时间请求
+    # 超过 TTL 会导致计数 key 过期、并发上限被静默突破（Task 2 review 实测复现）。
+    "semaphore_ttl_sec": _int_env("HOMMEY_SEMAPHORE_TTL_SEC", 240),
 }
 
 
@@ -152,6 +195,13 @@ MEMORY_CONFIG = {
         "enabled": _bool_env("HOMMEY_MEMORY_V2_ENABLED", False),
         "dual_write": _bool_env("HOMMEY_MEMORY_V2_DUAL_WRITE", False),
         "read_mode": os.getenv("HOMMEY_MEMORY_V2_READ_MODE", "legacy").lower(),
+    },
+    # 增量会话摘要（v1）：读取路径惰性生成，水位推进驱动；max_turns 或 max_chars 谁先到谁触发。
+    "summary": {
+        "enabled": _bool_env("HOMMEY_SUMMARY_ENABLED", True),
+        "max_turns": _int_env("HOMMEY_SUMMARY_MAX_TURNS", 5),
+        "max_chars": _int_env("HOMMEY_SUMMARY_MAX_CHARS", 6000),
+        "prompt_version": os.getenv("HOMMEY_SUMMARY_PROMPT_VERSION", "segment-v1"),
     },
 }
 

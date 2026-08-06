@@ -35,10 +35,10 @@ import importlib.util
 def load_agent_module(skill_name, agent_class_name):
     """Dynamically load agent module from skill directory"""
     # Navigate from current file's location to the skills directory
-    # Current: /path/to/shanglv/.claude/skills/plan-trip/script/plan_trip_execution.py
-    # Target: /path/to/shanglv/.claude/skills/<skill_name>/script/agent.py
+    # Current: /path/to/shanglv/.agents/skills/plan-trip/script/plan_trip_execution.py
+    # Target: /path/to/shanglv/.agents/skills/<skill_name>/script/agent.py
     current_file = Path(__file__).resolve()
-    skills_dir = current_file.parent.parent.parent  # Go up to .claude/skills/
+    skills_dir = current_file.parent.parent.parent  # Go up to .agents/skills/
     agent_path = skills_dir / skill_name / "script" / "agent.py"
 
     if not agent_path.exists():

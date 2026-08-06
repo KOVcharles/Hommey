@@ -116,8 +116,37 @@ async def test_init_error_hides_raw_exception(client, monkeypatch):
 
 
 @pytest.mark.anyio
-async def test_chat_not_initialized_error_contract(client, monkeypatch):
+async def test_chat_not_initialized_route_defers_to_manager_lazy_init(client, monkeypatch):
+    """路由层不再预检查 NOT_INITIALIZED：未初始化/跨 worker（本 worker 无实例）时，
+    请求直达 manager.process_message，由其内部懒初始化。"""
+    calls = []
+
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        calls.append((user_id, message, request_id, attachment_ids))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
+
+    monkeypatch.setattr(manager, "get", lambda _user_id: None)  # 模拟本 worker 无实例
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
+
+    response = await client.post(
+        "/api/u1/chat",
+        json={"message": "hello"},
+        headers={"X-Request-ID": "rid-chat"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("u1", "hello", "rid-chat", [])]  # ChatRequest.attachment_ids 默认 []
+
+
+@pytest.mark.anyio
+async def test_chat_lazy_init_failure_still_returns_not_initialized(client, monkeypatch):
+    """manager 懒初始化后仍无实例（初始化失败）时，NOT_INITIALIZED 仍以 400 透传给客户端。"""
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        from webui_new.core.errors import BusinessError
+        raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+
     monkeypatch.setattr(manager, "get", lambda _user_id: None)
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
 
     response = await client.post(
         "/api/u1/chat",
@@ -172,11 +201,12 @@ async def test_empty_text_with_attachment_is_valid_chat_input(client, monkeypatc
     class FakeInstance:
         initialized = True
 
-        async def process_message(self, message, request_id=None, attachment_ids=None):
-            calls.append((message, request_id, attachment_ids))
-            return {"response": "ok", "agents": [], "preferences_updated": False}
+    async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
+        calls.append((user_id, message, request_id, attachment_ids))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
 
     monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
     response = await client.post(
         "/api/u1/chat",
         json={"message": "", "attachment_ids": ["att_1"]},
@@ -184,7 +214,7 @@ async def test_empty_text_with_attachment_is_valid_chat_input(client, monkeypatc
     )
 
     assert response.status_code == 200
-    assert calls == [("", "rid-attachment-chat", ["att_1"])]
+    assert calls == [("u1", "", "rid-attachment-chat", ["att_1"])]
 
 
 @pytest.mark.anyio
@@ -319,7 +349,14 @@ async def test_stream_error_event_contract(client, monkeypatch):
             yield {"type": "status", "message": "processing"}
             raise RuntimeError("api_key=secret-stream")
 
-    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    instance = FakeInstance()
+    monkeypatch.setattr(manager, "get", lambda _user_id: instance)
+
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(message, request_id=request_id):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
 
     response = await client.post(
         "/api/u1/chat/stream",
@@ -386,6 +423,14 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(
+            message, request_id=request_id, attachment_ids=attachment_ids
+        ):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
+
     response = await client.post(
         "/api/u1/chat/stream",
         json={"message": "我要去出差"},
@@ -395,9 +440,11 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     assert response.status_code == 200
     events = [json.loads(line) for line in response.text.splitlines()]
     assert events[-1]["type"] == "done"
-    rendered = "".join(event.get("text", "") for event in events if event.get("type") == "chunk")
-    assert "住宿标准以公司制度为准" in rendered
-    assert "降级处理" in rendered
+    documents = [event["document"] for event in events if event.get("type") == "answer_document"]
+    assert len(documents) == 1
+    assert "住宿标准以公司制度为准" in documents[0]["plain_text"]
+    assert "降级处理" in documents[0]["plain_text"]
+    assert not any(event.get("type") == "chunk" for event in events)
     assert "Error in input stream" not in response.text
 
 
@@ -443,6 +490,14 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
     instance.orchestrator = Orchestrator()
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
+
+    async def fake_stream_message(user_id, message, *, request_id=None, attachment_ids=None):
+        async for event in instance.stream_message(
+            message, request_id=request_id, attachment_ids=attachment_ids
+        ):
+            yield event
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
 
     response = await client.post(
         "/api/u1/chat/stream",

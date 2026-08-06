@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from agents.intention_agent import IntentionAgent
 from agents.lazy_agent_registry import LazyAgentRegistry
 from agents.orchestration_agent import OrchestrationAgent
-from settings import LLM_CONFIG, RESILIENCE_CONFIG, SYSTEM_CONFIG
+from settings import COMPOSER_CONFIG, LLM_CONFIG, SYSTEM_CONFIG
 from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
 from utils.circuit_breaker import CircuitBreaker
@@ -16,6 +16,7 @@ from core.execution_budget import BudgetedModel
 @dataclass
 class AgentRuntime:
     model: object
+    composer_model: object
     memory_manager: MemoryManager
     intention_agent: IntentionAgent
     agent_registry: LazyAgentRegistry
@@ -49,19 +50,31 @@ def create_agent_runtime(
     from agentscope.model import OpenAIChatModel
 
     timeout_sec = SYSTEM_CONFIG.get("timeout", 60)
-    raw_model = OpenAIChatModel(
-        model_name=LLM_CONFIG["model_name"],
-        api_key=LLM_CONFIG["api_key"],
-        client_kwargs={
-            "base_url": LLM_CONFIG["base_url"],
-            "timeout": float(timeout_sec),
-        },
-        generate_kwargs={
-            "temperature": LLM_CONFIG.get("temperature", 0.7),
-            "max_tokens": LLM_CONFIG.get("max_tokens", 8192),
-        },
+    def create_model(config):
+        raw = OpenAIChatModel(
+            model_name=config["model_name"],
+            api_key=config["api_key"],
+            client_kwargs={
+                "base_url": config["base_url"],
+                "timeout": float(timeout_sec),
+            },
+            generate_kwargs={
+                "temperature": config.get("temperature", 0.7),
+                "max_tokens": config.get("max_tokens", 8192),
+            },
+        )
+        return BudgetedModel(raw)
+
+    model = create_model(LLM_CONFIG)
+    composer_uses_main_model = all(
+        COMPOSER_CONFIG.get(key) == LLM_CONFIG.get(key)
+        for key in ("model_name", "api_key", "base_url", "temperature", "max_tokens")
     )
-    model = BudgetedModel(raw_model)
+    composer_model = (
+        model
+        if composer_uses_main_model
+        else create_model(COMPOSER_CONFIG)
+    ) if COMPOSER_CONFIG.get("enabled", True) else None
 
     memory_manager = MemoryManager(
         user_id=user_id,
@@ -91,6 +104,7 @@ def create_agent_runtime(
 
     return AgentRuntime(
         model=model,
+        composer_model=composer_model,
         memory_manager=memory_manager,
         intention_agent=intention_agent,
         agent_registry=agent_registry,
@@ -101,10 +115,13 @@ def create_agent_runtime(
 
 
 def create_circuit_breaker() -> CircuitBreaker:
-    """Create the shared circuit breaker from resilience config."""
-    rc = RESILIENCE_CONFIG
-    return CircuitBreaker(
-        failure_threshold=rc.get("circuit_failure_threshold", 5),
-        recovery_timeout_sec=rc.get("circuit_recovery_timeout_sec", 60.0),
-        half_open_successes=rc.get("circuit_half_open_successes", 2),
-    )
+    """Create the process-shared Redis-backed circuit breaker.
+
+    Returns the async-native ``utils.redis_coordination.RedisCircuitBreaker``
+    (duck-typed against the legacy sync ``CircuitBreaker`` interface); callers
+    must ``await`` the async methods. The legacy synchronous class is kept for
+    remaining sync call paths.
+    """
+    from utils.redis_coordination import create_redis_circuit_breaker
+
+    return create_redis_circuit_breaker()

@@ -84,11 +84,16 @@ class OrchestrationAgent(AgentBase):
         self,
         x: Optional[Union[Msg, List[Msg]]] = None,
         *,
+        progress_callback=None,
         request_context: Optional[Dict[str, Any]] = None,
     ) -> Msg:
         """Execute with the caller's budget, or create one for non-Web entrypoints."""
         if current_execution_budget() is not None:
-            return await self._reply_impl(x, request_context=request_context)
+            return await self._reply_impl(
+                x,
+                progress_callback=progress_callback,
+                request_context=request_context,
+            )
 
         rc = RESILIENCE_CONFIG
         budget = ExecutionBudget(
@@ -99,16 +104,35 @@ class OrchestrationAgent(AgentBase):
         try:
             with execution_budget_scope(budget):
                 return await asyncio.wait_for(
-                    self._reply_impl(x, request_context=request_context),
+                    self._reply_impl(
+                        x,
+                        progress_callback=progress_callback,
+                        request_context=request_context,
+                    ),
                     timeout=rc.get("request_timeout_sec", 120.0),
                 )
         finally:
             logger.info("Orchestration execution budget: %s", budget.snapshot())
 
+    async def reply_with_progress(
+        self,
+        x,
+        progress_callback,
+        *,
+        request_context: Optional[Dict[str, Any]] = None,
+    ) -> Msg:
+        """Explicit progress-capable entrypoint used by streaming Web clients."""
+        return await self.reply(
+            x,
+            progress_callback=progress_callback,
+            request_context=request_context,
+        )
+
     async def _reply_impl(
         self,
         x: Optional[Union[Msg, List[Msg]]] = None,
         *,
+        progress_callback=None,
         request_context: Optional[Dict[str, Any]] = None,
     ) -> Msg:
         """
@@ -180,7 +204,10 @@ class OrchestrationAgent(AgentBase):
         logger.info(f"Orchestrating {len(sorted_schedule)} agents")
 
         # 准备上下文信息
-        context = self._prepare_context(intention_data, request_context=request_context)
+        context = self.prepare_context(
+            intention_data,
+            request_context=request_context,
+        )
 
         # 按优先级分批执行；同一优先级并行，不同优先级顺序执行。
         results = []
@@ -189,8 +216,10 @@ class OrchestrationAgent(AgentBase):
         priorities = sorted({task.get("priority", 999) for task in sorted_schedule})
         for priority in priorities:
             batch = [task for task in sorted_schedule if task.get("priority", 999) == priority]
+            await self._emit_batch_progress(progress_callback, batch, "running")
             batch_results = await self._execute_parallel_agents(batch, context, results)
             results.extend(batch_results)
+            await self._emit_result_progress(progress_callback, batch_results)
 
             if self._has_abort_failure(batch_results):
                 remaining = [
@@ -206,7 +235,12 @@ class OrchestrationAgent(AgentBase):
                 break
 
         if not halted and not paused_for_input:
-            await self._continue_ready_trip_planning(sorted_schedule, context, results)
+            await self._continue_ready_trip_planning(
+                sorted_schedule,
+                context,
+                results,
+                progress_callback=progress_callback,
+            )
 
         # 聚合结果
         final_result = self._aggregate_results(results, intention_data)
@@ -228,6 +262,26 @@ class OrchestrationAgent(AgentBase):
         )
 
     @staticmethod
+    async def _emit_batch_progress(progress_callback, batch: List[Dict], phase: str) -> None:
+        if progress_callback is None:
+            return
+        from core.orchestration.events import task_event
+        for task in batch:
+            agent_name = str(task.get("agent_name") or "task")
+            await progress_callback(task_event(phase, f"legacy-{agent_name}", agent_name))
+
+    @staticmethod
+    async def _emit_result_progress(progress_callback, results: List[Dict]) -> None:
+        if progress_callback is None:
+            return
+        from core.orchestration.events import task_event
+        for item in results:
+            agent_name = str(item.get("agent_name") or "task")
+            status = (item.get("result") or {}).get("status")
+            phase = "completed" if status == "success" else "failed"
+            await progress_callback(task_event(phase, f"legacy-{agent_name}", agent_name))
+
+    @staticmethod
     def _pause_incomplete_trip_planning(schedule: List[Dict], results: List[Dict]) -> bool:
         """Stop a planning workflow after collection until required facts exist."""
         if not any(item.get("agent_name") == "itinerary_planning" for item in schedule):
@@ -247,6 +301,7 @@ class OrchestrationAgent(AgentBase):
         schedule: List[Dict],
         context: Dict[str, Any],
         results: List[Dict],
+        progress_callback=None,
     ) -> None:
         """Resume an active trip as soon as its final required fact is collected."""
         if any(item.get("agent_name") == "itinerary_planning" for item in schedule):
@@ -274,8 +329,10 @@ class OrchestrationAgent(AgentBase):
         priorities = sorted({item.get("priority", 999) for item in follow_up})
         for priority in priorities:
             batch = [item for item in follow_up if item.get("priority", 999) == priority]
+            await self._emit_batch_progress(progress_callback, batch, "running")
             batch_results = await self._execute_parallel_agents(batch, context, results)
             results.extend(batch_results)
+            await self._emit_result_progress(progress_callback, batch_results)
             if self._has_abort_failure(batch_results):
                 remaining = [
                     item for item in follow_up
@@ -312,7 +369,7 @@ class OrchestrationAgent(AgentBase):
             for task in tasks
         ]
 
-    def _prepare_context(
+    def prepare_context(
         self,
         intention_data: Dict[str, Any],
         *,
@@ -353,6 +410,13 @@ class OrchestrationAgent(AgentBase):
             context["active_trip"] = self.memory_manager.get_active_trip()
 
         return context
+
+    # Backward-compatible alias for callers and tests that used the former private helper.
+    _prepare_context = prepare_context
+
+    async def execute_task(self, **kwargs) -> Dict[str, Any]:
+        """Public runner used by task-scoped orchestration pipelines."""
+        return await self._execute_agent(**kwargs)
 
     def _filter_enabled_schedule(self, schedule: List[Dict[str, Any]]):
         enabled = []
@@ -402,6 +466,22 @@ class OrchestrationAgent(AgentBase):
                     if runtime_result.get("status") == "error" else None
                 ),
             )
+
+    def record_task_results(self, intention_data: Dict[str, Any], task_results: List[Any]) -> None:
+        """Record task-pipeline results through the existing skill audit store."""
+        legacy_results = []
+        for item in task_results:
+            legacy_results.append({
+                "agent_name": item.agent_name,
+                "result": {
+                    "status": item.status,
+                    "data": item.data,
+                    "duration_sec": item.duration_sec,
+                    "attempts": item.attempts,
+                    "error_code": item.error_code,
+                },
+            })
+        self._record_skill_runs(intention_data, legacy_results)
 
     async def _execute_parallel_agents(
         self,

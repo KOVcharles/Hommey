@@ -4,8 +4,7 @@
 Lazy plugin registry for skill-backed agents.
 
 The runtime skill root is controlled by settings.SKILL_CONFIG["root"] or the
-HOMMEY_SKILLS_ROOT environment variable. It defaults to .claude/skills for
-backward compatibility with the current repository layout.
+HOMMEY_SKILLS_ROOT environment variable. It defaults to .agents/skills.
 """
 import importlib.util
 import inspect
@@ -37,7 +36,7 @@ class LazyAgentRegistry:
         self.mcp_manager = mcp_manager
 
         project_root = Path(__file__).parent.parent.resolve()
-        configured_root = skills_root or SKILL_CONFIG.get("root", ".claude/skills")
+        configured_root = skills_root or SKILL_CONFIG.get("root", ".agents/skills")
         self.skills_root = Path(configured_root)
         if not self.skills_root.is_absolute():
             self.skills_root = project_root / self.skills_root

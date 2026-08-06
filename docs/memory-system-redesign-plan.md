@@ -1056,7 +1056,7 @@ Repository 使用 `Protocol` 定义契约，PostgreSQL 和 file-dev 实现必须
 
 ### 19.6 Memory Query Skill
 
-修改 `.claude/skills/memory-query/script/agent.py`：
+修改 `.agents/skills/memory-query/script/agent.py`：
 
 - 不再读取 50 条行程并临时调用长期摘要模型；
 - 调用统一 `retrieve_history()`；

@@ -9,6 +9,13 @@ import json
 import logging
 import uuid
 
+from .preference_schema import (
+    PREFERENCE_LIST_COLUMNS,
+    PREFERENCE_SCALAR_COLUMNS,
+    normalize_list_preference,
+    normalize_scalar_preference,
+)
+
 from utils.memory_safety import (
     filter_safe_memory_mapping,
     is_safe_preference_value,
@@ -145,6 +152,8 @@ class FileLongTermMemory:
             "timestamp": _utc_now_iso(),
             "session_id": session_id,
             "request_id": request_id,
+            "answer_document": metadata.get("answer_document"),
+            "presentation_document": metadata.get("presentation_document"),
         })
         stats = self.data.setdefault("statistics", {})
         stats["total_messages"] = int(stats.get("total_messages", 0)) + 1
@@ -361,6 +370,81 @@ class LegacyAutocommitPostgresLongTermMemory:
             )
             cur.execute(
                 """
+                CREATE TABLE IF NOT EXISTS user_travel_preferences (
+                    user_id TEXT PRIMARY KEY,
+                    home_location TEXT,
+                    transportation_preference TEXT,
+                    hotel_brands JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    airlines JSONB NOT NULL DEFAULT '[]'::jsonb,
+                    seat_preference TEXT,
+                    meal_preference TEXT,
+                    budget_level TEXT,
+                    extra_preferences JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    preference_updated_at JSONB NOT NULL DEFAULT '{}'::jsonb,
+                    created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
+                    CONSTRAINT ck_user_travel_preferences_hotel_brands_array
+                        CHECK (jsonb_typeof(hotel_brands) = 'array'),
+                    CONSTRAINT ck_user_travel_preferences_airlines_array
+                        CHECK (jsonb_typeof(airlines) = 'array'),
+                    CONSTRAINT ck_user_travel_preferences_extra_object
+                        CHECK (jsonb_typeof(extra_preferences) = 'object'),
+                    CONSTRAINT ck_user_travel_preferences_timestamps_object
+                        CHECK (jsonb_typeof(preference_updated_at) = 'object')
+                );
+                """
+            )
+            cur.execute(
+                """
+                WITH aggregated AS (
+                    SELECT
+                        user_id,
+                        jsonb_object_agg(pref_type, pref_value) AS preferences,
+                        jsonb_object_agg(pref_type, to_jsonb(updated_at))
+                            AS preference_updated_at,
+                        MIN(updated_at) AS created_at,
+                        MAX(updated_at) AS updated_at
+                    FROM user_preferences
+                    GROUP BY user_id
+                )
+                INSERT INTO user_travel_preferences (
+                    user_id, home_location, transportation_preference,
+                    hotel_brands, airlines, seat_preference, meal_preference,
+                    budget_level, extra_preferences, preference_updated_at,
+                    created_at, updated_at
+                )
+                SELECT
+                    user_id,
+                    preferences ->> 'home_location',
+                    preferences ->> 'transportation_preference',
+                    CASE
+                        WHEN preferences -> 'hotel_brands' IS NULL THEN '[]'::jsonb
+                        WHEN jsonb_typeof(preferences -> 'hotel_brands') = 'array'
+                            THEN preferences -> 'hotel_brands'
+                        ELSE jsonb_build_array(preferences -> 'hotel_brands')
+                    END,
+                    CASE
+                        WHEN preferences -> 'airlines' IS NULL THEN '[]'::jsonb
+                        WHEN jsonb_typeof(preferences -> 'airlines') = 'array'
+                            THEN preferences -> 'airlines'
+                        ELSE jsonb_build_array(preferences -> 'airlines')
+                    END,
+                    preferences ->> 'seat_preference',
+                    preferences ->> 'meal_preference',
+                    preferences ->> 'budget_level',
+                    preferences - ARRAY[
+                        'home_location', 'transportation_preference', 'hotel_brands',
+                        'airlines', 'seat_preference', 'meal_preference', 'budget_level'
+                    ],
+                    preference_updated_at,
+                    created_at,
+                    updated_at
+                FROM aggregated
+                ON CONFLICT (user_id) DO NOTHING;
+                """
+            )
+            cur.execute(
+                """
                 CREATE TABLE IF NOT EXISTS chat_history (
                     id BIGSERIAL PRIMARY KEY,
                     user_id TEXT NOT NULL,
@@ -368,6 +452,8 @@ class LegacyAutocommitPostgresLongTermMemory:
                     role TEXT NOT NULL,
                     content TEXT NOT NULL,
                     request_id TEXT,
+                    answer_document JSONB,
+                    presentation_document JSONB,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW()
                 );
                 """
@@ -400,6 +486,8 @@ class LegacyAutocommitPostgresLongTermMemory:
                 """
             )
             cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS request_id TEXT;")
+            cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS answer_document JSONB;")
+            cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS presentation_document JSONB;")
             cur.execute("ALTER TABLE trip_history ADD COLUMN IF NOT EXISTS request_id TEXT;")
             cur.execute(
                 """
@@ -525,25 +613,93 @@ class LegacyAutocommitPostgresLongTermMemory:
 
     def save_preference(self, pref_type: str, value: Any):
         """
-        保存用户偏好（列表格式）
+        保存用户偏好。
+
+        核心偏好写入类型明确的列，扩展偏好写入 extra_preferences；同时双写
+        旧 EAV 表，便于迁移期回滚。读取始终以新表为准。
 
         Args:
             pref_type: 偏好类型
             value: 偏好值
         """
+        pref_type = str(pref_type or "").strip()
+        if not pref_type:
+            raise ValueError("Preference type cannot be empty")
         if not is_safe_preference_value(value):
             raise ValueError(f"Sensitive value is not allowed for preference: {pref_type}")
         value = sanitize_memory_value(value)
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                INSERT INTO user_preferences (user_id, pref_type, pref_value, updated_at)
-                VALUES (%s, %s, %s, NOW())
-                ON CONFLICT (user_id, pref_type)
-                DO UPDATE SET pref_value = EXCLUDED.pref_value, updated_at = NOW();
-                """,
-                (self.user_id, pref_type, self._jsonb(value)),
-            )
+        stored_value = value
+
+        with self.conn.transaction():
+            with self.conn.cursor() as cur:
+                if pref_type in PREFERENCE_SCALAR_COLUMNS:
+                    column = PREFERENCE_SCALAR_COLUMNS[pref_type]
+                    stored_value = self._normalize_scalar_preference(value)
+                    cur.execute(
+                        f"""
+                        INSERT INTO user_travel_preferences (
+                            user_id, {column}, preference_updated_at
+                        )
+                        VALUES (%s, %s, jsonb_build_object(%s::text, to_jsonb(NOW())))
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            {column} = EXCLUDED.{column},
+                            preference_updated_at =
+                                user_travel_preferences.preference_updated_at
+                                || EXCLUDED.preference_updated_at,
+                            updated_at = NOW();
+                        """,
+                        (self.user_id, stored_value, pref_type),
+                    )
+                elif pref_type in PREFERENCE_LIST_COLUMNS:
+                    column = PREFERENCE_LIST_COLUMNS[pref_type]
+                    stored_value = self._normalize_list_preference(value)
+                    cur.execute(
+                        f"""
+                        INSERT INTO user_travel_preferences (
+                            user_id, {column}, preference_updated_at
+                        )
+                        VALUES (%s, %s, jsonb_build_object(%s::text, to_jsonb(NOW())))
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            {column} = EXCLUDED.{column},
+                            preference_updated_at =
+                                user_travel_preferences.preference_updated_at
+                                || EXCLUDED.preference_updated_at,
+                            updated_at = NOW();
+                        """,
+                        (self.user_id, self._jsonb(stored_value), pref_type),
+                    )
+                else:
+                    cur.execute(
+                        """
+                        INSERT INTO user_travel_preferences (
+                            user_id, extra_preferences, preference_updated_at
+                        )
+                        VALUES (
+                            %s,
+                            jsonb_build_object(%s::text, %s),
+                            jsonb_build_object(%s::text, to_jsonb(NOW()))
+                        )
+                        ON CONFLICT (user_id) DO UPDATE SET
+                            extra_preferences =
+                                user_travel_preferences.extra_preferences
+                                || EXCLUDED.extra_preferences,
+                            preference_updated_at =
+                                user_travel_preferences.preference_updated_at
+                                || EXCLUDED.preference_updated_at,
+                            updated_at = NOW();
+                        """,
+                        (self.user_id, pref_type, self._jsonb(stored_value), pref_type),
+                    )
+
+                cur.execute(
+                    """
+                    INSERT INTO user_preferences (user_id, pref_type, pref_value, updated_at)
+                    VALUES (%s, %s, %s, NOW())
+                    ON CONFLICT (user_id, pref_type)
+                    DO UPDATE SET pref_value = EXCLUDED.pref_value, updated_at = NOW();
+                    """,
+                    (self.user_id, pref_type, self._jsonb(stored_value)),
+                )
         logger.info(f"Saved preference: {pref_type} = {value}")
 
     def get_preference(self, pref_type: str = None) -> Any:
@@ -556,7 +712,35 @@ class LegacyAutocommitPostgresLongTermMemory:
         Returns:
             偏好值或偏好字典
         """
-        if pref_type is None:
+        with self.conn.cursor() as cur:
+            cur.execute(
+                """
+                SELECT
+                    home_location,
+                    transportation_preference,
+                    hotel_brands,
+                    airlines,
+                    seat_preference,
+                    meal_preference,
+                    budget_level,
+                    extra_preferences
+                FROM user_travel_preferences
+                WHERE user_id = %s;
+                """,
+                (self.user_id,),
+            )
+            row = cur.fetchone()
+
+        if row:
+            preferences = dict(row.get("extra_preferences") or {})
+            for key in PREFERENCE_SCALAR_COLUMNS:
+                if row.get(key) is not None:
+                    preferences[key] = row[key]
+            for key in PREFERENCE_LIST_COLUMNS:
+                if row.get(key):
+                    preferences[key] = row[key]
+        else:
+            # 兼容尚未执行迁移的独立实例；正常启动流程不会走到这里。
             with self.conn.cursor() as cur:
                 cur.execute(
                     """
@@ -567,19 +751,19 @@ class LegacyAutocommitPostgresLongTermMemory:
                     (self.user_id,),
                 )
                 rows = cur.fetchall()
-            return {row["pref_type"]: row["pref_value"] for row in rows}
+            preferences = {item["pref_type"]: item["pref_value"] for item in rows}
 
-        with self.conn.cursor() as cur:
-            cur.execute(
-                """
-                SELECT pref_value
-                FROM user_preferences
-                WHERE user_id = %s AND pref_type = %s;
-                """,
-                (self.user_id, pref_type),
-            )
-            row = cur.fetchone()
-        return row["pref_value"] if row else None
+        if pref_type is None:
+            return preferences
+        return preferences.get(pref_type)
+
+    @staticmethod
+    def _normalize_scalar_preference(value: Any) -> str:
+        return normalize_scalar_preference(value)
+
+    @staticmethod
+    def _normalize_list_preference(value: Any) -> List[Any]:
+        return normalize_list_preference(value)
 
     def add_hotel_brand(self, brand: str):
         """添加酒店品牌偏好（追加到列表）"""
@@ -619,17 +803,30 @@ class LegacyAutocommitPostgresLongTermMemory:
         metadata = metadata or {}
         content = redact_sensitive_text(content)
         request_id = metadata.get("request_id")
+        answer_document = metadata.get("answer_document")
+        presentation_document = metadata.get("presentation_document")
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO chat_history (user_id, session_id, role, content, request_id, created_at)
-                VALUES (%s, %s, %s, %s, %s, NOW())
+                INSERT INTO chat_history (
+                    user_id, session_id, role, content, request_id,
+                    answer_document, presentation_document, created_at
+                )
+                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (user_id, request_id, role)
                 WHERE request_id IS NOT NULL
                 DO NOTHING
                 RETURNING id;
                 """,
-                (self.user_id, session_id, role, content, request_id),
+                (
+                    self.user_id,
+                    session_id,
+                    role,
+                    content,
+                    request_id,
+                    self._jsonb(answer_document) if answer_document else None,
+                    self._jsonb(presentation_document) if presentation_document else None,
+                ),
             )
             inserted = cur.fetchone()
             if not inserted:
@@ -664,7 +861,8 @@ class LegacyAutocommitPostgresLongTermMemory:
             消息列表
         """
         sql = """
-            SELECT id, role, content, created_at, session_id, request_id
+            SELECT id, role, content, created_at, session_id, request_id,
+                   answer_document, presentation_document
             FROM chat_history
             WHERE user_id = %s
         """
@@ -694,6 +892,8 @@ class LegacyAutocommitPostgresLongTermMemory:
                 "timestamp": row["created_at"].isoformat(),
                 "session_id": row["session_id"],
                 "request_id": row["request_id"],
+                "answer_document": row.get("answer_document"),
+                "presentation_document": row.get("presentation_document"),
             }
             for row in rows
         ]

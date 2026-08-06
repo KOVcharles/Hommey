@@ -12,13 +12,13 @@ def test_rag_knowledge_skill_is_registered():
 
 
 def test_rag_knowledge_skill_has_agent_script():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
 
     assert script_path.exists()
 
 
 def test_rag_agent_extracts_async_stream_text():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -37,7 +37,7 @@ def test_rag_agent_extracts_async_stream_text():
 
 
 def test_rag_agent_collapses_cumulative_stream_text():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_cumulative", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -57,7 +57,7 @@ def test_rag_agent_collapses_cumulative_stream_text():
 
 
 def test_rag_agent_preserves_streaming_for_answer_generation():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_stream", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -90,7 +90,7 @@ def test_rag_agent_preserves_streaming_for_answer_generation():
 
 
 def test_rag_agent_llm_failure_does_not_dump_raw_context():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_failure", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -112,7 +112,7 @@ def test_rag_agent_llm_failure_does_not_dump_raw_context():
 
 
 def test_rag_agent_normalizes_contradictory_related_policy_answer():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_normalize", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -131,7 +131,7 @@ def test_rag_agent_normalizes_contradictory_related_policy_answer():
 
 
 def test_rag_agent_keeps_true_no_knowledge_answer_unchanged():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_true_empty", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -143,7 +143,7 @@ def test_rag_agent_keeps_true_no_knowledge_answer_unchanged():
 
 
 def test_rag_agent_normalizes_partial_policy_answer_without_domain_special_case():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_partial", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -158,7 +158,7 @@ def test_rag_agent_normalizes_partial_policy_answer_without_domain_special_case(
 
 
 def test_rag_agent_async_iterable_check_ignores_key_error():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_iterable", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -173,7 +173,7 @@ def test_rag_agent_async_iterable_check_ignores_key_error():
 
 
 def test_rag_agent_extracts_choice_content_when_text_attr_raises_key_error():
-    script_path = Path(".claude/skills/ask-question/script/agent.py")
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
     spec = importlib.util.spec_from_file_location("rag_agent_test_module_choice", script_path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)

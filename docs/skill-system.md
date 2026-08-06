@@ -30,10 +30,10 @@ Hommey 的 Skill 是一个受 Git 管理的业务能力包。一个完整 Skill 
 
 ## 2. Skill 包结构
 
-默认根目录由 `HOMMEY_SKILLS_ROOT` 控制，未配置时为 `.claude/skills`。
+默认根目录由 `HOMMEY_SKILLS_ROOT` 控制，未配置时为 `.agents/skills`。
 
 ```text
-.claude/skills/<skill-name>/
+.agents/skills/<skill-name>/
 ├── SKILL.md               # 标准入口：frontmatter 元数据 + 模型指令，必需
 ├── hommey.yaml            # Hommey 运行时、治理和编排扩展，可选
 ├── script/
@@ -439,7 +439,7 @@ docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml res
 
 ### 13.2 创建包
 
-1. 在 `.claude/skills/<name>/` 创建带 `name`、`description` frontmatter 的 `SKILL.md`；
+1. 在 `.agents/skills/<name>/` 创建带 `name`、`description` frontmatter 的 `SKILL.md`；
 2. 若需要执行器，添加 `script/agent.py` 和唯一明确的 `AgentBase` 子类；
 3. 需要接入 Hommey 运行时时，再添加 `hommey.yaml`，声明意图、Agent、入口、风险、工具和执行计划；
 4. 需要结构契约时添加 `schemas/input.json`、`schemas/output.json`；

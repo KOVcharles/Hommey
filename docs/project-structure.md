@@ -10,7 +10,7 @@ main boundaries explicit so later refactors can be done safely.
   - `intention_agent.py` classifies user intent and builds the execution plan.
   - `orchestration_agent.py` schedules skill-backed agents and aggregates results.
   - `lazy_agent_registry.py` discovers and lazily loads skill plugins.
-- `.claude/skills/`: canonical runtime skill plugin directory for this branch.
+- `.agents/skills/`: canonical runtime skill plugin directory for this branch.
   - Each skill owns a standard `SKILL.md`, an optional validated `hommey.yaml` extension, and an optional `script/agent.py` implementation.
   - `SKILL.md` declares portable discovery metadata and instructions; `hommey.yaml` declares runtime versions, intent mapping, tool declarations, dependencies, schemas, and execution stages. Tool declarations are metadata, not an enforcement boundary.
   - The runtime path is configurable with `HOMMEY_SKILLS_ROOT`.
@@ -32,8 +32,9 @@ main boundaries explicit so later refactors can be done safely.
 - Skill discovery now resolves paths from the project root instead of the
   process working directory.
 - Skill metadata loading and skill agent loading now use the same configured
-  root: `HOMMEY_SKILLS_ROOT`, defaulting to `.claude/skills`.
-- `.agents/` is treated as a local/generated duplicate and ignored by Git.
+  root: `HOMMEY_SKILLS_ROOT`, defaulting to `.agents/skills`.
+- `.agents/skills/` is versioned with the application; other local agent output
+  should remain untracked.
 - Secrets are removed from `config.py`; runtime configuration is read from
   environment variables.
 - New memory files, local model assets, test reports, and `.env` files are

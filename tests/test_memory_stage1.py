@@ -6,6 +6,31 @@ import uuid
 
 from context.memory_repository import SessionRecord, stable_uuid
 from context.memory_service import MemoryService
+from webui_new.auth.migrations import _remap_legacy_version_collisions
+
+
+class MigrationCursor:
+    def __init__(self, rows):
+        self.rows = {row[0]: row for row in rows}
+        self.result = []
+
+    def execute(self, sql, params=None):
+        normalized = " ".join(sql.split()).upper()
+        if normalized.startswith("SELECT VERSION, NAME, CHECKSUM"):
+            self.result = [self.rows[key] for key in params if key in self.rows]
+        elif normalized.startswith("UPDATE SCHEMA_MIGRATIONS"):
+            new_version, new_name, old_version, old_name = params
+            row = self.rows.get(old_version)
+            if row and row[1] == old_name:
+                self.rows.pop(old_version)
+                self.rows[new_version] = (new_version, new_name, row[2])
+        elif normalized.startswith("DELETE FROM SCHEMA_MIGRATIONS"):
+            self.rows.pop(params[0], None)
+        else:  # pragma: no cover - keeps the fake strict
+            raise AssertionError(sql)
+
+    def fetchall(self):
+        return self.result
 
 
 def test_public_request_ids_map_to_stable_database_uuids():
@@ -37,6 +62,29 @@ def test_migration_versions_are_unique():
     migration_dir = Path(__file__).parents[1] / "webui_new/auth/migrations"
     versions = [path.stem.split("_", 1)[0] for path in migration_dir.glob("*.sql")]
     assert len(versions) == len(set(versions))
+
+
+def test_legacy_answer_migration_versions_are_remapped_before_validation():
+    cursor = MigrationCursor([
+        ("0006", "0006_answer_documents.sql", "answer-checksum"),
+        ("0007", "0007_presentation_documents.sql", "presentation-checksum"),
+        ("0008", "0008_user_travel_preferences.sql", "preference-checksum"),
+    ])
+
+    assert _remap_legacy_version_collisions(cursor) == 3
+    assert set(cursor.rows) == {"0009", "0010", "0011"}
+    assert cursor.rows["0009"][1] == "0009_answer_documents.sql"
+
+
+def test_main_memory_migration_versions_are_not_remapped():
+    cursor = MigrationCursor([
+        ("0006", "0006_memory_stage1.sql", "memory-checksum"),
+        ("0007", "0007_conversation_message_attachments.sql", "attachment-checksum"),
+        ("0008", "0008_memory_profile_stage2a.sql", "profile-checksum"),
+    ])
+
+    assert _remap_legacy_version_collisions(cursor) == 0
+    assert set(cursor.rows) == {"0006", "0007", "0008"}
 
 
 class BrokenCache:

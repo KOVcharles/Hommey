@@ -38,19 +38,23 @@ def create_chat_router(manager):
     async def send_message(
         request: Request, user_id: str, data: ChatRequest, current_user: User = Depends(require_path_user)
     ):
-        """发送消息并获取回复"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        """发送消息并获取回复。
 
+        不做 NOT_INITIALIZED 预检查：未初始化/跨 worker（实例在另一 worker）时
+        由 manager.process_message 内部懒初始化。会话列表等不走统一入口的路由
+        仍保留预检查。
+        """
         if not data.message.strip() and not data.attachment_ids:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         try:
             rid = request_id(request)
             logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(data.message))
-            result = await instance.process_message(
-                data.message, request_id=rid, attachment_ids=data.attachment_ids
+            result = await manager.process_message(
+                user_id,
+                data.message,
+                request_id=rid,
+                attachment_ids=data.attachment_ids,
             )
             safe_response = redact_sensitive_text(result.get("response", ""))
             logger.info("[%s] ◀ %s...", user_id, safe_response[:80])
@@ -65,20 +69,25 @@ def create_chat_router(manager):
     async def stream_message(
         request: Request, user_id: str, data: ChatRequest, current_user: User = Depends(require_path_user)
     ):
-        """Stream chat progress and response chunks as newline-delimited JSON."""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        """Stream chat progress and response chunks as newline-delimited JSON.
 
+        不做 NOT_INITIALIZED 预检查：未初始化/跨 worker（实例在另一 worker）时
+        由 manager.stream_message 内部懒初始化。
+        """
         if not data.message.strip() and not data.attachment_ids:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         async def event_stream():
-            """把 instance.stream_message() 的事件逐行编码为 NDJSON。"""
+            """把 manager.stream_message() 的事件逐行编码为 NDJSON。
+
+            manager.stream_message 在生成器内取锁（进程内锁 → 分布式锁 → 信号量），
+            持锁到流结束；前端断连时 CancelledError 冒泡到生成器，finally 释放锁。
+            """
             started_at = time.perf_counter()
             try:
                 logger.info("[%s] -> %s", user_id, redact_sensitive_text(data.message))
-                async for event in instance.stream_message(
+                async for event in manager.stream_message(
+                    user_id,
                     data.message,
                     request_id=request_id(request),
                     attachment_ids=data.attachment_ids,

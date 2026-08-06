@@ -9,6 +9,63 @@ from settings import AUTH_CONFIG, MEMORY_CONFIG
 
 MIGRATIONS_DIR = Path(__file__).with_name("migrations")
 
+# The structured-answer branch originally used 0006-0008 while the memory
+# foundation was being developed on main with the same versions. Re-map only
+# those exact historical names before checksum validation so either deployment
+# history can converge on one monotonic sequence without rerunning data moves.
+LEGACY_VERSION_REMAP = (
+    ("0006", "0009", "0006_answer_documents.sql", "0009_answer_documents.sql"),
+    ("0007", "0010", "0007_presentation_documents.sql", "0010_presentation_documents.sql"),
+    ("0008", "0011", "0008_user_travel_preferences.sql", "0011_user_travel_preferences.sql"),
+)
+
+
+def _remap_legacy_version_collisions(cur) -> int:
+    remapped = 0
+    for old_version, new_version, old_name, new_name in LEGACY_VERSION_REMAP:
+        cur.execute(
+            """
+            SELECT version, name, checksum
+            FROM schema_migrations
+            WHERE version IN (%s, %s)
+            """,
+            (old_version, new_version),
+        )
+        rows = cur.fetchall()
+        by_version = {
+            (row[0] if not isinstance(row, dict) else row["version"]): row
+            for row in rows
+        }
+        old_row = by_version.get(old_version)
+        if old_row is None:
+            continue
+        existing_name = old_row[1] if not isinstance(old_row, dict) else old_row["name"]
+        if existing_name != old_name:
+            continue
+
+        target_row = by_version.get(new_version)
+        if target_row is not None:
+            old_checksum = old_row[2] if not isinstance(old_row, dict) else old_row["checksum"]
+            target_checksum = (
+                target_row[2] if not isinstance(target_row, dict) else target_row["checksum"]
+            )
+            if old_checksum != target_checksum:
+                raise RuntimeError(
+                    f"Cannot reconcile migration {old_version}: target {new_version} differs"
+                )
+            cur.execute("DELETE FROM schema_migrations WHERE version = %s", (old_version,))
+        else:
+            cur.execute(
+                """
+                UPDATE schema_migrations
+                SET version = %s, name = %s
+                WHERE version = %s AND name = %s
+                """,
+                (new_version, new_name, old_version, old_name),
+            )
+        remapped += 1
+    return remapped
+
 
 def apply_all_migrations(postgres_dsn: str | None = None) -> int:
     dsn = postgres_dsn if postgres_dsn is not None else (
@@ -21,6 +78,14 @@ def apply_all_migrations(postgres_dsn: str | None = None) -> int:
 
     applied = 0
     with psycopg.connect(dsn, autocommit=False, connect_timeout=5) as conn:
+        # 串行化多 uvicorn worker 并发启动时的迁移，避免并发 INSERT 触发
+        # schema_migrations 主键冲突。用 session 级 advisory lock（而非 xact lock）：
+        # xact lock 会在下方第一次 commit（CREATE TABLE/remap 之后）随事务结束释放，
+        # 无法覆盖逐文件 commit 的迁移循环。session 级锁跨 commit 保持、覆盖整个迁移
+        # 过程；连接在 with 块退出（含异常）时自动关闭，session 锁随之释放，无泄漏路径。
+        with conn.cursor() as cur:
+            cur.execute("SELECT pg_advisory_lock(hashtext('hommey_migrations'))")
+
         with conn.cursor() as cur:
             cur.execute(
                 """
@@ -32,6 +97,7 @@ def apply_all_migrations(postgres_dsn: str | None = None) -> int:
                 )
                 """
             )
+            _remap_legacy_version_collisions(cur)
         conn.commit()
 
         for path in sorted(MIGRATIONS_DIR.glob("*.sql")):

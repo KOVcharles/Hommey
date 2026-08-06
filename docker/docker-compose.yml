@@ -33,6 +33,7 @@ services:
       HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
       HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
       HOMMEY_UPLOADS_PATH: /app/data/uploads
+      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
     volumes:
       - ../data/documents:/app/data/documents:ro
       - ../data/rag_knowledge:/app/data/rag_knowledge
