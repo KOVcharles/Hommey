@@ -1,4 +1,8 @@
-"""Fast rule-based intent routing before LLM intent recognition."""
+"""Fast rule-based intent routing before LLM intent recognition.
+
+router 只在高置信度、可证明无歧义时短路（LLM 主导识别）：关键词表作为数据来自
+core/guard_rules.py，单意图 schedule 一律取自 intent_catalog 的入口 agent。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -12,7 +16,21 @@ from core.intent_guard import (
     has_business_travel_context,
     passes_confidence_gate,
 )
-from core.intent_catalog import CHITCHAT_EXACT, CHITCHAT_KEYWORDS
+from core.intent_catalog import (
+    CHITCHAT_EXACT,
+    CHITCHAT_KEYWORDS,
+    self_schedule_for_intent,
+)
+from core.guard_rules import (
+    COMPLIANCE_KEYWORDS,
+    GENERIC_POLICY_KEYWORDS,
+    MEMORY_KEYWORDS,
+    POLICY_KEYWORDS,
+    PREFERENCE_KEYWORDS,
+    SEARCH_KEYWORDS,
+    TRIP_KEYWORDS,
+    WEATHER_KEYWORDS,
+)
 
 
 @dataclass(frozen=True)
@@ -59,22 +77,6 @@ class IntentRoute:
 class FastIntentRouter:
     """Cheap high-confidence router for common user requests."""
 
-    POLICY_KEYWORDS = (
-        "报销", "差旅政策", "住宿标准", "补贴",
-        "餐补", "餐费", "餐饮", "饭补", "补助", "津贴",
-        "住宿费", "交通费", "差旅费", "发票",
-    )
-    GENERIC_POLICY_KEYWORDS = ("标准", "流程")
-    WEATHER_KEYWORDS = ("天气", "气温", "下雨", "预报")
-    SEARCH_KEYWORDS = ("查一下", "搜索", "查询", "了解一下")
-    COMPLIANCE_KEYWORDS = ("合规", "符合标准", "检查行程", "行程检查", "是否超标")
-    MEMORY_KEYWORDS = ("我去过", "我的差旅", "差旅记录", "出差记录", "上次出差", "过去行程", "我的出行偏好")
-    PREFERENCE_KEYWORDS = ("我喜欢", "我常坐", "我常住", "我住在", "我家在", "我偏好", "我习惯", "我不喜欢")
-    TRIP_KEYWORDS = (
-        "帮我规划", "帮我安排", "规划行程", "安排行程", "规划路线", "出行方案",
-        "怎么走最好", "路线怎么走", "从",
-    )
-
     @classmethod
     def route(cls, user_query: str) -> Optional[IntentRoute]:
         q = (user_query or "").strip()
@@ -87,7 +89,7 @@ class FastIntentRouter:
             return cls._from_guard_result(guard_result)
 
         if q_lower in CHITCHAT_EXACT or q in CHITCHAT_EXACT or any(keyword in q for keyword in CHITCHAT_KEYWORDS):
-            return cls._single("chitchat", "chitchat", 0.99, "明确的寒暄或社交对话")
+            return cls._single("chitchat", 0.99, "明确的寒暄或社交对话")
 
         candidates = cls.detect(q)
         if candidates:
@@ -123,18 +125,18 @@ class FastIntentRouter:
 
         candidates: List[IntentCandidate] = []
 
-        has_policy = any(keyword in q for keyword in cls.POLICY_KEYWORDS) or (
-            any(keyword in q for keyword in cls.GENERIC_POLICY_KEYWORDS)
+        has_policy = any(keyword in q for keyword in POLICY_KEYWORDS) or (
+            any(keyword in q for keyword in GENERIC_POLICY_KEYWORDS)
             and has_business_travel_context(q)
         )
-        has_weather = any(keyword in q for keyword in cls.WEATHER_KEYWORDS)
-        has_search = any(keyword in q for keyword in cls.SEARCH_KEYWORDS)
-        has_compliance = any(keyword in q for keyword in cls.COMPLIANCE_KEYWORDS)
+        has_weather = any(keyword in q for keyword in WEATHER_KEYWORDS)
+        has_search = any(keyword in q for keyword in SEARCH_KEYWORDS)
+        has_compliance = any(keyword in q for keyword in COMPLIANCE_KEYWORDS)
 
-        if any(keyword in q for keyword in cls.MEMORY_KEYWORDS):
+        if any(keyword in q for keyword in MEMORY_KEYWORDS):
             candidates.append(IntentCandidate("memory_query", 0.9, "询问用户自己的历史或偏好记忆"))
 
-        if any(keyword in q for keyword in cls.PREFERENCE_KEYWORDS):
+        if any(keyword in q for keyword in PREFERENCE_KEYWORDS):
             candidates.append(IntentCandidate("preference", 0.9, "表达或更新用户偏好"))
 
         if has_policy:
@@ -161,20 +163,13 @@ class FastIntentRouter:
         return cls._dedupe_candidates(candidates)
 
     @classmethod
-    def _single(cls, intent_type: str, agent_name: str, confidence: float, reason: str) -> IntentRoute:
+    def _single(cls, intent_type: str, confidence: float, reason: str) -> IntentRoute:
         return IntentRoute(
             intent_type=intent_type,
             confidence=confidence,
             reason=reason,
             key_entities={},
-            agent_schedule=[
-                {
-                    "agent_name": agent_name,
-                    "priority": 1,
-                    "reason": reason,
-                    "expected_output": "完成用户请求",
-                }
-            ],
+            agent_schedule=self_schedule_for_intent(intent_type, reason, "完成用户请求"),
         )
 
     @classmethod
@@ -205,7 +200,7 @@ class FastIntentRouter:
     def _looks_like_trip_request(cls, query: str) -> bool:
         if not has_business_travel_context(query):
             return False
-        if any(keyword in query for keyword in cls.TRIP_KEYWORDS):
+        if any(keyword in query for keyword in TRIP_KEYWORDS):
             if "从" in query and ("到" in query or "去" in query):
                 return True
             return any(keyword in query for keyword in ("去", "规划", "安排", "行程", "路线", "出差", "差旅"))

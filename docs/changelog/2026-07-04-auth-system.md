@@ -2,7 +2,7 @@
 
 ## Summary
 
-为 TravelAgent 的 Web 层（`webui_new/`）接入**真实鉴权**：邮箱+密码注册/登录 +
+为 Hommey 的 Web 层（`webui_new/`）接入**真实鉴权**：邮箱+密码注册/登录 +
 JWT（access / refresh 双 token）+ 路由级「身份绑定」保护。此前 `routes/auth.py` 只有一个
 收集 `user_id` 的 `/login`，任何人都能冒充任意 `user_id` 访问他人会话与数据——本版彻底闭环。
 

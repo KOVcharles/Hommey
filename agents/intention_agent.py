@@ -18,7 +18,12 @@ from agentscope.message import Msg
 from typing import Optional, Union, List
 import json
 import logging
-from core.intent_catalog import build_intent_prompt_section
+from core.intent_catalog import (
+    build_intent_prompt_section,
+    catalog_rank,
+    execution_steps_for_intent,
+    is_skill_intent,
+)
 from core.intent_result import parse_json_object, validate_intent_result
 from core.intent_router import FastIntentRouter
 from core.schedule_builder import build_agent_schedule
@@ -340,21 +345,18 @@ class IntentionAgent(AgentBase):
         return self._apply_routing_guard(result, user_query)
 
     def _select_primary_intent(self, callable_intents: List[dict]) -> dict:
-        """Pick the display primary intent without affecting the executable schedule."""
-        priority = {
-            "itinerary_planning": 0,
-            "information_query": 1,
-            "rag_knowledge": 2,
-            "trip_compliance": 3,
-            "preference": 4,
-            "memory_query": 5,
-            "event_collection": 6,
-            "chitchat": 7,
-        }
+        """Pick the display primary intent without affecting the executable schedule.
+
+        纯声明式（无硬编码意图优先级 dict）：多步 workflow 意图（如 itinerary_planning
+        展开为 5 步）是组合请求的主语，优先成为 primary；单步意图之间用 catalog_order
+        排序。新增 skill 只改 hommey.yaml 即自动生效。
+        """
         def sort_key(item: dict):
             intent_type = item.get("type") or ""
+            steps = execution_steps_for_intent(intent_type)
+            complexity = -len(steps)  # 展开步骤越多越主导
             confidence = float(item.get("confidence") or 0.0)
-            return (priority.get(intent_type, 99), -confidence)
+            return (complexity, catalog_rank(intent_type), -confidence)
 
         return min(callable_intents, key=sort_key)
 
@@ -365,16 +367,15 @@ class IntentionAgent(AgentBase):
         confidence: float,
         conversation_context: str = "",
     ) -> bool:
-        if intent_type in {"unclear", "unsupported", "fallback"}:
+        # 授权集合即 skill 目录（is_skill_intent），非 skill 意图一律不调用。
+        if not is_skill_intent(intent_type):
             return False
         if intent_type == "chitchat":
             return is_limited_chitchat(user_query) and passes_confidence_gate(intent_type, confidence)
         if intent_type == "information_query":
             info_guard = can_call_information_query(user_query, confidence, conversation_context)
             return info_guard.intent == "information_query" and info_guard.should_call_skill
-        if intent_type in {
-            "rag_knowledge", "itinerary_planning", "trip_compliance", "event_collection",
-            "preference", "memory_query",
-        } and not has_business_travel_context(user_query, conversation_context):
+        # 其余 skill 意图：缺少公司差旅上下文时不调用（规则只做安全网，判定仍由 LLM 给出）。
+        if not has_business_travel_context(user_query, conversation_context):
             return False
         return passes_confidence_gate(intent_type, confidence)

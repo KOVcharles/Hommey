@@ -6,6 +6,21 @@ agent_name: itinerary_planning
 user_facing: true
 risk_level: medium
 catalog_order: 30
+side_effect_allowed: true
+progress_key: trip_planning
+checkpoint:
+  enabled: true
+  pause_agent: event_collection
+  pause_field: planning_ready
+answer:
+  section_kind: trip
+  require_section: true
+  suppress_agents: [event_collection, rag_knowledge, information_query]
+  primary_agent: itinerary_planning
+memory_hooks:
+  - agent: itinerary_planning
+    effect: complete_trip
+    require_field: itinerary
 tools: [active_trip_context, rag_retrieval, travel_information]
 input_schema: schemas/input.json
 output_schema: schemas/output.json
@@ -26,6 +41,7 @@ execution:
     max_retries: 1
     reason: 收集出差基础信息
     expected_output: 出发地、目的地、日期、工作地点和缺失信息
+    query: 收集本次出差安排：出发地={origin} 目的地={destination} 出发日期={start_date} 天数={duration} 目的={purpose}
   - skill: ask-question
     agent_name: rag_knowledge
     priority: 2
@@ -33,6 +49,7 @@ execution:
     max_retries: 1
     reason: 基于已收集的出差事项查询适用的公司差旅制度
     expected_output: 交通、住宿、补贴和报销政策证据
+    query: 查询 {origin}→{destination}、{start_date} 出发、为期 {duration} 天、目的为 {purpose} 的差旅制度（交通/住宿/补贴/报销标准）
   - skill: query-info
     agent_name: information_query
     priority: 2
@@ -40,6 +57,10 @@ execution:
     max_retries: 1
     reason: 基于已收集的出差事项查询目的地天气和公开交通信息
     expected_output: 带官方核验提醒的天气和路线级交通建议
+    query: 查询 {destination} 在 {start_date} 起 {duration} 天的天气和交通信息
+    result_rules:
+      error_when_field: query_success
+      error_code: INFORMATION_QUERY_UNAVAILABLE
   - skill: plan-trip
     agent_name: itinerary_planning
     priority: 3
@@ -47,6 +68,7 @@ execution:
     max_retries: 1
     reason: 基于事项、制度和外部信息生成差旅行程
     expected_output: 结构化公司差旅行程建议
+    query: 基于出发地={origin}、目的地={destination}、日期={start_date}、天数={duration}、目的={purpose} 规划合规差旅行程
   - skill: check-trip-compliance
     agent_name: trip_compliance
     priority: 4
@@ -54,3 +76,4 @@ execution:
     max_retries: 0
     reason: 依据知识库证据检查行程合规性
     expected_output: 合规结论、证据、风险和待确认事项
+    query: 检查 {destination} 行程（{duration} 天，目的 {purpose}）是否符合公司差旅制度

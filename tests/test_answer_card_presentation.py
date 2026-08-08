@@ -1,82 +1,92 @@
 from pathlib import Path
 
-from core.presentation import build_legacy_answer_document
+from core.orchestration.fallback_composer import FallbackComposer
+from core.orchestration.models import IntentTask, TaskResult
 
 
-def test_itinerary_result_becomes_dense_card_with_optional_plain_text():
-    result_data = {
-        "results": [{
-            "agent_name": "itinerary_planning",
-            "status": "success",
-            "data": {
-                "itinerary": {
-                    "title": "北京至南京两日出差",
-                    "duration": "2天1晚",
-                    "transport_recommendation": {
-                        "preferred": "高铁",
-                        "reason": "市中心往返更稳定",
-                        "alternative": "飞机",
-                    },
-                    "lodging_advice": "会议地点附近，400元/晚以内",
-                    "daily_plans": [{
-                        "day": 1,
-                        "activities": [{
-                            "time": "14:00",
-                            "activity": "客户会议",
-                            "transport": "地铁",
-                        }],
+def _compose(task, result):
+    return FallbackComposer().compose([task], [result])
+
+
+def test_itinerary_result_becomes_dense_trip_card():
+    task = IntentTask(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        query="规划南京出差行程",
+        entities={"destination": "南京"},
+        display_order=0,
+    )
+    result = TaskResult(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        agent_name="itinerary_planning",
+        status="success",
+        data={
+            "itinerary": {
+                "title": "北京至南京两日出差",
+                "duration": "2天1晚",
+                "transport_recommendation": {
+                    "preferred": "高铁",
+                    "reason": "市中心往返更稳定",
+                    "alternative": "飞机",
+                },
+                "lodging_advice": "会议地点附近，400元/晚以内",
+                "daily_plans": [{
+                    "day": 1,
+                    "activities": [{
+                        "time": "14:00",
+                        "activity": "客户会议",
+                        "transport": "地铁",
                     }],
-                    "notes": [
-                        "南京8月5日天气：多云，26~32°C，注意防暑，携带雨具和防晒用品。",
-                        "公司住宿标准未明确，预订前需要确认酒店价格。",
-                    ],
-                    "missing_info": ["客户会议的具体地点和时间"],
-                    "reimbursement_checklist": ["车票", "住宿发票"],
-                }
-            },
-        }]
-    }
+                }],
+                "notes": ["南京8月5日天气：多云，26~32°C，注意防暑。"],
+                "reimbursement_checklist": ["车票", "住宿发票"],
+            }
+        },
+        display_order=0,
+    )
 
-    document = build_legacy_answer_document(result_data, "完整文字方案")
+    document = _compose(task, result)
 
-    assert document.title == "北京至南京两日出差"
-    assert document.plain_text == "完整文字方案"
-    assert [section.title for section in document.sections] == [
-        "行程概览", "第 1 天",
-    ]
-    overview = document.sections[0]
-    assert {item.label for item in overview.items} >= {"行程时长", "首选交通", "住宿建议"}
+    assert document.title == "南京差旅信息"
+    assert document.sections[0].kind == "trip"
+    assert document.sections[0].title == "北京至南京两日出差"
+    overview_items = {item.label for item in document.sections[0].items}
+    assert {"行程时长", "首选交通", "住宿建议"} <= overview_items
+    assert document.sections[1].title == "第 1 天"
     assert document.sections[1].items[0].value == "客户会议"
-    assert document.pre_departure.pending_count == 2
-    assert [item.label for item in document.pre_departure.critical_items] == [
-        "会议安排", "交通票务", "酒店预订",
-    ]
-    assert document.pre_departure.weather.temperature == "26–32°C"
-    assert document.pre_departure.weather.preparation == ["雨具", "防晒用品", "补水防暑"]
-    assert [item.label for item in document.pre_departure.reimbursement_items] == [
-        "交通票据", "住宿发票",
-    ]
+    assert document.plain_text  # render_plain_text 生成可读文字
+    assert document.sections[0].status == "success"  # 成功 section 标记 success，非 error
 
 
 def test_single_weather_result_becomes_structured_weather_card():
-    result_data = {
-        "results": [{
-            "agent_name": "information_query",
-            "status": "success",
-            "data": {"results": {
-                "summary": (
-                    "南京当前天气：晴，气温 31°C，湿度 73%。未来几日："
-                    "2026-08-03: 晴，26~36°C；2026-08-04: 晴，25~33°C"
-                )
-            }},
-        }]
-    }
+    task = IntentTask(
+        task_id="information_query",
+        intent="information_query",
+        query="查南京天气",
+        entities={"destination": "南京"},
+        display_order=0,
+    )
+    result = TaskResult(
+        task_id="information_query",
+        intent="information_query",
+        agent_name="information_query",
+        status="success",
+        data={"results": {
+            "summary": (
+                "南京当前天气：晴，气温 31°C，湿度 73%。未来几日："
+                "2026-08-03: 晴，26~36°C；2026-08-04: 晴，25~33°C"
+            )
+        }},
+        display_order=0,
+    )
 
-    document = build_legacy_answer_document(result_data)
+    document = _compose(task, result)
 
-    assert document.title == "出行信息"
     assert document.sections[0].kind == "weather"
     assert len(document.sections[0].days) == 2
+    assert document.sections[0].days[0].low == "26°C"
+    assert document.sections[0].days[0].high == "36°C"
     assert document.sections[0].items[0].label == "当前"
 
 

@@ -4,7 +4,7 @@
 
 ## 1. 目标
 
-本次升级把 TravelAgent 从“意图、Prompt 和 Agent 分散配置”改造成以 Skill Manifest 为核心的企业差旅系统，目标是：
+本次升级把 Hommey 从“意图、Prompt 和 Agent 分散配置”改造成以 Skill Manifest 为核心的企业差旅系统，目标是：
 
 - 降低 Prompt 重复和冲突。
 - 让差旅问答、出差事项和合规检查成为可复用业务 Skill。

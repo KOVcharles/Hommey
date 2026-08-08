@@ -6,6 +6,7 @@ import logging
 from typing import Iterable
 
 from core.execution_budget import consume_agent_call
+from core.intent_catalog import section_kind_for_intent
 from core.intent_result import parse_json_object
 from core.llm_response import extract_text_from_response
 from core.presentation import AnswerDocument, render_plain_text
@@ -15,6 +16,10 @@ from .fallback_composer import FallbackComposer
 from .models import IntentTask, TaskResult
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_KINDS = {
+    "policy", "weather", "memory", "preference", "trip", "notice", "general",
+}
 
 
 class AnswerComposer:
@@ -105,17 +110,15 @@ class AnswerComposer:
         compact_results = []
         for result in results:
             data = result.data
-            if result.intent == "rag_knowledge":
-                facts = {
-                    "answer": data.get("answer") or data.get("content"),
-                }
-            elif result.intent == "information_query":
-                facts = data.get("results") if isinstance(data.get("results"), dict) else data
+            if isinstance(data.get("results"), dict):
+                facts = data["results"]
             else:
                 facts = data
             compact_results.append({
                 "task_id": result.task_id,
                 "intent": result.intent,
+                "agent": result.agent_name,
+                "kind": section_kind_for_intent(result.intent),
                 "status": result.status,
                 "facts": facts,
                 "error_message": result.error_message,
@@ -131,7 +134,7 @@ class AnswerComposer:
 
 生成一张紧凑的统一答案卡片。要求：
 - 按用户提问顺序组织 section，不提 Agent、RAG、编排或知识库缺少天气。
-- policy section 只整理制度；weather section 只整理天气。
+- 每个意图的 section.kind 用结果中标注的 kind（policy/weather/memory/preference/trip/notice/general）。
 - 尽量使用 items 和 days，避免大段文字。
 - 失败任务保留对应 section，status=error，并给出一句简短提示。
 - summary 不超过80个中文字符。
@@ -144,7 +147,7 @@ JSON结构：
   "summary": "一句综合结论",
   "sections": [
     {{
-      "kind": "policy或weather",
+      "kind": "policy或weather或memory或preference或trip或notice或general",
       "title": "分区标题",
       "status": "success、partial或error",
       "body": "必要时使用的短文本",

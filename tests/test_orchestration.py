@@ -1,4 +1,9 @@
-"""Unit tests for orchestration ordering, failure handling, and request context."""
+"""Thin-shell orchestration tests: execution ordering, retries, and request context.
+
+调度/暂停/聚合/abort-halt 语义已由 DAG 管线（MultiIntentPipeline）接管；
+``OrchestrationAgent.reply`` 是薄壳——按 agent_schedule 分批执行全部任务、
+不做 abort 停机、不聚合状态（详见 tests/test_task_orchestration_v2.py）。
+"""
 
 import json
 import asyncio
@@ -62,9 +67,11 @@ def test_orchestration_rejects_invalid_intention_json():
     assert payload["error"] == "Invalid intention format"
 
 
-def test_required_agent_failure_stops_and_skips_downstream_agents():
+def test_thin_shell_executes_every_batch_without_abort_halt():
+    # 薄壳不做 abort 停机：on_failure=abort 只随结果返回，下游仍执行。
+    # 真正的 abort-halt 语义在 DAG 管线中（见 test_task_orchestration_v2.py）。
     required = _ReplyAgent("required", [{"error": "invalid input"}])
-    downstream = _ReplyAgent("downstream", [{"answer": "should not run"}])
+    downstream = _ReplyAgent("downstream", [{"answer": "should run"}])
     orchestrator = OrchestrationAgent(
         agent_registry={"required": required, "downstream": downstream},
         memory_manager=None,
@@ -88,12 +95,12 @@ def test_required_agent_failure_stops_and_skips_downstream_agents():
     )
 
     payload = json.loads(response.content)
-    assert payload["status"] == "failed"
-    assert [item["status"] for item in payload["results"]] == ["error", "skipped"]
-    assert downstream.calls == 0
+    assert payload["status"] == "completed"
+    assert [item["result"]["status"] for item in payload["results"]] == ["error", "success"]
+    assert downstream.calls == 1
 
 
-def test_optional_agent_failure_returns_partial_success_and_continues():
+def test_thin_shell_returns_error_and_success_results_together():
     optional = _ReplyAgent("optional", [{"error": "service unavailable"}])
     required = _ReplyAgent("required", [{"answer": "usable result"}])
     orchestrator = OrchestrationAgent(
@@ -119,8 +126,8 @@ def test_optional_agent_failure_returns_partial_success_and_continues():
     )
 
     payload = json.loads(response.content)
-    assert payload["status"] == "partial_failure"
-    assert [item["status"] for item in payload["results"]] == ["error", "success"]
+    assert payload["status"] == "completed"
+    assert [item["result"]["status"] for item in payload["results"]] == ["error", "success"]
     assert required.calls == 1
 
 
@@ -154,7 +161,7 @@ def test_transient_agent_failure_retries_only_that_agent_once():
     response, budget = asyncio.run(run())
     payload = json.loads(response.content)
     assert payload["status"] == "completed"
-    assert payload["results"][0]["attempts"] == 2
+    assert payload["results"][0]["result"]["attempts"] == 2
     assert agent.calls == 2
     assert budget.agent_calls == 2
 
@@ -186,8 +193,8 @@ def test_agent_call_budget_turns_unbounded_execution_into_failure():
             )
 
     payload = json.loads(asyncio.run(run()).content)
-    assert payload["status"] == "failed"
-    assert payload["results"][1]["error_code"] == "AGENT_CALL_LIMIT_EXCEEDED"
+    assert payload["status"] == "completed"
+    assert payload["results"][1]["result"]["error_code"] == "AGENT_CALL_LIMIT_EXCEEDED"
     assert second.calls == 0
 
 

@@ -1,4 +1,11 @@
-"""Build executable agent schedules from callable intents."""
+"""Build executable agent schedules from callable intents.
+
+Legacy vestigial field: the DAG pipeline compiles execution from skill
+templates directly, so ``agent_schedule`` is only kept for contract
+compatibility. It is a pure flatten of each callable intent's template steps
+(no dedup, no workflow special cases — those semantics live in the graph
+builder's subsumption).
+"""
 from __future__ import annotations
 
 from typing import Any, Dict, List
@@ -19,32 +26,14 @@ SCHEDULE_RULES = _load_schedule_rules()
 
 
 def build_agent_schedule(intents: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    """Convert callable intents into a deduped, priority-sorted agent schedule."""
-    by_agent: Dict[str, Dict[str, Any]] = {}
-    itinerary_workflow = any(item.get("type") == "itinerary_planning" for item in intents)
-
+    """Flatten callable intents into a priority-sorted agent schedule."""
+    schedule = []
     for intent in intents:
         intent_type = intent.get("type")
         if not intent_type:
             continue
-
         for item in SCHEDULE_RULES.get(intent_type, []):
-            agent_name = item["agent_name"]
-            existing = by_agent.get(agent_name)
-            # A planning workflow must collect trip facts before querying policy
-            # or external information.  An additional explicit policy/weather
-            # intent must not pull either dependency back to priority 1.
-            depends_on_trip_facts = itinerary_workflow and agent_name in {
-                "rag_knowledge", "information_query",
-            }
-            should_replace = existing is None or (
-                item["priority"] > existing["priority"]
-                if depends_on_trip_facts
-                else item["priority"] < existing["priority"]
-            )
-            if should_replace:
-                runtime_item = dict(item)
-                runtime_item.pop("skill", None)
-                by_agent[agent_name] = runtime_item
-
-    return sorted(by_agent.values(), key=lambda item: item.get("priority", 999))
+            runtime_item = dict(item)
+            runtime_item.pop("skill", None)
+            schedule.append(runtime_item)
+    return sorted(schedule, key=lambda item: item.get("priority", 999))

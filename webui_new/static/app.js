@@ -74,6 +74,7 @@
         queued: '任务已经排好，马上开始',
     };
 
+    // 进度标签：优先用 GET /api/intents 动态填充，失败时退回本地保底 map。
     const progressAgentLabels = {
         rag_knowledge: '差旅标准',
         information_query: '天气与出行',
@@ -83,6 +84,24 @@
         itinerary_planning: '行程规划',
         trip_compliance: '合规检查',
     };
+    let dynamicAgentLabels = null;
+
+    function getAgentLabel(intent) {
+        if (dynamicAgentLabels && dynamicAgentLabels[intent]) return dynamicAgentLabels[intent];
+        return progressAgentLabels[intent] || null;
+    }
+
+    async function loadIntentLabels() {
+        try {
+            const intents = await fetchJson('/api/intents');
+            dynamicAgentLabels = {};
+            for (const [key, meta] of Object.entries(intents)) {
+                dynamicAgentLabels[key] = meta.display;
+            }
+        } catch (err) {
+            // 保底：继续使用本地 progressAgentLabels。
+        }
+    }
 
     // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
     let pendingAttachments = [];
@@ -225,6 +244,7 @@
                 if (!initData.success) throw createApiError(initData, '初始化失败');
             }
 
+            loadIntentLabels();
             await Promise.all([loadUserSummary(), loadActiveTrip(), loadSessions()]);
             hideInitOverlay();
             setInputEnabled(true);
@@ -1055,7 +1075,7 @@
             flushProcessingStatus();
         }
         if (event.type === 'task_status' && event.intent && event.phase === 'running') {
-            const label = progressAgentLabels[event.intent];
+            const label = getAgentLabel(event.intent);
             if (label) updateAgentTags([{ name: event.intent, display: label }]);
         }
     }

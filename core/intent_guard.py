@@ -1,11 +1,31 @@
-"""Lightweight intent guard used before skill routing."""
+"""Lightweight intent guard used before skill routing.
+
+guard 只做"可证明无歧义"的安全网（LLM 主导识别）：垃圾/寒暄/明确领域外/
+高风险操作在此短路；订票、付款等交易语言**放行**给 LLM 由产品边界判定。
+关键词表已收敛到 core/guard_rules.py（声明式数据）；本模块只保留判定逻辑，
+新增"购买车票"类 skill 时无需改任何 Python。
+"""
 from __future__ import annotations
 
 from dataclasses import dataclass, field
 import re
 from typing import Any, Dict, List, Optional
 
-from core.intent_catalog import CHITCHAT_EXACT, CHITCHAT_KEYWORDS
+from core.guard_rules import (
+    BUSINESS_TRAVEL_KEYWORDS,
+    FORBIDDEN_ACTIONS,
+    GIBBERISH_RE,
+    OUT_OF_SCOPE_KEYWORDS,
+    PERSONAL_TRAVEL_KEYWORDS,
+    TRAVEL_TRANSPORT_KEYWORDS,
+    UNCLEAR_EXACT,
+)
+from core.intent_catalog import (
+    CHITCHAT_EXACT,
+    CHITCHAT_KEYWORDS,
+    confidence_threshold_for_intent,
+    self_schedule_for_intent,
+)
 
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.65
@@ -46,40 +66,6 @@ class GuardResult:
         }
 
 
-UNCLEAR_EXACT = {
-    "你", "你?", "你？", "啊", "啊?", "啊？", "嗯", "嗯?", "嗯？",
-    "test", "测试", "随便看看", "看看", "查一下", "帮我查", "查询",
-}
-UNSUPPORTED_KEYWORDS = (
-    "订票付款", "帮我订票", "直接预订", "帮我预订", "帮我付款", "替我付款", "代付",
-    "直接支付", "帮我支付", "替我支付", "帮我转账", "执行转账",
-    "帮我提交审批", "替我提交审批", "帮我提交报销", "替我提交报销",
-    "删除服务器", "格式化",
-)
-OUT_OF_SCOPE_KEYWORDS = (
-    "写代码", "编程", "python", "java", "javascript", "数据库作业",
-    "数学题", "物理题", "化学题", "写作文", "写论文", "股票推荐",
-    "娱乐八卦", "星座运势", "情感咨询",
-)
-PERSONAL_TRAVEL_KEYWORDS = (
-    "旅游", "度假", "蜜月", "景点攻略", "游玩攻略", "亲子游", "自由行",
-)
-BUSINESS_TRAVEL_KEYWORDS = (
-    "出差", "差旅", "商旅", "商务行程", "公务出行", "拜访客户", "客户拜访",
-    "会议地点", "会场", "差旅任务", "出差任务",
-    "报销", "发票", "补贴", "餐补", "住宿标准", "交通标准", "差旅标准",
-    "差旅政策", "差旅制度", "审批", "超标", "改签", "退票", "延误",
-    "合规", "符合标准", "检查行程", "行程检查",
-    "行程规划", "规划行程", "安排行程", "出行方案", "路线怎么走", "怎么走最好",
-    "我去过", "差旅记录", "出差记录", "喜欢住", "常住酒店", "常坐", "靠窗座位",
-)
-TRAVEL_TRANSPORT_KEYWORDS = (
-    "航班", "机票", "机场", "高铁", "火车", "车次", "动车", "铁路",
-    "酒店", "住宿", "地铁", "打车", "交通路线", "出行路线", "换乘",
-)
-GIBBERISH_RE = re.compile(r"^[\W_]+$")
-
-
 def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", (query or "").strip())
 
@@ -105,8 +91,11 @@ def guard_user_input(user_query: str, conversation_context: str = "") -> Optiona
     if GIBBERISH_RE.match(q):
         return _unclear("输入疑似乱码或只有标点")
 
-    if any(keyword in q for keyword in UNSUPPORTED_KEYWORDS):
-        return _unsupported("用户请求包含当前系统不支持或不应执行的操作")
+    if any(keyword in q for keyword in FORBIDDEN_ACTIONS):
+        return _unsupported("用户请求包含系统不应执行的高风险操作")
+
+    # 交易/订票语言不在此短路：放行给 LLM，由产品边界 prompt 判定 unsupported。
+    # 目录中出现 ticket 类 skill 后，同一批关键词自然成为可识别意图（纯声明式）。
 
     if any(keyword in q_lower for keyword in OUT_OF_SCOPE_KEYWORDS):
         return _unsupported("用户请求与公司差旅规划或报销无关")
@@ -124,11 +113,14 @@ def guard_user_input(user_query: str, conversation_context: str = "") -> Optiona
 
 
 def passes_confidence_gate(intent: str, confidence: float) -> bool:
-    threshold = (
-        INFORMATION_QUERY_THRESHOLD
-        if intent == "information_query"
-        else DEFAULT_CONFIDENCE_THRESHOLD
-    )
+    """意图级置信度门槛；未声明时按意图默认值（information_query 更严）。"""
+    threshold = confidence_threshold_for_intent(intent)
+    if threshold is None:
+        threshold = (
+            INFORMATION_QUERY_THRESHOLD
+            if intent == "information_query"
+            else DEFAULT_CONFIDENCE_THRESHOLD
+        )
     return confidence >= threshold
 
 
@@ -165,14 +157,9 @@ def can_call_information_query(
         confidence=confidence,
         reason="明确的信息查询请求",
         should_call_skill=True,
-        agent_schedule=[
-            {
-                "agent_name": "information_query",
-                "priority": 1,
-                "reason": "明确的信息查询请求",
-                "expected_output": "完成用户请求",
-            }
-        ],
+        agent_schedule=self_schedule_for_intent(
+            "information_query", "明确的信息查询请求", "完成用户请求"
+        ),
     )
 
 
@@ -257,14 +244,9 @@ def _chitchat() -> GuardResult:
         confidence=0.99,
         reason="明确的寒暄或社交对话",
         should_call_skill=True,
-        agent_schedule=[
-            {
-                "agent_name": "chitchat",
-                "priority": 1,
-                "reason": "明确的寒暄或社交对话",
-                "expected_output": "友好的社交回复",
-            }
-        ],
+        agent_schedule=self_schedule_for_intent(
+            "chitchat", "明确的寒暄或社交对话", "友好的社交回复"
+        ),
     )
 
 

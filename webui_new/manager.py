@@ -16,13 +16,12 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from agents.intention_agent import IntentionAgent
-from agents.orchestration_agent import OrchestrationAgent
+from agents.orchestration_agent import OrchestrationAgent, message_for_non_skill_intent
 from settings import (
     CONCURRENCY_CONFIG,
     MEMORY_CONFIG,
     ORCHESTRATION_V2_CONFIG,
     RESILIENCE_CONFIG,
-    TRIP_INTAKE_CONFIG,
 )
 from context.memory_manager import MemoryManager
 from context.async_memory import AsyncMemoryFacade
@@ -39,10 +38,11 @@ from utils.observability import COMPONENT_LLM, ERROR_CIRCUIT_OPEN, record_upstre
 from webui_new.core.errors import AppError, BusinessError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
 from core.intent_router import FastIntentRouter
-from core.intent_catalog import INTENT_DISPLAY_NAMES
+from core.intent_catalog import INTENT_DISPLAY_NAMES, updates_preferences_for_agent
+from core.orchestration.checkpoints import CheckpointStore
+from core.orchestration.memory_hooks import MemoryHookExecutor
 from core.orchestration.pipeline import MultiIntentPipeline
-from core.orchestration.validator import supports_phase_one
-from core.presentation import build_legacy_answer_document, build_trip_intake_document
+from core.orchestration.validator import supports_task_pipeline
 from core.execution_budget import (
     ExecutionBudget,
     ExecutionLimitExceeded,
@@ -110,10 +110,13 @@ class HommeyWebInstance:
             self.session_id = self.memory_manager.session_id
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
+            self.checkpoint_store = CheckpointStore(user_id=self.user_id)
             self.multi_intent_pipeline = MultiIntentPipeline(
                 model=self.model,
                 composer_model=runtime.composer_model,
                 agent_runner=self.orchestrator.execute_task,
+                memory_hooks=MemoryHookExecutor(self.memory_manager),
+                checkpoint_store=self.checkpoint_store,
             )
             self.attachment_service = getattr(runtime, "attachment_service", None)
             self._agent_cache = runtime.agent_cache
@@ -422,9 +425,13 @@ class HommeyWebInstance:
         }
         if normalized in cancel_commands:
             cancelled = await self._ensure_async_memory().cancel_active_trip()
+            if self.checkpoint_store is not None:
+                await self.checkpoint_store.clear()
             return "已取消当前行程任务。" if cancelled else "当前没有进行中的行程任务。"
         if normalized in complete_commands:
             completed = await self._ensure_async_memory().complete_active_trip(reason="user_completed")
+            if self.checkpoint_store is not None:
+                await self.checkpoint_store.clear()
             return "已结束当前行程任务。" if completed else "当前没有进行中的行程任务。"
         return None
 
@@ -643,24 +650,43 @@ class HommeyWebInstance:
             "attachment_warnings": input_result["warnings"],
         }
 
+        # 阶段 4：gate 从 phase-one 精确集放开到全部 skill-backed 意图
+        # （supports_task_pipeline）—— 所有 skill 意图走统一 scoped DAG 管线。
         use_task_pipeline = bool(
             ORCHESTRATION_V2_CONFIG.get("enabled", True)
             and self.multi_intent_pipeline is not None
-            and supports_phase_one(intention_data)
+            and supports_task_pipeline(intention_data)
         )
         if use_task_pipeline:
             try:
                 orchestration_start = time.perf_counter()
-                pipeline_output = await self.multi_intent_pipeline.run(
-                    original_query=display_message,
-                    intention_data=intention_data,
-                    base_context=self.orchestrator.prepare_context(
-                        intention_data,
-                        request_context=request_context,
-                    ),
-                    progress=progress_callback,
-                    task_query=normalized.agent_query,
+                base_context = self.orchestrator.prepare_context(
+                    intention_data,
+                    request_context=request_context,
                 )
+                # 跨轮检查点恢复：上轮暂停且本轮意图命中 resume 集 → 续跑。
+                checkpoint = (
+                    await self.checkpoint_store.get()
+                    if self.checkpoint_store is not None
+                    else None
+                )
+                resume_intent = self._checkpoint_resume_intent(checkpoint, intention_data)
+                if resume_intent:
+                    pipeline_output = await self.multi_intent_pipeline.run_resume(
+                        original_query=display_message,
+                        intention_data=intention_data,
+                        base_context=base_context,
+                        progress=progress_callback,
+                        task_query=normalized.agent_query,
+                    )
+                else:
+                    pipeline_output = await self.multi_intent_pipeline.run(
+                        original_query=display_message,
+                        intention_data=intention_data,
+                        base_context=base_context,
+                        progress=progress_callback,
+                        task_query=normalized.agent_query,
+                    )
                 timings["orchestration"] = time.perf_counter() - orchestration_start
                 self.orchestrator.record_task_results(intention_data, pipeline_output.results)
                 if self.circuit_breaker:
@@ -687,6 +713,12 @@ class HommeyWebInstance:
                     component=COMPONENT_LLM,
                     debug_message=str(e),
                 )
+            if pipeline_output.paused:
+                return await self._task_pipeline_paused(
+                    pipeline_output, metadata, start_time, timings
+                )
+            # abort 语义的硬失败转入公共错误流；continue 降级（如天气不可用）走卡片。
+            self._raise_on_pipeline_errors(pipeline_output)
             answer_document = pipeline_output.answer_document.model_dump(mode="json")
             response = pipeline_output.answer_document.plain_text
             assistant_metadata = dict(metadata)
@@ -706,170 +738,115 @@ class HommeyWebInstance:
                 "response": response,
                 "answer_document": answer_document,
                 "agents": agents,
-                "preferences_updated": False,
+                "preferences_updated": any(
+                    updates_preferences_for_agent(r.agent_name) and r.status == "success"
+                    for r in pipeline_output.results
+                ),
                 "timings": {key: round(value, 3) for key, value in timings.items()},
             }
 
-        # 3. Legacy orchestration for single intents and dependent workflows.
-        try:
-            orchestration_start = time.perf_counter()
-            progress_reply = getattr(self.orchestrator, "reply_with_progress", None)
-            if progress_callback is None or progress_reply is None:
-                orchestration_result = await self.orchestrator.reply(
-                    intention_result,
-                    request_context=request_context,
-                )
-            else:
-                orchestration_result = await progress_reply(
-                    intention_result,
-                    progress_callback,
-                    request_context=request_context,
-                )
-            timings["orchestration"] = time.perf_counter() - orchestration_start
-            if self.circuit_breaker:
-                await self.circuit_breaker.record_success()
-        except ExecutionLimitExceeded:
-            raise
-        except CircuitOpenError:
-            record_upstream_error(COMPONENT_LLM, ERROR_CIRCUIT_OPEN, retryable=True)
-            raise UpstreamError("CIRCUIT_OPEN", "服务暂时不可用，请稍后再试。", retryable=True, component=COMPONENT_LLM)
-        except Exception as e:
-            if self.circuit_breaker:
-                await self.circuit_breaker.record_failure()
-            logger.error("Orchestration failed: %s", sanitize_for_log(e))
-            record_upstream_error(COMPONENT_LLM, e, retryable=True)
-            raise UpstreamError(
-                "ORCHESTRATION_FAILED",
-                "调度执行失败，请稍后重试。",
-                retryable=True,
-                component=COMPONENT_LLM,
-                debug_message=str(e),
+        # 3. 非 skill 意图（unsupported/unclear/fallback）不进入任务管线：
+        #    should_call_skill 为 False 时直接返回澄清；其余兜底闲聊。
+        routing = intention_data.get("routing") or {}
+        if routing.get("should_call_skill") is False:
+            response = (
+                intention_data.get("clarification")
+                or message_for_non_skill_intent(routing.get("intent"))
             )
-
-        try:
-            result_data = json.loads(orchestration_result.content)
-        except json.JSONDecodeError:
-            raise InternalError("ORCHESTRATION_PARSE_FAILED", "解析结果失败，请稍后重试")
-        self._raise_on_agent_errors(result_data)
-
-        # 4. Chitchat fallback
-        if result_data.get("status") == "no_agents" and not result_data.get("results"):
-            if result_data.get("message"):
-                response = result_data["message"]
-                await self.async_memory.add_message("assistant", response, metadata)
-                return {
-                    "response": response,
-                    "agents": [],
-                    "preferences_updated": False,
-                    **input_result,
-                }
-            response = await self._handle_chitchat(agent_query)
-            await self.async_memory.add_message("assistant", response, metadata)
-            return {
-                "response": response,
-                "agents": [],
-                "preferences_updated": False,
-                **input_result,
-            }
-
-        # 5. Format response. Incomplete trip intake uses a typed presentation
-        # document; plain text remains available for old clients and exports.
-        presentation_document = self._trip_intake_presentation(result_data)
-        answer_document = None
-        if presentation_document:
-            response = presentation_document["plain_text"]
-            assistant_metadata = dict(metadata)
-            assistant_metadata["presentation_document"] = presentation_document
-            await self.async_memory.add_message("assistant", response, assistant_metadata)
         else:
-            response = self._format_response(result_data)
-            document = build_legacy_answer_document(result_data, response)
-            if document:
-                answer_document = document.model_dump(mode="json")
-                assistant_metadata = dict(metadata)
-                assistant_metadata["answer_document"] = answer_document
-                await self.async_memory.add_message("assistant", response, assistant_metadata)
-            else:
-                await self.async_memory.add_message("assistant", response, metadata)
-
-        # 6. Extract agent names
-        agents = []
-        results = result_data.get("results", [])
-        for r in results:
-            name = r.get("agent_name", "")
-            status = r.get("status", "")
-            agents.append({
-                "name": name,
-                "display": AGENT_DISPLAY_NAMES.get(name, name),
-                "status": status,
-                "duration_sec": r.get("duration_sec"),
-            })
-
-        # 7. Check if preferences were updated
-        prefs_updated = any(r.get("agent_name") == "preference" and r.get("status") == "success" for r in results)
+            response = await self._handle_chitchat(agent_query)
+        await self.async_memory.add_message("assistant", response, metadata)
         timings["total"] = time.perf_counter() - start_time
-        logger.info(
-            "WebUI message timing for %s: %s",
-            self.user_id,
-            {key: round(value, 3) for key, value in timings.items()},
-        )
-
         return {
             "response": response,
-            "answer_document": answer_document,
-            "presentation_document": presentation_document,
-            "agents": agents,
-            "preferences_updated": prefs_updated,
+            "answer_document": None,
+            "presentation_document": None,
+            "agents": [],
+            "preferences_updated": False,
             "timings": {key: round(value, 3) for key, value in timings.items()},
             **input_result,
         }
 
     @staticmethod
-    def _trip_intake_presentation(result_data: dict) -> dict | None:
-        """Build a structured prompt when planning is paused for required facts."""
-        if not TRIP_INTAKE_CONFIG.get("enabled", True):
+    def _checkpoint_resume_intent(checkpoint, intention_data) -> str | None:
+        """命中 resume 集的意图名：检查点存在的 skill 意图且本轮仍要调用它。"""
+        if checkpoint is None:
             return None
-        for result in result_data.get("results", []):
-            if result.get("agent_name") != "event_collection" or result.get("status") != "success":
+        from core.intent_catalog import skill_to_intent
+
+        checkpoint_intent = skill_to_intent(checkpoint.skill) or checkpoint.skill
+        callable_types = {
+            str(item.get("type"))
+            for item in intention_data.get("intents", [])
+            if item.get("type") and item.get("should_call_skill")
+        }
+        return checkpoint_intent if checkpoint_intent in callable_types else None
+
+    async def _task_pipeline_paused(self, pipeline_output, metadata, start_time, timings) -> dict:
+        """跨轮暂停：返回 trip_intake presentation 契约，保持与 legacy 分支一致。"""
+        presentation_document = pipeline_output.presentation_document.model_dump(mode="json")
+        response = presentation_document["plain_text"]
+        assistant_metadata = dict(metadata)
+        assistant_metadata["presentation_document"] = presentation_document
+        await self.async_memory.add_message("assistant", response, assistant_metadata)
+        agents = [
+            {
+                "name": result.agent_name,
+                "display": AGENT_DISPLAY_NAMES.get(result.agent_name, result.agent_name),
+                "status": result.status,
+                "duration_sec": result.duration_sec,
+            }
+            for result in pipeline_output.results
+        ]
+        timings["total"] = time.perf_counter() - start_time
+        return {
+            "response": response,
+            "answer_document": None,
+            "presentation_document": presentation_document,
+            "agents": agents,
+            "preferences_updated": False,
+            "timings": {key: round(value, 3) for key, value in timings.items()},
+        }
+
+    def _raise_on_pipeline_errors(self, pipeline_output) -> None:
+        """把 pipeline 的 abort 语义硬失败转入公共错误流；continue 降级继续走卡片。
+
+        TaskResult 的 error 不都等于整体失败：步骤声明 ``on_failure=continue``
+        时（如天气/公开信息不可用）executor 会降级，不应打断响应；只有
+        ``on_failure=abort`` 的错误步骤才作为整体失败上抛。
+        """
+        task_by_id = {task.task_id: task for task in pipeline_output.execution_tasks}
+        errors = []
+        for result in pipeline_output.results:
+            if result.status != "error":
                 continue
-            data = result.get("data") if isinstance(result.get("data"), dict) else {}
-            nested = data.get("data") if isinstance(data.get("data"), dict) else data
-            if nested.get("planning_ready") is False:
-                return build_trip_intake_document(nested).model_dump(mode="json")
-        return None
+            task = task_by_id.get(result.task_id)
+            if task is not None and task.failure_policy == "continue":
+                continue
+            errors.append({
+                "agent_name": result.agent_name,
+                "status": "error",
+                "message": result.error_message or "",
+                "error_code": result.error_code or "AGENT_EXECUTION_FAILED",
+            })
+        if errors:
+            self._raise_on_agent_errors({"status": "error", "results": errors})
 
     def _raise_on_agent_errors(self, result_data: dict) -> None:
         """Convert internal agent error payloads into the public AppError flow."""
-        overall_status = result_data.get("status")
-        if overall_status in {"completed", "partial_failure", "no_agents"}:
-            return
-
         errors = []
         for result in result_data.get("results", []):
-            agent_name = result.get("agent_name", "unknown")
-            status = result.get("status")
-            data = result.get("data") if isinstance(result.get("data"), dict) else {}
-            message = (
-                result.get("error_message")
-                or result.get("message")
-                or data.get("error")
-                or data.get("message")
-            )
-
-            if status == "error":
-                errors.append({
-                    "agent_name": agent_name,
-                    "message": message or "agent returned error status",
-                    "error_code": result.get("error_code") or "AGENT_EXECUTION_FAILED",
-                })
+            if result.get("status") != "error":
                 continue
-
-            if status == "success" and data.get("error") and not self._has_agent_success_payload(agent_name, data):
-                errors.append({
-                    "agent_name": agent_name,
-                    "message": data.get("error"),
-                    "error_code": "AGENT_EXECUTION_FAILED",
-                })
+            errors.append({
+                "agent_name": result.get("agent_name", "unknown"),
+                "message": (
+                    result.get("error_message")
+                    or result.get("message")
+                    or "agent returned error status"
+                ),
+                "error_code": result.get("error_code") or "AGENT_EXECUTION_FAILED",
+            })
 
         if not errors:
             return
@@ -898,16 +875,6 @@ class HommeyWebInstance:
             component=COMPONENT_LLM,
             debug_message=f"{agent_name}: {debug_message}",
         )
-
-    @staticmethod
-    def _has_agent_success_payload(agent_name: str, data: dict) -> bool:
-        """Best-effort guard for legacy agents that may include non-fatal error fields."""
-        if agent_name == "information_query":
-            results = data.get("results") if isinstance(data.get("results"), dict) else data
-            return bool(results.get("summary") or results.get("message"))
-        if agent_name == "rag_knowledge":
-            return bool(data.get("answer") or data.get("content") or data.get("data", {}).get("answer"))
-        return any(data.get(key) for key in ("answer", "content", "result", "message", "summary", "itinerary", "preferences"))
 
     async def stream_message(
         self,
@@ -1121,28 +1088,13 @@ class HommeyWebInstance:
         return ""
 
     async def _handle_chitchat(self, user_input: str) -> str:
-        """闲聊兜底"""
+        """闲聊兜底（只用 skill 注册表，删除了硬编码脚本路径回退）。"""
         from agentscope.message import Msg
-        import importlib.util
 
-        agent = None
         try:
             agent = self.orchestrator.agent_registry["chitchat"]
         except (KeyError, Exception):
-            pass
-
-        if agent is None:
-            try:
-                script_path = os.path.join(
-                    project_root, ".claude", "skills", "chitchat", "script", "agent.py"
-                )
-                spec = importlib.util.spec_from_file_location("chitchat_agent", script_path)
-                if spec and spec.loader:
-                    module = importlib.util.module_from_spec(spec)
-                    spec.loader.exec_module(module)
-                    agent = module.ChitchatAgent(name="ChitchatAgent", model=self.model)
-            except Exception as e:
-                logger.warning(f"Failed to load ChitchatAgent: {e}")
+            agent = None
 
         if agent is None:
             return "嗯嗯，我听着呢～有什么出行相关的问题需要帮忙吗？😊"
@@ -1164,290 +1116,6 @@ class HommeyWebInstance:
             logger.warning(f"Chitchat failed: {e}")
             return "嗯嗯，我听着呢～有什么出行相关的问题需要帮忙吗？😊"
 
-    def _format_response(self, result_data: dict) -> str:
-        """将智能体结果格式化为文本"""
-        results = result_data.get("results", [])
-        if not results:
-            return "✓ 好的，我已收到。"
-        lines = []
-        planning_complete = any(
-            item.get("agent_name") == "itinerary_planning" and item.get("status") == "success"
-            for item in results
-        )
-        deferred_notes = []
-        for result in results:
-            agent_name = result.get("agent_name", "")
-            status = result.get("status", "")
-            data = result.get("data", {})
-            if status == "error" and result.get("on_failure") == "continue":
-                display = AGENT_DISPLAY_NAMES.get(agent_name, agent_name)
-                deferred_notes.append(f"⚠️ {display}暂时不可用，已基于其余成功结果降级处理。")
-                continue
-            if planning_complete and agent_name in {"event_collection", "rag_knowledge", "information_query"}:
-                continue
-            if planning_complete and agent_name == "trip_compliance" and data.get("verdict") == "unknown":
-                deferred_notes.append("📌 提醒：未检索到足以确认合规性的适用制度，请在提交前人工确认。")
-                continue
-            if status == "error":
-                display = AGENT_DISPLAY_NAMES.get(agent_name, agent_name)
-                lines.append(f"❌ {display}执行失败，请稍后重试。")
-                continue
-            if status != "success":
-                continue
-            text = self._format_agent_result(agent_name, data)
-            if text:
-                lines.append(text)
-        return "\n".join(lines + deferred_notes).strip()
-
-    def _format_agent_result(self, agent_name: str, data: dict) -> str:
-        """格式化单个智能体输出"""
-        # Itinerary
-        if agent_name == "itinerary_planning":
-            itinerary = data.get("itinerary")
-            if not itinerary and "data" in data and isinstance(data["data"], dict):
-                itinerary = data["data"].get("itinerary")
-            if itinerary:
-                parts = [f"✈️ **{itinerary.get('title', '行程规划')}**"]
-                parts.append(f"  时长: {itinerary.get('duration', '未知')}\n")
-                transport = itinerary.get("transport_recommendation")
-                if isinstance(transport, dict) and transport:
-                    parts.append("🚄 **交通建议**")
-                    if transport.get("preferred"):
-                        parts.append(f"  • 首选: {transport['preferred']}")
-                    if transport.get("reason"):
-                        parts.append(f"  • 原因: {transport['reason']}")
-                    if transport.get("alternative"):
-                        parts.append(f"  • 备选: {transport['alternative']}")
-                    if transport.get("verification"):
-                        parts.append(f"  • 核验: {transport['verification']}")
-                    parts.append("")
-                elif isinstance(transport, str) and transport:
-                    parts.extend(["🚄 **交通建议**", f"  • {transport}", ""])
-
-                lodging = itinerary.get("lodging_advice")
-                if lodging:
-                    parts.extend(["🏨 **住宿建议**", f"  • {lodging}", ""])
-
-                for day_plan in itinerary.get("daily_plans", []):
-                    day_num = day_plan.get("day", 1)
-                    parts.append(f"**第 {day_num} 天**")
-                    activities = day_plan.get("activities") or day_plan.get("time_slots") or []
-                    for slot in activities:
-                        time = slot.get("time", "")
-                        activity = slot.get("activity") or slot.get("location") or ""
-                        description = slot.get("description", "")
-                        transport = slot.get("transport", "")
-                        parts.append(f"  {time} - {activity}")
-                        if description:
-                            parts.append(f"  _{description}_")
-                        if transport:
-                            parts.append(f"  🚇 {transport}")
-                    meals = day_plan.get("meals", {})
-                    if meals:
-                        if meals.get("lunch"):
-                            parts.append(f"  🍜 {meals['lunch']}")
-                        if meals.get("dinner"):
-                            parts.append(f"  🍽️ {meals['dinner']}")
-                    parts.append("")
-                notes = itinerary.get("notes", [])
-                if notes:
-                    parts.append("📌 **注意事项**")
-                    for note in notes:
-                        parts.append(f"  • {note}")
-                checklist = itinerary.get("reimbursement_checklist", [])
-                if checklist:
-                    parts.append("🧾 **报销准备**")
-                    for item in checklist:
-                        parts.append(f"  • {item}")
-                budget = itinerary.get("estimated_budget")
-                if budget:
-                    parts.append(f"💰 **预算参考**: {budget}")
-                missing_info = itinerary.get("missing_info", [])
-                if missing_info:
-                    parts.append(f"💡 **待补充**: {', '.join(missing_info)}")
-                return "\n".join(parts)
-
-        # Preference
-        if agent_name == "preference":
-            raw_prefs = data.get("preferences")
-            if not raw_prefs and "data" in data and isinstance(data["data"], dict):
-                raw_prefs = data["data"].get("preferences")
-            if isinstance(raw_prefs, dict):
-                prefs_list = raw_prefs.get("preferences", [])
-            else:
-                prefs_list = raw_prefs if isinstance(raw_prefs, list) else []
-            if prefs_list:
-                parts = ["✓ **已更新您的偏好设置**"]
-                type_names = {
-                    "home_location": "常驻地",
-                    "transportation_preference": "交通偏好",
-                    "hotel_brands": "酒店偏好",
-                    "airlines": "航空公司偏好",
-                    "seat_preference": "座位偏好",
-                    "meal_preference": "餐食偏好",
-                    "budget_level": "预算等级",
-                }
-                for pref in prefs_list:
-                    pref_type = pref.get("type", "")
-                    pref_value = pref.get("value", "")
-                    action = pref.get("action", "replace")
-                    display_type = type_names.get(pref_type, pref_type)
-                    action_text = "追加" if action == "append" else "设置为"
-                    parts.append(f"  • {display_type} {action_text} `{pref_value}`")
-                return "\n".join(parts)
-
-        # Event collection
-        if agent_name == "event_collection":
-            origin = data.get("origin") or data.get("data", {}).get("origin")
-            destination = data.get("destination") or data.get("data", {}).get("destination")
-            start_date = data.get("start_date") or data.get("data", {}).get("start_date")
-            end_date = data.get("end_date") or data.get("data", {}).get("end_date")
-            missing_info = data.get("missing_info") or data.get("data", {}).get("missing_info") or []
-            optional_info = data.get("optional_info") or data.get("data", {}).get("optional_info") or []
-            field_labels = {
-                "origin": "出发地",
-                "destination": "目的地",
-                "start_date": "出发日期（如：7月14日）",
-                "end_date": "返程日期",
-                "duration_days": "出差天数",
-                "duration_days_or_end_date": "出差天数或返程日期",
-                "trip_purpose": "出差目的（如：拜访客户、参加会议）",
-                "work_location": "客户/会议地点",
-                "work_schedule": "会面或工作时间",
-            }
-            missing_labels = [field_labels.get(item, str(item)) for item in missing_info]
-            optional_labels = [field_labels.get(item, str(item)) for item in optional_info]
-            parts = []
-            if destination or origin:
-                parts.append("✓ **已收集行程信息**")
-                if origin:
-                    parts.append(f"  • 出发地: `{origin}`")
-                if destination:
-                    parts.append(f"  • 目的地: `{destination}`")
-                if start_date:
-                    parts.append(f"  • 出发日期: `{start_date}`")
-                if end_date:
-                    parts.append(f"  • 返程日期: `{end_date}`")
-            if missing_labels:
-                parts.append(f"💡 为开始生成行程，请补充：{'；'.join(missing_labels)}")
-            if optional_labels:
-                parts.append(f"可选补充（有助于优化安排）：{'；'.join(optional_labels)}")
-            return "\n".join(parts) if parts else ""
-
-        # Information query
-        if agent_name == "information_query":
-            query_results = data.get("results")
-            if not query_results and "data" in data and isinstance(data["data"], dict):
-                query_results = data["data"].get("results")
-            if not query_results:
-                query_results = data
-            if not isinstance(query_results, dict):
-                query_results = {}
-            summary = query_results.get("summary", "")
-            message = query_results.get("message", "")
-            error = query_results.get("error", "")
-            parts = []
-            if summary:
-                parts.append(summary)
-            elif message:
-                parts.append(message)
-            elif error:
-                parts.append(error)
-            return "\n".join(parts) if parts else ""
-
-        # RAG knowledge
-        if agent_name == "rag_knowledge":
-            answer = data.get("answer")
-            if not answer and "data" in data and isinstance(data["data"], dict):
-                answer = data["data"].get("answer")
-            if not answer:
-                answer = data.get("content") or data.get("data", {}).get("content")
-            if isinstance(answer, dict):
-                answer = answer.get("answer", str(answer))
-            if isinstance(answer, str) and answer.strip().startswith("{") and answer.strip().endswith("}"):
-                try:
-                    json_obj = json.loads(answer)
-                    if isinstance(json_obj, dict) and "answer" in json_obj:
-                        answer = json_obj["answer"]
-                except Exception:
-                    pass
-            if answer:
-                parts = [str(answer)]
-                sources = data.get("sources") or data.get("data", {}).get("sources") or []
-                if sources:
-                    parts.append("\n📚 **制度来源**")
-                    seen = set()
-                    for source in sources:
-                        if not isinstance(source, dict):
-                            continue
-                        location = " · ".join(
-                            str(value) for value in (
-                                source.get("file"),
-                                source.get("section"),
-                                source.get("page") and f"第{source['page']}页",
-                            ) if value
-                        )
-                        if location and location not in seen:
-                            seen.add(location)
-                            parts.append(f"  • {location}")
-                return "\n".join(parts)
-
-        # Memory query
-        if agent_name == "memory_query":
-            query_result = data.get("answer") or data.get("result") or data.get("content")
-            if not query_result and "data" in data and isinstance(data["data"], dict):
-                inner = data["data"]
-                query_result = inner.get("answer") or inner.get("result") or inner.get("content")
-            if query_result:
-                return str(query_result)
-
-        # Chitchat
-        if agent_name == "chitchat":
-            response = data.get("response") or data.get("data", {}).get("response")
-            if isinstance(response, dict):
-                response = response.get("response", str(response))
-            if response:
-                return str(response)
-
-        if agent_name == "trip_compliance":
-            verdict = data.get("verdict", "unknown")
-            labels = {
-                "compliant": "符合制度",
-                "non_compliant": "存在不合规项",
-                "partial": "部分项目待确认",
-                "unknown": "暂时无法确认",
-            }
-            parts = [f"🛡️ **合规检查：{labels.get(verdict, verdict)}**"]
-            if data.get("summary"):
-                parts.append(str(data["summary"]))
-            for check in data.get("checks", []):
-                if isinstance(check, dict):
-                    parts.append(f"  • {check.get('item', '检查项')}: {check.get('status', 'unknown')} — {check.get('reason', '')}")
-            if data.get("unknown_items"):
-                parts.append("📌 **待确认**")
-                parts.extend(f"  • {item}" for item in data["unknown_items"])
-            sources = data.get("sources") or []
-            if sources:
-                parts.append("📚 **制度来源**")
-                for source in sources:
-                    if not isinstance(source, dict):
-                        continue
-                    location = " · ".join(str(value) for value in (source.get("file"), source.get("section"), source.get("page") and f"第{source['page']}页") if value)
-                    parts.append(f"  • {location}")
-            return "\n".join(parts)
-
-        # Fallback
-        if data:
-            common_keys = ["answer", "content", "result", "message", "summary", "text", "description"]
-            for k in common_keys:
-                if k in data and isinstance(data[k], str) and data[k].strip():
-                    return data[k]
-                if "data" in data and isinstance(data["data"], dict):
-                    if k in data["data"] and isinstance(data["data"][k], str) and data["data"][k].strip():
-                        return data["data"][k]
-
-        display = AGENT_DISPLAY_NAMES.get(agent_name, agent_name)
-        return f"✓ {display}已完成"
 
 
 class WebHommeyManager:

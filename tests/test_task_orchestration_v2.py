@@ -1,6 +1,5 @@
 import asyncio
 import json
-import time
 
 import pytest
 
@@ -10,7 +9,7 @@ from core.orchestration.executor import TaskExecutor
 from core.orchestration.graph_builder import TaskGraphBuilder
 from core.orchestration.models import IntentTask, TaskResult
 from core.orchestration.pipeline import MultiIntentPipeline
-from core.orchestration.validator import TaskValidator, supports_phase_one
+from core.orchestration.validator import TaskValidator, supports_phase_one, supports_task_pipeline
 
 
 QUERY = "我现在需要去南京出差，相关的差旅标准有什么，顺便给我查一下这两天南京的天气"
@@ -26,10 +25,13 @@ INTENTION = {
 
 
 def test_phase_one_fallback_creates_scoped_queries():
-    raw = TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"])
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
     tasks = TaskValidator().validate(raw, INTENTION)
 
     assert supports_phase_one(INTENTION) is True
+    assert supports_task_pipeline(INTENTION) is True
     assert [task.intent for task in tasks] == ["rag_knowledge", "information_query"]
     assert "南京" in tasks[0].query
     assert "天气" not in tasks[0].query
@@ -39,24 +41,89 @@ def test_phase_one_fallback_creates_scoped_queries():
 
 
 def test_task_validator_rejects_cross_intent_query_scope():
-    raw = TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"])
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
     raw[0]["query"] += "并查询天气"
 
-    with pytest.raises(ValueError, match="crossed into weather"):
+    with pytest.raises(ValueError, match="forbidden scope"):
         TaskValidator().validate(raw, INTENTION)
 
 
 def test_task_validator_rejects_policy_scope_expansion():
-    raw = TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"])
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
     raw[0]["query"] += "，包括住宿、交通和补贴"
 
     with pytest.raises(ValueError, match="expanded the user's scope"):
         TaskValidator().validate(raw, INTENTION)
 
 
+def test_task_validator_merges_duplicate_intent_nodes():
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
+    raw.append(dict(raw[0], task_id="policy-extra", query=raw[0]["query"] + "（补充）"))
+
+    tasks = TaskValidator().validate(raw, INTENTION)
+    assert len(tasks) == 2  # 意图节点级去重：rag_knowledge 合并
+    assert [task.intent for task in tasks] == ["rag_knowledge", "information_query"]
+    rag = next(task for task in tasks if task.intent == "rag_knowledge")
+    assert "补充" in rag.query
+
+
+def test_task_validator_rejects_unauthorized_intent():
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
+    raw.append({
+        "task_id": "rogue",
+        "intent": "memory_query",
+        "query": "查询我的出差历史",
+        "depends_on": [],
+        "side_effect": False,
+        "failure_policy": "continue",
+        "display_order": 2,
+    })
+    with pytest.raises(ValueError, match="not authorized"):
+        TaskValidator().validate(raw, INTENTION)
+
+
+def test_task_validator_rejects_undeclared_side_effect():
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
+    raw[0]["side_effect"] = True  # rag_knowledge 未声明 side_effect_allowed
+
+    with pytest.raises(ValueError, match="side effect not allowed"):
+        TaskValidator().validate(raw, INTENTION)
+
+
+def test_task_validator_rejects_unknown_dependency_target():
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
+    raw[1]["depends_on"] = ["no_such_intent"]
+
+    with pytest.raises(ValueError, match="unknown dependency target"):
+        TaskValidator().validate(raw, INTENTION)
+
+
+def test_task_validator_rejects_dependency_cycle():
+    raw = TaskDecomposer.fallback(
+        QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
+    )
+    raw[0]["depends_on"] = ["information_query"]
+    raw[1]["depends_on"] = ["rag_knowledge"]
+
+    with pytest.raises(ValueError, match="cycle"):
+        TaskValidator().validate(raw, INTENTION)
+
+
 def test_executor_runs_independent_tasks_concurrently():
     tasks = TaskValidator().validate(
-        TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"]),
+        TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]),
         INTENTION,
     )
     execution_tasks = TaskGraphBuilder().compile(tasks)
@@ -71,10 +138,140 @@ def test_executor_runs_independent_tasks_concurrently():
         await asyncio.wait_for(both_started.wait(), timeout=0.3)
         return {"status": "success", "data": {"query": kwargs["context"]["rewritten_query"]}}
 
-    results = asyncio.run(TaskExecutor(runner).execute(execution_tasks, {}))
+    results, paused = asyncio.run(TaskExecutor(runner).execute(execution_tasks, {}))
 
+    assert paused is None
     assert [result.status for result in results] == ["success", "success"]
     assert results[0].data["query"] != results[1].data["query"]
+
+
+def test_plan_trip_expands_to_five_step_dag():
+    plan_query = "我明天去上海出差3天，帮我规划一下行程"
+    plan_intention = {
+        "intents": [{"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True}],
+        "key_entities": {"destination": "上海", "date": "明天", "duration": "3天"},
+        "rewritten_query": plan_query,
+    }
+    raw = TaskDecomposer.fallback(
+        plan_query, ["itinerary_planning"], plan_intention["key_entities"]
+    )
+    tasks = TaskValidator().validate(raw, plan_intention)
+    execution_tasks = TaskGraphBuilder().compile(tasks)
+
+    assert [task.agent_name for task in execution_tasks] == [
+        "event_collection", "rag_knowledge", "information_query",
+        "itinerary_planning", "trip_compliance",
+    ]
+    assert [task.priority for task in execution_tasks] == [1, 2, 2, 3, 4]
+    assert [task.failure_policy for task in execution_tasks] == [
+        "abort", "abort", "continue", "abort", "continue",
+    ]
+    batches = TaskGraphBuilder.batches(execution_tasks)
+    assert [[task.agent_name for task in batch] for batch in batches] == [
+        ["event_collection"],
+        ["rag_knowledge", "information_query"],
+        ["itinerary_planning"],
+        ["trip_compliance"],
+    ]
+    # 每步 query 都从模板渲染，不污染其他意图词域
+    for task in execution_tasks:
+        assert task.query, task.agent_name
+
+
+def test_plan_trip_absorbs_overlapping_independent_intents():
+    plan_query = "我明天去上海出差3天，帮我规划一下行程，顺便查下上海差旅标准和天气"
+    plan_intention = {
+        "intents": [
+            {"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True},
+            {"type": "rag_knowledge", "confidence": 0.85, "should_call_skill": True},
+            {"type": "information_query", "confidence": 0.88, "should_call_skill": True},
+        ],
+        "key_entities": {"destination": "上海", "date": "明天", "duration": "3天", "purpose": "出差"},
+        "rewritten_query": plan_query,
+    }
+    raw = TaskDecomposer.fallback(
+        plan_query,
+        ["itinerary_planning", "rag_knowledge", "information_query"],
+        plan_intention["key_entities"],
+    )
+    tasks = TaskValidator().validate(raw, plan_intention)
+    execution_tasks = TaskGraphBuilder().compile(tasks)
+
+    # subsumption：plan-trip 吸收 rag/info，不重复执行
+    assert [task.agent_name for task in execution_tasks] == [
+        "event_collection", "rag_knowledge", "information_query",
+        "itinerary_planning", "trip_compliance",
+    ]
+    by_agent = {task.agent_name: task for task in execution_tasks}
+    assert "标准" in by_agent["rag_knowledge"].query
+    assert "天气" in by_agent["information_query"].query
+    assert "天气" not in by_agent["rag_knowledge"].query
+
+
+def test_abort_halt_skips_downstream_steps():
+    plan_query = "我明天去上海出差3天，帮我规划一下行程"
+    plan_intention = {
+        "intents": [{"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True}],
+        "key_entities": {"destination": "上海", "date": "明天", "duration": "3天"},
+        "rewritten_query": plan_query,
+    }
+
+    async def runner(**kwargs):
+        agent = kwargs["agent_name"]
+        if agent == "event_collection":
+            return {"status": "success", "data": {
+                "planning_ready": True, "origin": "北京", "destination": "上海",
+                "start_date": "2026-08-08", "duration_days": 3, "trip_purpose": "客户拜访",
+            }}
+        if agent == "rag_knowledge":
+            return {"status": "success", "data": {"answer": "住宿标准400元。"}}
+        if agent == "information_query":
+            return {"status": "success", "data": {"results": {"summary": "晴"}}, "query_success": True}
+        if agent == "itinerary_planning":
+            return {"status": "error", "data": {}, "error_code": "PLAN_FAILED", "error_message": "无法生成行程"}
+        if agent == "trip_compliance":
+            raise AssertionError("trip_compliance 应在 abort 后跳过")
+
+    pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
+    output = asyncio.run(pipeline.run(plan_query, plan_intention, {}))
+
+    by_agent = {result.agent_name: result for result in output.results}
+    assert by_agent["itinerary_planning"].status == "error"
+    assert by_agent["trip_compliance"].status == "skipped"
+    assert by_agent["trip_compliance"].error_code == "UPSTREAM_DEPENDENCY_FAILED"
+    assert [section.kind for section in output.answer_document.sections] == ["trip"]
+    assert output.answer_document.sections[0].status == "error"
+
+
+def test_pause_gate_halts_workflow_and_builds_intake_presentation():
+    plan_query = "我明天去上海出差3天，帮我规划一下行程"
+    plan_intention = {
+        "intents": [{"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True}],
+        "key_entities": {"destination": "上海", "date": "明天", "duration": "3天"},
+        "rewritten_query": plan_query,
+    }
+
+    async def runner(**kwargs):
+        if kwargs["agent_name"] == "event_collection":
+            return {"status": "success", "data": {
+                "destination": "上海", "start_date": "2026-08-08",
+                "duration_days": 3, "trip_purpose": "客户拜访",
+                "planning_ready": False,  # 缺 origin
+            }}
+        raise AssertionError(f"不应执行 {kwargs['agent_name']}")
+
+    pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
+    output = asyncio.run(pipeline.run(plan_query, plan_intention, {}))
+
+    assert output.paused is True
+    assert output.pause_info.pause_agent == "event_collection"
+    assert [step["agent_name"] for step in output.pause_info.steps_remaining] == [
+        "rag_knowledge", "information_query", "itinerary_planning", "trip_compliance",
+    ]
+    assert output.presentation_document.type == "trip_intake"
+    assert output.presentation_document.status == "collecting_required"
+    assert [prompt.key for prompt in output.presentation_document.missing_required] == ["origin"]
+    assert output.answer_document is None
 
 
 def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
@@ -97,7 +294,8 @@ def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
                 "results": {
                     "summary": "南京当前天气：晴，气温31°C，湿度73%。未来几日：2026-08-03: 晴，26~36°C；2026-08-04: 晴，25~33°C",
                     "sources": [{"title": "Open-Meteo", "url": "https://open-meteo.com"}],
-                }
+                },
+                "query_success": True,
             },
         }
 
@@ -140,6 +338,25 @@ def test_pipeline_returns_successful_policy_when_weather_fails():
     assert "天气服务暂时不可用" in output.answer_document.plain_text
 
 
+def test_result_rules_convert_query_failure_to_error():
+    # information_query 的 result_rules：query_success=False → 归一化为 error
+    async def runner(**kwargs):
+        return {"status": "success", "data": {"query_success": False, "results": {"message": "外部服务超时"}}}
+
+    pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
+    intention = {
+        "intents": [{"type": "information_query", "confidence": 0.9, "should_call_skill": True}],
+        "key_entities": {"destination": "南京"},
+        "rewritten_query": "查一下南京天气",
+    }
+    output = asyncio.run(pipeline.run("查一下南京天气", intention, {}))
+
+    result = output.results[0]
+    assert result.status == "error"
+    assert result.error_code == "INFORMATION_QUERY_UNAVAILABLE"
+    assert "外部服务超时" in output.answer_document.sections[0].body
+
+
 def test_llm_composer_returns_grounded_card_and_system_owned_sources():
     async def model(_messages):
         return {
@@ -171,7 +388,7 @@ def test_llm_composer_returns_grounded_card_and_system_owned_sources():
 
     tasks = [
         IntentTask.model_validate(item)
-        for item in TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"])
+        for item in TaskDecomposer.fallback(QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"])
     ]
     results = [
         TaskResult(
@@ -193,3 +410,64 @@ def test_llm_composer_returns_grounded_card_and_system_owned_sources():
     assert document.sections[1].days[0].precipitation == ""
     assert [source.title for source in document.sources] == ["差旅规定", "Open-Meteo"]
     assert "查看" not in document.plain_text
+
+
+def test_declarative_fallback_covers_all_skill_intents():
+    # 每个 skill-backed 意图都能产出可验证的语义任务，不依赖 LLM 分支。
+    from core.intent_catalog import SKILL_INTENTS
+
+    for intent in SKILL_INTENTS:
+        intention = {
+            "intents": [{"type": intent, "confidence": 0.9, "should_call_skill": True}],
+            "key_entities": {"destination": "上海", "start_date": "明天", "duration": "3天"},
+            "rewritten_query": f"帮我处理{intent}",
+        }
+        raw = TaskDecomposer.fallback(f"帮我处理{intent}", [intent], intention["key_entities"])
+        tasks = TaskValidator().validate(raw, intention)
+        assert [task.intent for task in tasks] == [intent]
+
+
+def test_manager_raises_on_pipeline_abort_but_degrades_continue():
+    # 阶段 4 gate 放开后 manager 用 abort 语义判定硬失败：continue 降级（如天气
+    # 不可用）继续走卡片，abort 步骤的错误才上抛为公共错误。
+    from types import SimpleNamespace
+
+    from core.orchestration.models import ExecutionTask, TaskResult
+    from webui_new.core.errors import UpstreamError
+    from webui_new.manager import HommeyWebInstance
+
+    instance = object.__new__(HommeyWebInstance)
+    instance.user_id = "u1"
+
+    continue_task = ExecutionTask(
+        intent="information_query", task_id="information_query-information_query",
+        query="查天气", agent_name="information_query", priority=1,
+        failure_policy="continue", display_order=0,
+    )
+    continue_result = TaskResult(
+        task_id="information_query-information_query", intent="information_query",
+        agent_name="information_query", status="error",
+        error_code="INFORMATION_QUERY_UNAVAILABLE", display_order=0,
+    )
+    abort_task = ExecutionTask(
+        intent="itinerary_planning", task_id="itinerary_planning-itinerary_planning",
+        query="规划行程", agent_name="itinerary_planning", priority=3,
+        failure_policy="abort", display_order=1,
+    )
+    abort_result = TaskResult(
+        task_id="itinerary_planning-itinerary_planning", intent="itinerary_planning",
+        agent_name="itinerary_planning", status="error",
+        error_code="AGENT_EXECUTION_FAILED", error_message="生成失败", display_order=1,
+    )
+
+    # 只有 continue 失败 → 不抛错，交给 composer 降级。
+    instance._raise_on_pipeline_errors(SimpleNamespace(
+        execution_tasks=[continue_task], results=[continue_result],
+    ))
+
+    # abort 失败（即便同时存在 continue 失败）→ 上抛。
+    with pytest.raises(UpstreamError):
+        instance._raise_on_pipeline_errors(SimpleNamespace(
+            execution_tasks=[continue_task, abort_task],
+            results=[continue_result, abort_result],
+        ))

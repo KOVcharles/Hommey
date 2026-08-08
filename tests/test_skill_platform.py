@@ -157,72 +157,22 @@ def test_disabled_skill_is_removed_before_orchestration():
     assert disabled == ["ask-question"]
 
 
-def test_orchestrator_returns_aggregated_multi_agent_results():
-    orchestrator = OrchestrationAgent(agent_registry={})
-
-    aggregated = orchestrator._aggregate_results(
-        [
-            {
-                "agent_name": "event_collection",
-                "priority": 1,
-                "result": {
-                    "status": "success",
-                    "duration_sec": 0.01,
-                    "data": {"destination": "南京"},
-                },
-            },
-            {
-                "agent_name": "rag_knowledge",
-                "priority": 1,
-                "result": {
-                    "status": "success",
-                    "duration_sec": 0.02,
-                    "data": {"answer": "住宿标准"},
-                },
-            },
-        ],
-        {"intents": [{"type": "rag_knowledge"}], "key_entities": {"destination": "南京"}},
-    )
-
-    assert aggregated["status"] == "completed"
-    assert aggregated["agents_executed"] == 2
-    assert [item["agent_name"] for item in aggregated["results"]] == [
-        "event_collection",
-        "rag_knowledge",
-    ]
-
-
-def test_incomplete_trip_stops_before_external_queries_and_planning():
-    schedule = build_agent_schedule([{"type": "itinerary_planning"}])
-    results = [
-        {
-            "agent_name": "event_collection",
-            "result": {
-                "status": "success",
-                "data": {"planning_ready": False, "missing_info": ["start_date"]},
-            },
-        }
-    ]
-
-    assert OrchestrationAgent._pause_incomplete_trip_planning(schedule, results) is True
-
-
-def test_ready_event_collection_automatically_resumes_trip_planning():
+def test_thin_reply_executes_schedule_and_returns_raw_results():
     agents = {
-        "event_collection": _ReplyAgent("event_collection", {"planning_ready": True, "origin": "北京", "destination": "南昌"}),
-        "rag_knowledge": _ReplyAgent("rag_knowledge", {"answer": "制度"}),
-        "information_query": _ReplyAgent("information_query", {"results": {"summary": "天气与交通"}}),
-        "itinerary_planning": _ReplyAgent("itinerary_planning", {"itinerary": {"title": "南昌出差", "daily_plans": []}}),
-        "trip_compliance": _ReplyAgent("trip_compliance", {"verdict": "unknown"}),
+        "event_collection": _ReplyAgent("event_collection", {"destination": "南京"}),
+        "rag_knowledge": _ReplyAgent("rag_knowledge", {"answer": "住宿标准"}),
     }
     orchestrator = OrchestrationAgent(agent_registry=agents)
+
     response = asyncio.run(
         orchestrator.reply(
             Msg(
-                name="IntentionAgent",
+                name="intention",
                 content=json.dumps({
-                    "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
-                    "rewritten_query": "7月14日去拜访客户",
+                    "agent_schedule": [
+                        {"agent_name": "event_collection", "priority": 1},
+                        {"agent_name": "rag_knowledge", "priority": 1},
+                    ],
                 }),
                 role="assistant",
             )
@@ -230,37 +180,79 @@ def test_ready_event_collection_automatically_resumes_trip_planning():
     )
     data = json.loads(response.content)
 
+    assert data["status"] == "completed"
     assert [item["agent_name"] for item in data["results"]] == [
-        "event_collection", "rag_knowledge", "information_query", "itinerary_planning", "trip_compliance",
+        "event_collection",
+        "rag_knowledge",
     ]
 
 
-def test_completed_plan_hides_intermediate_queries_and_softens_unknown_compliance():
-    web = object.__new__(HommeyWebInstance)
-    response = web._format_response(
-        {
-            "results": [
-                {"agent_name": "event_collection", "status": "success", "data": {"destination": "广州"}},
-                {"agent_name": "rag_knowledge", "status": "success", "data": {"answer": "不应展示的中间制度回答"}},
-                {"agent_name": "information_query", "status": "success", "data": {"results": {"summary": "不应展示的中间外部信息"}}},
-                {
-                    "agent_name": "itinerary_planning",
-                    "status": "success",
-                    "data": {"itinerary": {"title": "广州两天出差", "daily_plans": []}},
-                },
-                {
-                    "agent_name": "trip_compliance",
-                    "status": "success",
-                    "data": {"verdict": "unknown", "summary": "制度证据不足"},
-                },
-            ]
-        }
+def test_thin_reply_does_not_auto_expand_workflow():
+    # 暂停/续跑语义已移交给 DAG 管线：薄壳只执行给定 schedule，不做模板回放。
+    event_collection = _ReplyAgent("event_collection", {"planning_ready": True, "origin": "北京", "destination": "南昌"})
+    itinerary_planning = _ReplyAgent("itinerary_planning", {"itinerary": {"title": "南昌出差", "daily_plans": []}})
+    orchestrator = OrchestrationAgent(agent_registry={
+        "event_collection": event_collection,
+        "itinerary_planning": itinerary_planning,
+    })
+
+    response = asyncio.run(
+        orchestrator.reply(
+            Msg(
+                name="intention",
+                content=json.dumps({
+                    "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
+                }),
+                role="assistant",
+            )
+        )
+    )
+    data = json.loads(response.content)
+
+    assert [item["agent_name"] for item in data["results"]] == ["event_collection"]
+    assert itinerary_planning.calls == 0
+
+
+def test_completed_plan_hides_workflow_intermediates():
+    from core.orchestration.fallback_composer import FallbackComposer
+    from core.orchestration.models import IntentTask, TaskResult
+
+    task = IntentTask(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        query="规划广州出差行程",
+        entities={"destination": "广州"},
+        display_order=0,
     )
 
-    assert "广州两天出差" in response
-    assert "不应展示的中间制度回答" not in response
-    assert "不应展示的中间外部信息" not in response
-    assert "未检索到足以确认合规性" in response
+    def _res(agent, data):
+        return TaskResult(
+            task_id=f"itinerary_planning-{agent}",
+            intent="itinerary_planning",
+            agent_name=agent,
+            status="success",
+            data=data,
+            display_order=0,
+        )
+
+    results = [
+        _res("event_collection", {"destination": "广州"}),
+        _res("rag_knowledge", {"answer": "不应展示的中间制度回答"}),
+        _res("information_query", {"results": {"summary": "不应展示的中间外部信息"}}),
+        _res("itinerary_planning", {"itinerary": {"title": "广州两天出差", "daily_plans": []}}),
+        _res("trip_compliance", {"verdict": "unknown", "summary": "制度证据不足"}),
+    ]
+
+    document = FallbackComposer().compose([task], results)
+
+    joined = document.plain_text + json.dumps(
+        [section.model_dump() for section in document.sections], ensure_ascii=False
+    )
+    assert "广州两天出差" in joined
+    assert "不应展示的中间制度回答" not in joined
+    assert "不应展示的中间外部信息" not in joined
+    # 合规结论以 notice 浮出（不在 trip 主 section 中隐藏）。
+    assert document.notices
 
 
 def test_compliance_skill_refuses_a_definite_verdict_without_rag_evidence():

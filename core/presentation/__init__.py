@@ -16,7 +16,6 @@ from .trip_intake_document import (
     build_trip_intake_document,
     render_trip_intake_text,
 )
-from .legacy_answer_document import build_legacy_answer_document
 
 __all__ = [
     "AnswerDocument",
@@ -31,5 +30,4 @@ __all__ = [
     "TripIntakeDocument",
     "build_trip_intake_document",
     "render_trip_intake_text",
-    "build_legacy_answer_document",
 ]

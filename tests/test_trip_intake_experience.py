@@ -1,14 +1,11 @@
 import asyncio
-import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from agentscope.message import Msg
-from agents.orchestration_agent import OrchestrationAgent
 from context.long_term_memory import FileLongTermMemory
 from core.presentation import build_trip_intake_document
 from core.trip_intake import evaluate_trip_intake
 from webui_new.manager import HommeyWebInstance
-from settings import RESILIENCE_CONFIG, TRIP_INTAKE_CONFIG
 
 
 BASE_TRIP = {
@@ -89,30 +86,31 @@ def test_trip_intake_document_is_structured_and_has_plain_text_fallback():
     assert "已完成 2/5 项" in document.plain_text
 
 
-def test_manager_builds_trip_intake_presentation_only_while_paused():
-    paused = HommeyWebInstance._trip_intake_presentation({
-        "results": [{
-            "agent_name": "event_collection",
-            "status": "success",
-            "data": {**BASE_TRIP, **evaluate_trip_intake(BASE_TRIP)},
-        }],
-    })
-    ready_trip = {
-        **BASE_TRIP,
-        "start_date": "2026-08-05",
-        "duration_days": 2,
-        "trip_purpose": "会议",
-    }
-    ready = HommeyWebInstance._trip_intake_presentation({
-        "results": [{
-            "agent_name": "event_collection",
-            "status": "success",
-            "data": {**ready_trip, **evaluate_trip_intake(ready_trip)},
-        }],
-    })
+class _StubAsyncMemory:
+    def __init__(self):
+        self.messages = []
 
-    assert paused["type"] == "trip_intake"
-    assert ready is None
+    async def add_message(self, role, content, metadata=None):
+        self.messages.append((role, content, metadata or {}))
+
+
+def test_task_pipeline_paused_returns_trip_intake_presentation():
+    # 暂停的 presentation 契约由管线暂停输出驱动（_task_pipeline_paused）。
+    instance = object.__new__(HommeyWebInstance)
+    instance.async_memory = _StubAsyncMemory()
+    document = build_trip_intake_document(BASE_TRIP)
+    pipeline_output = SimpleNamespace(
+        presentation_document=document,
+        results=[],
+    )
+
+    result = asyncio.run(instance._task_pipeline_paused(pipeline_output, {}, 0.0, {}))
+
+    assert result["presentation_document"]["type"] == "trip_intake"
+    assert result["presentation_document"]["progress"] == {"completed": 2, "total": 5}
+    assert result["answer_document"] is None
+    assert result["response"] == document.plain_text
+    assert instance.async_memory.messages[0][2]["presentation_document"]["type"] == "trip_intake"
 
 
 def test_stream_emits_presentation_document_without_duplicate_text():
@@ -137,43 +135,6 @@ def test_stream_emits_presentation_document_without_duplicate_text():
         "status", "agents", "presentation_document", "done",
     ]
     assert not any(event["type"] == "chunk" for event in events)
-
-
-def test_legacy_planning_orchestrator_emits_live_task_progress():
-    class ReplyAgent:
-        async def reply(self, _message):
-            return Msg(
-                name="rag_knowledge",
-                content=json.dumps({"answer": "制度证据"}, ensure_ascii=False),
-                role="assistant",
-            )
-
-    orchestrator = OrchestrationAgent(
-        agent_registry={"rag_knowledge": ReplyAgent()},
-        memory_manager=None,
-    )
-    events = []
-
-    async def progress(event):
-        events.append(event.message_key)
-
-    async def run():
-        return await orchestrator.reply_with_progress(
-            Msg(
-                name="intention",
-                content=json.dumps({
-                    "agent_schedule": [{"agent_name": "rag_knowledge", "priority": 1}],
-                }),
-                role="assistant",
-            ),
-            progress,
-        )
-
-    asyncio.run(run())
-
-    assert events == ["policy_searching", "task_completed"]
-    assert RESILIENCE_CONFIG["request_timeout_sec"] >= 240
-    assert TRIP_INTAKE_CONFIG["enabled"] is True
 
 
 def test_file_memory_restores_presentation_document(tmp_path):

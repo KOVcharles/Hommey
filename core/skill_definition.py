@@ -43,6 +43,56 @@ class SkillExecutionStep(BaseModel):
     expected_output: str = ""
     on_failure: Literal["abort", "continue"] = "abort"
     max_retries: int = Field(default=0, ge=0, le=2)
+    # 步骤级 scoped query 模板；占位符 {origin}/{destination}/{start_date}/{duration}/{purpose}
+    # 由 TaskGraphBuilder 用 key_entities + 上游证据渲染，保证每步 query 不被其他意图污染。
+    query: Optional[str] = None
+    # 结果判定规则，例如 {"error_when_field": "query_success", "error_code": "..."}。
+    # 取代 executor 中按 intent 硬编码的特殊状态分支。
+    result_rules: Optional[Dict[str, Any]] = None
+
+
+class SkillScope(BaseModel):
+    """Validator 词域检查：query 不得引入超出原始请求的事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    forbidden_terms: List[str] = Field(default_factory=list)
+    expansion_terms: List[str] = Field(default_factory=list)
+
+
+class AnswerSpec(BaseModel):
+    """Composer 契约：意图 → AnswerSection 的映射与展示规则。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    section_kind: Optional[Literal[
+        "policy", "weather", "memory", "preference", "trip", "notice", "general"
+    ]] = None
+    require_section: bool = True
+    # 主 agent 成功后隐藏这些工作流中间 agent 的结果（例如 plan-trip 完成后
+    # 不单独展示 event_collection / rag_knowledge / information_query）。
+    suppress_agents: List[str] = Field(default_factory=list)
+    primary_agent: Optional[str] = None
+
+
+class CheckpointSpec(BaseModel):
+    """跨轮"收集→暂停→续跑"声明：暂停 skill、判定字段。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    enabled: bool = True
+    pause_agent: Optional[str] = None
+    pause_field: str = "planning_ready"
+
+
+class MemoryHook(BaseModel):
+    """声明式记忆回写：哪个 agent 的结果触发哪种副作用。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    agent: str
+    effect: Literal["update_active_trip", "save_preference", "complete_trip"]
+    require_field: Optional[str] = None
 
 
 class HommeySkillConfig(BaseModel):
@@ -69,6 +119,15 @@ class HommeySkillConfig(BaseModel):
     execution: List[SkillExecutionStep] = Field(default_factory=list)
     input_schema: Optional[str] = None
     output_schema: Optional[str] = None
+    # 声明式编排元数据（全部可选，向后兼容；新增 skill 只改 hommey.yaml）
+    confidence_threshold: Optional[float] = Field(default=None, ge=0.0, le=1.0)
+    scope: Optional[SkillScope] = None
+    side_effect_allowed: bool = False
+    answer: Optional[AnswerSpec] = None
+    checkpoint: Optional[CheckpointSpec] = None
+    memory_hooks: List[MemoryHook] = Field(default_factory=list)
+    progress_key: Optional[str] = None
+    updates_preferences: bool = False
 
     @model_validator(mode="after")
     def validate_runtime_contract(self):

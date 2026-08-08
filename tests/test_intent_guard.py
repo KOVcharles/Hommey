@@ -129,12 +129,47 @@ def test_private_tourism_request_is_rejected():
     assert result.should_call_skill is False
 
 
-def test_booking_payment_request_remains_advice_only():
+def test_booking_payment_request_passes_guard_to_llm_decision():
+    # 无 ticket skill 时 guard 不再硬拒订票请求：LLM 主导，由产品边界 prompt 判定。
     result = guard_user_input("帮我订票付款")
 
-    assert result is not None
-    assert result.intent == "unsupported"
-    assert result.should_call_skill is False
+    assert result is None
+
+
+def test_booking_request_without_ticket_skill_resolves_to_unsupported():
+    async def product_boundary_model(_messages):
+        return json.dumps(
+            {
+                "reasoning": "订票不在产品边界内",
+                "routing": {
+                    "intent": "unsupported",
+                    "confidence": 0.95,
+                    "reason": "不支持预订",
+                    "should_call_skill": False,
+                },
+                "intents": [
+                    {
+                        "type": "unsupported",
+                        "confidence": 0.95,
+                        "description": "",
+                        "reason": "不支持预订",
+                        "should_call_skill": False,
+                    }
+                ],
+                "key_entities": {},
+                "rewritten_query": "帮我订票付款",
+                "agent_schedule": [],
+            },
+            ensure_ascii=False,
+        )
+
+    agent = IntentionAgent(name="IntentionAgent", model=product_boundary_model)
+    result = asyncio.run(agent.reply(Msg(name="user", content="帮我订票付款", role="user")))
+    data = json.loads(result.content)
+
+    assert data["routing"]["intent"] == "unsupported"
+    assert data["routing"]["should_call_skill"] is False
+    assert data["agent_schedule"] == []
 
 
 def test_payment_receipt_policy_question_is_not_mistaken_for_payment_action():

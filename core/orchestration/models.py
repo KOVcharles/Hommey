@@ -1,7 +1,7 @@
 """Strict contracts shared by decomposition, execution, and presentation."""
 from __future__ import annotations
 
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List, Literal, Optional
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -22,13 +22,20 @@ class IntentTask(BaseModel):
 
 
 class ExecutionTask(IntentTask):
-    """A validated task bound to a trusted runtime agent by application code."""
+    """A validated task bound to a trusted runtime agent by application code.
+
+    ``task_id`` becomes step-scoped (``f"{intent}-{agent_name}"``) after the
+    graph builder expands a semantic task into its full skill execution
+    template, so one IntentTask can produce multiple ExecutionTasks.
+    """
 
     agent_name: str = Field(min_length=1, max_length=64)
     priority: int = Field(default=1, ge=1)
     reason: str = ""
     expected_output: str = ""
     max_retries: int = Field(default=0, ge=0, le=2)
+    # 步骤级结果判定规则（来自 skill 声明），取代按 intent 硬编码的特殊状态分支。
+    result_rules: Dict[str, Any] = Field(default_factory=dict)
 
 
 class TaskResult(BaseModel):
@@ -49,6 +56,21 @@ class TaskResult(BaseModel):
     display_order: int = 0
 
 
+class PauseInfo(BaseModel):
+    """跨轮"收集→暂停"现场：计划中断时保存的步骤剩余与已收集事实。"""
+
+    model_config = ConfigDict(extra="forbid")
+
+    intent: str
+    skill: str
+    pause_agent: str
+    pause_field: str = "planning_ready"
+    planning_ready: bool = False
+    steps_remaining: List[Dict[str, Any]] = Field(default_factory=list)
+    collected_facts: Dict[str, Any] = Field(default_factory=dict)
+    entities: Dict[str, Any] = Field(default_factory=dict)
+
+
 class ProgressEvent(BaseModel):
     """Backend-owned progress event rendered through frontend message keys."""
 
@@ -62,3 +84,17 @@ class ProgressEvent(BaseModel):
     message_key: str
     task_id: str | None = None
     intent: str | None = None
+
+
+class PipelineOutput(BaseModel):
+    """Unified pipeline result: answer doc XOR pause presentation."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    tasks: List[IntentTask] = Field(default_factory=list)
+    execution_tasks: List[ExecutionTask] = Field(default_factory=list)
+    results: List[TaskResult] = Field(default_factory=list)
+    answer_document: Optional[Any] = None
+    paused: bool = False
+    pause_info: Optional[PauseInfo] = None
+    presentation_document: Optional[Any] = None

@@ -6,7 +6,6 @@ import types
 import pytest
 
 from agents.intention_agent import IntentionAgent
-from agents.orchestration_agent import OrchestrationAgent
 from agentscope.message import Msg
 from context.long_term_memory import FileLongTermMemory
 from context.memory_manager import MemoryManager
@@ -239,82 +238,6 @@ def test_terminal_active_trip_does_not_contaminate_the_next_trip(tmp_path):
     assert new_trip["destination"] == "北京"
     assert "origin" not in new_trip
     assert new_trip["status"] == "active"
-
-
-def test_orchestrator_completes_active_task_and_idempotently_tags_trip():
-    saved_trips = []
-    completed = []
-
-    class LongTerm:
-        @staticmethod
-        def save_trip_history(trip):
-            saved_trips.append(trip)
-
-        @staticmethod
-        def get_preference():
-            return {}
-
-    class Memory:
-        current_request_id = "request-1"
-        long_term = LongTerm()
-
-        @staticmethod
-        def update_active_trip(_data):
-            return None
-
-        @staticmethod
-        def complete_active_trip(reason):
-            completed.append(reason)
-
-    orchestrator = OrchestrationAgent(agent_registry={}, memory_manager=Memory())
-    results = [
-        {
-            "agent_name": "event_collection",
-            "result": {"data": {"origin": "杭州", "destination": "上海", "start_date": "2026-08-01"}},
-        },
-        {
-            "agent_name": "itinerary_planning",
-            "result": {"data": {"itinerary": {"summary": "plan"}, "planning_complete": True}},
-        },
-    ]
-
-    orchestrator._update_memory({}, results)
-
-    assert saved_trips[0]["request_id"] == "request-1"
-    assert saved_trips[0]["destination"] == "上海"
-    assert completed == ["planning_completed"]
-
-
-def test_orchestrator_does_not_persist_sensitive_preference():
-    saved = []
-
-    class LongTerm:
-        @staticmethod
-        def save_preference(key, value):
-            saved.append((key, value))
-
-        @staticmethod
-        def get_preference():
-            return {}
-
-    memory = type("Memory", (), {"long_term": LongTerm()})()
-    orchestrator = OrchestrationAgent(agent_registry={}, memory_manager=memory)
-
-    orchestrator._update_memory(
-        {},
-        [{
-            "agent_name": "preference",
-            "result": {
-                "data": {
-                    "preferences": [
-                        {"type": "note", "value": "password=do-not-store", "action": "replace"}
-                    ]
-                }
-            },
-        }],
-    )
-
-    assert saved == []
 
 
 def test_dynamic_trip_context_prefers_the_most_recent_trip():

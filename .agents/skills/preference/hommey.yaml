@@ -6,6 +6,14 @@ agent_name: preference
 user_facing: false
 risk_level: medium
 catalog_order: 80
+side_effect_allowed: true
+progress_key: preference_updating
+updates_preferences: true
+answer:
+  section_kind: preference
+memory_hooks:
+  - agent: preference
+    effect: save_preference
 tools: [memory]
 execution:
   - skill: preference

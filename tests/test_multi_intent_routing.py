@@ -124,3 +124,29 @@ def test_low_confidence_intent_is_filtered_per_intent():
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]
+
+
+def test_primary_intent_is_catalog_ranked_with_workflow_preference():
+    agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
+
+    def make(intent_type, confidence=0.9):
+        return {"type": intent_type, "confidence": confidence}
+
+    # 多步 workflow（itinerary_planning）是组合请求的主语。
+    primary = agent._select_primary_intent([
+        make("rag_knowledge"), make("itinerary_planning"), make("information_query"),
+    ])
+    assert primary["type"] == "itinerary_planning"
+
+    # 单步意图之间按 catalog_order 排序（rag < memory < preference）。
+    assert agent._select_primary_intent([
+        make("preference"), make("rag_knowledge"),
+    ])["type"] == "rag_knowledge"
+    assert agent._select_primary_intent([
+        make("preference"), make("memory_query"),
+    ])["type"] == "memory_query"
+
+    # 未知意图按最大 catalog_order 垫底，且置信度做同优先级 tiebreaker。
+    assert agent._select_primary_intent([
+        make("chitchat"), make("no_such_intent"),
+    ])["type"] == "chitchat"

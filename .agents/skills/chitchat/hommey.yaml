@@ -6,6 +6,9 @@ agent_name: chitchat
 user_facing: false
 risk_level: low
 catalog_order: 90
+progress_key: task_running
+answer:
+  section_kind: general
 tools: []
 execution:
   - skill: chitchat

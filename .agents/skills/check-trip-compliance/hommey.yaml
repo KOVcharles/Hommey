@@ -6,6 +6,11 @@ agent_name: trip_compliance
 user_facing: true
 risk_level: high
 catalog_order: 40
+progress_key: compliance_checking
+answer:
+  section_kind: notice
+  suppress_agents: [event_collection, rag_knowledge]
+  primary_agent: trip_compliance
 tools: [active_trip_context, rag_retrieval]
 requires:
   - skill: event-collection
@@ -22,6 +27,7 @@ execution:
     max_retries: 1
     reason: 提取待检查的出差事项
     expected_output: 结构化出差事项
+    query: 提取本次出差的待检查事项（出发地={origin} 目的地={destination} 日期={start_date} 天数={duration}）
   - skill: ask-question
     agent_name: rag_knowledge
     priority: 1
@@ -29,6 +35,7 @@ execution:
     max_retries: 1
     reason: 检索适用的公司差旅制度
     expected_output: 与待检查事项相关的制度证据
+    query: 检索适用于目的地={destination}、天数={duration}、目的={purpose} 的公司差旅制度证据
   - skill: check-trip-compliance
     agent_name: trip_compliance
     priority: 2
@@ -36,3 +43,4 @@ execution:
     max_retries: 0
     reason: 基于制度证据执行合规检查
     expected_output: 合规结论、逐项结果、来源和待确认事项
+    query: 依据制度证据检查本次出差（{destination}，{duration}天，目的{purpose}）的合规性
