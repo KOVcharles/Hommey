@@ -173,6 +173,7 @@ class IntentionAgent(AgentBase):
 - confidence 低于 {DEFAULT_CONFIDENCE_THRESHOLD:.2f} 时不要调用 skill（agent_schedule 置空）。
 - information_query 仅用于与差旅行程直接相关的天气、航班、铁路、酒店和交通信息，confidence 至少 {INFORMATION_QUERY_THRESHOLD:.2f}，且查询对象明确。
 - 禁止将短输入、寒暄、半句话、无明确查询对象的问题识别为 information_query。
+- 进行中的行程收集：若对话历史中系统正在收集出差信息（如询问出发地、目的地、日期、天数、出差目的），用户回复的信息片段（如"北京"、"培训"、"2天"、"8月10日返程"）是补全行程信息，应识别为 event_collection，不得判定为 unclear 或 unsupported。
 - 寒暄类（chitchat）调用 chitchat skill，priority=1；unclear、unsupported 的 agent_schedule 必须为空。
 
 【Query 改写要求】
@@ -186,6 +187,8 @@ class IntentionAgent(AgentBase):
 - "我明天去东京出差，帮我查天气" → information_query, should_call_skill=true, agent_schedule=[information_query]
 - "餐补标准是多少" → rag_knowledge, should_call_skill=true, agent_schedule=[rag_knowledge]
 - "我下周去上海出差，帮我安排两天行程" → event_collection(priority=1) + itinerary_planning(priority=2)
+- "（上轮系统询问：还差1项，出差目的是什么）"培训" → event_collection, should_call_skill=true, agent_schedule=[event_collection]
+- "（上轮系统询问：出发地从哪出发）"北京" → event_collection, should_call_skill=true, agent_schedule=[event_collection]
 - "帮我写一个 Python 程序" → unsupported, should_call_skill=false, agent_schedule=[]
 
 【输出 JSON schema（严格按此结构，key 不要少也不要多）】

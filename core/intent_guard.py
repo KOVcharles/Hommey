@@ -106,7 +106,7 @@ def guard_user_input(user_query: str, conversation_context: str = "") -> Optiona
     ):
         return _unsupported("用户请求是私人旅游需求，不属于公司差旅范围")
 
-    if length <= 2:
+    if length <= 2 and not conversation_context:
         return _unclear("输入太短，无法判断具体意图")
 
     return None

@@ -22,6 +22,27 @@ def test_short_input_does_not_call_information_query():
     assert result.agent_schedule == []
 
 
+def test_short_field_value_with_trip_context_is_not_blocked():
+    # trip intake 收集流程中，短输入是"补字段值"（出差目的"培训"、出发地"北京"），
+    # 不应被通用短输入规则拦截为 unclear，应放行给 LLM 结合上下文识别。
+    result = guard_user_input(
+        "培训",
+        "行程框架已保存\n已确认：目的地：南京\n需要补充：\n- 出发地\n- 出差目的",
+    )
+
+    assert result is None
+
+
+def test_short_input_without_context_is_still_blocked():
+    # 首轮无上下文时，短输入仍按 unclear 拦截（安全网保持）。
+    result = guard_user_input("培训")
+
+    assert result is not None
+    assert result.intent == "unclear"
+    assert result.should_call_skill is False
+    assert result.agent_schedule == []
+
+
 def test_chitchat_routes_to_skill():
     route = FastIntentRouter.route("在吗")
 
