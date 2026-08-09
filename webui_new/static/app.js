@@ -32,6 +32,17 @@
     const toast = document.getElementById('toast');
     const promptRotator = document.getElementById('promptRotator');
     const rotatingQuestion = document.getElementById('rotatingQuestion');
+    const knowledgeWorkspace = document.getElementById('knowledgeWorkspace');
+    const knowledgeList = document.getElementById('knowledgeList');
+    const knowledgeSearch = document.getElementById('knowledgeSearch');
+    const knowledgeEmpty = document.getElementById('knowledgeEmpty');
+    const knowledgeDocument = document.getElementById('knowledgeDocument');
+    const documentBody = document.getElementById('documentBody');
+    const documentToc = document.getElementById('documentToc');
+    const knowledgeFileInput = document.getElementById('knowledgeFileInput');
+    const knowledgeUploadButton = document.getElementById('knowledgeUploadButton');
+    const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
+    const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
     const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
@@ -55,6 +66,11 @@
     let lastProcessingStatusAt = 0;
     let contextualPlaceholder = '';
     let scrollIdleTimer;
+    let knowledgeDocuments = [];
+    let activeKnowledgeDocumentId = '';
+    let knowledgeLoaded = false;
+    let knowledgeLoading = false;
+    let knowledgeRefreshTimer;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -191,6 +207,7 @@
         document.getElementById('homeButton').addEventListener('click', showHome);
         document.getElementById('newChatButton').addEventListener('click', createNewSession);
         document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
+        document.getElementById('knowledgeButton').addEventListener('click', showKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
         document.getElementById('settingsClose').addEventListener('click', closeSettings);
         document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
@@ -216,6 +233,22 @@
         document.getElementById('motionToggle').addEventListener('click', toggleMotion);
 
         historySearch.addEventListener('input', filterHistory);
+        historySearch.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            setHistorySearchExpanded(false);
+            document.getElementById('searchToggle').focus();
+        });
+        knowledgeSearch.addEventListener('input', renderKnowledgeList);
+        document.getElementById('knowledgeBack').addEventListener('click', closeKnowledgeDocument);
+        knowledgeFileInput.addEventListener('change', () => {
+            uploadKnowledgeDocuments(knowledgeFileInput.files);
+            knowledgeFileInput.value = '';
+        });
+        knowledgeRefreshButton.addEventListener('click', startKnowledgeRefresh);
+        document.getElementById('knowledgeSyncClose').addEventListener('click', () => {
+            if (knowledgeSyncBar.dataset.status !== 'running') knowledgeSyncBar.hidden = true;
+        });
         promptRotator.addEventListener('click', () => submitPrompt(promptRotator.dataset.prompt));
         promptRotator.addEventListener('mouseenter', stopPromptRotation);
         promptRotator.addEventListener('mouseleave', startPromptRotation);
@@ -230,6 +263,7 @@
                 sessionPopover.hidden = true;
             }
         });
+        document.addEventListener('keydown', handleKnowledgeShortcut);
     }
 
     function markConversationScrolling() {
@@ -325,16 +359,377 @@
     }
 
     function enterChatView() {
-        appShell.dataset.view = 'chat';
+        setMainView('chat');
         closeSidebar();
         requestAnimationFrame(scrollToBottom);
     }
 
     function showHome() {
         if (isOnboarding || isProcessing) return;
-        appShell.dataset.view = 'home';
+        setMainView('home');
         closeSidebar();
         setTimeout(() => homeInput.focus(), 180);
+    }
+
+    function showKnowledge() {
+        if (isOnboarding) {
+            showToast('完成首次设置后即可查阅知识库。');
+            return;
+        }
+        setMainView('knowledge');
+        closeSidebar();
+        loadKnowledgeDocuments();
+        loadKnowledgeRefreshStatus();
+        setTimeout(() => knowledgeSearch.focus(), 180);
+    }
+
+    function setMainView(view) {
+        appShell.dataset.view = view;
+        document.getElementById('knowledgeButton').classList.toggle('active', view === 'knowledge');
+    }
+
+    function handleKnowledgeShortcut(event) {
+        if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+        if (appShell.dataset.view !== 'knowledge') return;
+        event.preventDefault();
+        knowledgeSearch.focus();
+    }
+
+    async function loadKnowledgeDocuments(force = false) {
+        if ((!force && knowledgeLoaded) || knowledgeLoading) return;
+        knowledgeLoading = true;
+        try {
+            const data = await fetchJson('/api/knowledge/documents');
+            knowledgeDocuments = Array.isArray(data.documents) ? data.documents : [];
+            knowledgeLoaded = true;
+            document.getElementById('knowledgeDocumentCount').textContent = String(data.total ?? knowledgeDocuments.length);
+            renderKnowledgeList();
+        } catch (err) {
+            knowledgeList.innerHTML = '<div class="knowledge-list-state">知识库暂时无法载入。<br>请稍后再试。</div>';
+            document.getElementById('knowledgeResultCount').textContent = '0';
+            showToast(err.message || '知识库载入失败');
+        } finally {
+            knowledgeLoading = false;
+        }
+    }
+
+    async function uploadKnowledgeDocuments(fileList) {
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        if (files.length > 10) {
+            showToast('每次最多上传 10 份文档。');
+            return;
+        }
+        const unsupported = files.find((file) => !/\.(?:txt|md|pdf)$/i.test(file.name));
+        if (unsupported) {
+            showToast(`${unsupported.name} 不是支持的文档格式。`);
+            return;
+        }
+
+        const formData = new FormData();
+        files.forEach((file) => formData.append('files', file));
+        setKnowledgeAdminBusy(true, '正在上传');
+        try {
+            const data = await fetchJson('/api/knowledge/documents', { method: 'POST', body: formData });
+            knowledgeLoaded = false;
+            await loadKnowledgeDocuments(true);
+            showKnowledgeUploadResult(data.total || files.length);
+            showToast(`已上传 ${data.total || files.length} 份文档`);
+        } catch (err) {
+            showToast(formatDisplayError(err, '文档上传失败'));
+        } finally {
+            setKnowledgeAdminBusy(false);
+        }
+    }
+
+    async function startKnowledgeRefresh() {
+        if (knowledgeRefreshButton.classList.contains('busy')) return;
+        setKnowledgeAdminBusy(true);
+        try {
+            const status = await fetchJson('/api/knowledge/refresh', { method: 'POST' });
+            renderKnowledgeRefreshStatus(status);
+            scheduleKnowledgeRefreshPoll();
+        } catch (err) {
+            setKnowledgeAdminBusy(false);
+            showToast(formatDisplayError(err, '无法启动知识库刷新'));
+            if (err.code === 'KNOWLEDGE_REFRESH_RUNNING') loadKnowledgeRefreshStatus();
+        }
+    }
+
+    async function loadKnowledgeRefreshStatus() {
+        try {
+            const status = await fetchJson('/api/knowledge/refresh/status');
+            renderKnowledgeRefreshStatus(status);
+            if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+        } catch (err) {
+            // The document library remains usable even if status polling is unavailable.
+        }
+    }
+
+    function scheduleKnowledgeRefreshPoll() {
+        clearTimeout(knowledgeRefreshTimer);
+        knowledgeRefreshTimer = setTimeout(async () => {
+            try {
+                const status = await fetchJson('/api/knowledge/refresh/status');
+                renderKnowledgeRefreshStatus(status);
+                if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+                else {
+                    knowledgeLoaded = false;
+                    await loadKnowledgeDocuments(true);
+                }
+            } catch (err) {
+                scheduleKnowledgeRefreshPoll();
+            }
+        }, 900);
+    }
+
+    function renderKnowledgeRefreshStatus(status) {
+        const state = String(status?.status || 'idle');
+        if (state === 'idle' && !status?.finished_at) {
+            knowledgeSyncBar.hidden = true;
+            setKnowledgeAdminBusy(false);
+            return;
+        }
+
+        const running = state === 'running';
+        const success = state === 'success';
+        const partial = state === 'partial_success';
+        const report = status?.report || {};
+        knowledgeSyncBar.hidden = false;
+        knowledgeSyncBar.dataset.status = running ? 'running' : (success ? 'success' : (partial ? 'error' : state));
+        document.getElementById('knowledgeSyncTitle').textContent = status?.stage || '知识库状态已更新';
+        document.getElementById('knowledgeSyncProgress').style.width = `${Math.max(0, Math.min(100, Number(status?.progress || 0)))}%`;
+
+        let detail = status?.message || '';
+        if (running) detail = `${Number(status?.progress || 0)}% · 文档会在后台完成解析与向量化`;
+        else if (success || partial) {
+            detail = `${report.documents_loaded || 0} 份文档 · ${report.chunks_loaded || 0} 个检索片段${partial ? ` · ${report.errors?.length || 0} 项失败` : ''}`;
+        } else if (!detail && status?.finished_at) {
+            detail = `上次刷新于 ${formatDocumentDate(status.finished_at)}`;
+        }
+        document.getElementById('knowledgeSyncDetail').textContent = detail || '可以继续浏览当前知识库。';
+        setKnowledgeAdminBusy(running);
+    }
+
+    function showKnowledgeUploadResult(count) {
+        knowledgeSyncBar.hidden = false;
+        knowledgeSyncBar.dataset.status = 'pending';
+        document.getElementById('knowledgeSyncTitle').textContent = `已上传 ${count} 份文档，等待入库`;
+        document.getElementById('knowledgeSyncDetail').textContent = '确认文档无误后，点击“刷新数据库”完成向量化。';
+        document.getElementById('knowledgeSyncProgress').style.width = '0%';
+    }
+
+    function setKnowledgeAdminBusy(busy, uploadLabel) {
+        knowledgeRefreshButton.classList.toggle('busy', busy);
+        knowledgeRefreshButton.disabled = busy;
+        knowledgeUploadButton.classList.toggle('busy', busy);
+        knowledgeFileInput.disabled = busy;
+        document.getElementById('knowledgeUploadLabel').textContent = uploadLabel || '上传文档';
+    }
+
+    function renderKnowledgeList() {
+        if (!knowledgeLoaded) return;
+        const query = knowledgeSearch.value.trim().toLocaleLowerCase('zh-CN');
+        const visible = knowledgeDocuments.filter((doc) => {
+            if (!query) return true;
+            return [doc.title, doc.preview, doc.category_label, doc.filename]
+                .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(query));
+        });
+
+        document.getElementById('knowledgeResultCount').textContent = String(visible.length);
+        knowledgeList.replaceChildren();
+        if (!visible.length) {
+            const empty = document.createElement('div');
+            empty.className = 'knowledge-list-state';
+            empty.textContent = query ? '没有找到匹配的文档。' : '知识库中还没有可查阅的文档。';
+            knowledgeList.appendChild(empty);
+            return;
+        }
+
+        visible.forEach((doc) => {
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = `knowledge-card${doc.id === activeKnowledgeDocumentId ? ' active' : ''}`;
+            card.dataset.documentId = doc.id;
+            card.setAttribute('aria-label', `阅读 ${doc.title}`);
+
+            const top = document.createElement('div');
+            top.className = 'knowledge-card-top';
+            const category = document.createElement('span');
+            category.className = 'knowledge-category';
+            category.textContent = doc.category_label || '差旅资料';
+            const tags = document.createElement('span');
+            tags.className = 'knowledge-card-tags';
+            if (doc.index_status === 'pending') {
+                const indexState = document.createElement('span');
+                indexState.className = 'knowledge-index-state';
+                indexState.textContent = '待入库';
+                tags.appendChild(indexState);
+            }
+            const type = document.createElement('span');
+            type.className = 'knowledge-file-type';
+            type.textContent = doc.file_type || 'TXT';
+            tags.appendChild(type);
+            top.append(category, tags);
+
+            const title = document.createElement('h3');
+            title.textContent = doc.title;
+            const preview = document.createElement('p');
+            preview.textContent = doc.preview || '打开查看文档内容';
+            const meta = document.createElement('div');
+            meta.className = 'knowledge-card-meta';
+            appendMetaParts(meta, [`约 ${doc.read_minutes || 1} 分钟`, formatDocumentSize(doc.size_bytes)]);
+            card.append(top, title, preview, meta);
+            card.addEventListener('click', () => openKnowledgeDocument(doc.id));
+            knowledgeList.appendChild(card);
+        });
+    }
+
+    async function openKnowledgeDocument(documentId) {
+        if (!documentId) return;
+        activeKnowledgeDocumentId = documentId;
+        renderKnowledgeList();
+        knowledgeWorkspace.classList.add('has-document');
+        knowledgeEmpty.hidden = false;
+        knowledgeEmpty.querySelector('h2').textContent = '正在打开文档';
+        knowledgeEmpty.querySelector('p').textContent = '正在整理章节与阅读目录。';
+        knowledgeDocument.hidden = true;
+
+        try {
+            const encodedId = documentId.split('/').map(encodeURIComponent).join('/');
+            const doc = await fetchJson(`/api/knowledge/documents/${encodedId}`);
+            if (activeKnowledgeDocumentId !== documentId) return;
+            renderKnowledgeDocument(doc);
+        } catch (err) {
+            if (activeKnowledgeDocumentId !== documentId) return;
+            knowledgeEmpty.querySelector('h2').textContent = '文档暂时无法打开';
+            knowledgeEmpty.querySelector('p').textContent = err.message || '请返回目录后重试。';
+            showToast(err.message || '文档读取失败');
+        }
+    }
+
+    function closeKnowledgeDocument() {
+        knowledgeWorkspace.classList.remove('has-document');
+        knowledgeSearch.focus();
+    }
+
+    function renderKnowledgeDocument(doc) {
+        document.getElementById('documentCategory').textContent = doc.category_label || '差旅资料';
+        document.getElementById('documentType').textContent = doc.file_type || 'TXT';
+        document.getElementById('documentTitle').textContent = doc.title || doc.filename;
+        const meta = document.getElementById('documentMeta');
+        meta.replaceChildren();
+        const parts = [
+            doc.filename,
+            `约 ${doc.read_minutes || 1} 分钟`,
+            doc.page_count ? `${doc.page_count} 页` : `${Number(doc.character_count || 0).toLocaleString('zh-CN')} 字符`,
+            `更新于 ${formatDocumentDate(doc.updated_at)}`,
+        ];
+        appendMetaParts(meta, parts);
+        buildDocumentBody(doc.content || '', doc.title || '');
+        knowledgeEmpty.hidden = true;
+        knowledgeDocument.hidden = false;
+        knowledgeDocument.closest('.knowledge-reader').scrollTop = 0;
+    }
+
+    function buildDocumentBody(content, title) {
+        documentBody.replaceChildren();
+        documentToc.replaceChildren();
+        const fragment = document.createDocumentFragment();
+        const tocEntries = [];
+        let list = null;
+        let titleSkipped = false;
+
+        const flushList = () => {
+            if (!list) return;
+            fragment.appendChild(list);
+            list = null;
+        };
+
+        String(content).replace(/\r\n?/g, '\n').split('\n').forEach((rawLine) => {
+            const line = rawLine.trim();
+            if (!line) {
+                flushList();
+                return;
+            }
+            const plainLine = line.replace(/^#{1,6}\s*/, '').trim();
+            if (!titleSkipped && normalizeDocumentText(plainLine) === normalizeDocumentText(title)) {
+                titleSkipped = true;
+                return;
+            }
+
+            const markdownHeading = line.match(/^(#{1,6})\s+(.+)$/);
+            const isPrimaryHeading = /^[一二三四五六七八九十百]+、\S+/.test(line);
+            const isSecondaryHeading = /^\d+[.、]\s*\S+/.test(line);
+            if (markdownHeading || isPrimaryHeading || isSecondaryHeading) {
+                flushList();
+                const level = (markdownHeading && markdownHeading[1].length >= 3) || isSecondaryHeading ? 3 : 2;
+                const heading = document.createElement(level === 2 ? 'h2' : 'h3');
+                heading.textContent = markdownHeading ? markdownHeading[2].trim() : line;
+                if (level === 2) {
+                    heading.id = `document-section-${tocEntries.length + 1}`;
+                    tocEntries.push({ id: heading.id, title: heading.textContent });
+                }
+                fragment.appendChild(heading);
+                titleSkipped = true;
+                return;
+            }
+
+            const bullet = line.match(/^(?:[-*•]|[a-zA-Z][)）])\s*(.+)$/);
+            if (bullet) {
+                if (!list) list = document.createElement('ul');
+                const item = document.createElement('li');
+                item.textContent = bullet[1];
+                list.appendChild(item);
+                return;
+            }
+
+            flushList();
+            const paragraph = document.createElement('p');
+            paragraph.textContent = line;
+            if (/^(?:Q\d*|A\d*|情况描述|处理步骤|特别提醒|温馨提示)[：:]/i.test(line)) {
+                paragraph.className = 'document-lead';
+            }
+            fragment.appendChild(paragraph);
+            titleSkipped = true;
+        });
+        flushList();
+        documentBody.appendChild(fragment);
+
+        tocEntries.slice(0, 12).forEach((entry) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = entry.title;
+            button.addEventListener('click', () => document.getElementById(entry.id)?.scrollIntoView({ behavior: 'smooth' }));
+            documentToc.appendChild(button);
+        });
+        documentToc.hidden = tocEntries.length < 2;
+    }
+
+    function normalizeDocumentText(value) {
+        return String(value || '').replace(/\s+/g, '').replace(/[。；：:]/g, '').toLocaleLowerCase('zh-CN');
+    }
+
+    function appendMetaParts(container, parts) {
+        parts.filter(Boolean).forEach((part, index) => {
+            if (index) container.appendChild(document.createElement('i'));
+            const span = document.createElement('span');
+            span.textContent = part;
+            container.appendChild(span);
+        });
+    }
+
+    function formatDocumentSize(bytes) {
+        const value = Number(bytes || 0);
+        if (value < 1024) return `${value} B`;
+        if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+        return `${(value / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function formatDocumentDate(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '未知日期';
+        return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(date);
     }
 
     function setInputEnabled(enabled) {
@@ -522,9 +917,21 @@
     }
 
     function toggleHistorySearch() {
-        historySearchBox.classList.toggle('visible');
-        if (historySearchBox.classList.contains('visible')) historySearch.focus();
-        else {
+        setHistorySearchExpanded(!historySearchBox.classList.contains('visible'));
+    }
+
+    function setHistorySearchExpanded(expanded) {
+        const toggle = document.getElementById('searchToggle');
+        historySearchBox.classList.toggle('visible', expanded);
+        historySearchBox.setAttribute('aria-hidden', String(!expanded));
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.classList.toggle('active', expanded);
+        historySearch.tabIndex = expanded ? 0 : -1;
+        if (expanded) {
+            setTimeout(() => {
+                if (historySearchBox.classList.contains('visible')) historySearch.focus();
+            }, 140);
+        } else {
             historySearch.value = '';
             filterHistory();
         }
@@ -583,7 +990,7 @@
             );
             if (selectedSessionId === activeSessionId) {
                 chatMessages.replaceChildren();
-                appShell.dataset.view = 'home';
+                setMainView('home');
             }
             await loadSessions();
             showToast('会话已删除');
@@ -595,7 +1002,7 @@
             await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
             chatMessages.replaceChildren();
             closeSettings();
-            appShell.dataset.view = 'home';
+            setMainView('home');
             await loadSessions();
             showToast('聊天记录已清空');
         });

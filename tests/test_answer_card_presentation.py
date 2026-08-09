@@ -207,6 +207,15 @@ def test_single_weather_result_becomes_structured_weather_card():
     assert document.sections[0].items[0].label == "当前"
 
 
+def test_frontend_localizes_weather_api_conditions_to_chinese():
+    script = (Path(__file__).resolve().parents[1] / "webui_new/static/answer-card.js").read_text(encoding="utf-8")
+
+    assert "'cloudy': '多云'" in script
+    assert "'patchy rain nearby': '附近有零星降雨'" in script
+    assert "'light rain shower': '小阵雨'" in script
+    assert "localizeWeatherPresentation" in script
+
+
 def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     root = Path(__file__).resolve().parents[1]
     css = (root / "webui_new/static/hommey.css").read_text(encoding="utf-8")
@@ -230,7 +239,7 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "renderNotices" in answer_card
     assert "展开完整内容" in answer_card
     assert "查看行程细节" in answer_card
-    assert "20260809-cards-v7" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert "20260809-weather-zh-v8" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -243,7 +252,8 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "--content: 800px" in layout
     assert ".message-row.ai { position: relative; display: block; }" in layout
     assert "right: calc(100% + 8px)" in layout
+    assert ".message-row.ai:has(.answer-card) .msg-avatar.ai { display: none; }" in layout
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260809-layout-v2" in template
+    assert "20260809-knowledge-layout-v5" in template

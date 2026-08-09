@@ -27,6 +27,111 @@
         return ['ready', 'pending', 'required', 'optional'].includes(status) ? status : 'optional';
     }
 
+    const WEATHER_CONDITION_ZH = Object.freeze({
+        'sunny': '晴朗',
+        'clear': '晴',
+        'partly cloudy': '局部多云',
+        'cloudy': '多云',
+        'overcast': '阴',
+        'mist': '薄雾',
+        'patchy rain possible': '局部可能有雨',
+        'patchy rain nearby': '附近有零星降雨',
+        'patchy snow possible': '局部可能有雪',
+        'patchy snow nearby': '附近有零星降雪',
+        'patchy sleet possible': '局部可能有雨夹雪',
+        'patchy freezing drizzle possible': '局部可能有冻毛毛雨',
+        'thundery outbreaks possible': '局部可能有雷暴',
+        'blowing snow': '风吹雪',
+        'blizzard': '暴风雪',
+        'fog': '雾',
+        'freezing fog': '冻雾',
+        'patchy light drizzle': '局部小毛毛雨',
+        'light drizzle': '小毛毛雨',
+        'freezing drizzle': '冻毛毛雨',
+        'heavy freezing drizzle': '强冻毛毛雨',
+        'patchy light rain': '局部小雨',
+        'light rain': '小雨',
+        'moderate rain at times': '间歇性中雨',
+        'moderate rain': '中雨',
+        'heavy rain at times': '间歇性大雨',
+        'heavy rain': '大雨',
+        'light freezing rain': '小冻雨',
+        'moderate or heavy freezing rain': '中到大冻雨',
+        'light sleet': '小雨夹雪',
+        'moderate or heavy sleet': '中到大雨夹雪',
+        'patchy light snow': '局部小雪',
+        'light snow': '小雪',
+        'patchy moderate snow': '局部中雪',
+        'moderate snow': '中雪',
+        'patchy heavy snow': '局部大雪',
+        'heavy snow': '大雪',
+        'ice pellets': '冰粒',
+        'light rain shower': '小阵雨',
+        'moderate or heavy rain shower': '中到大阵雨',
+        'torrential rain shower': '强阵雨',
+        'light sleet showers': '小雨夹雪阵雨',
+        'moderate or heavy sleet showers': '中到大雨夹雪阵雨',
+        'light snow showers': '小阵雪',
+        'moderate or heavy snow showers': '中到大阵雪',
+        'light showers of ice pellets': '小冰粒阵雨',
+        'moderate or heavy showers of ice pellets': '中到大冰粒阵雨',
+        'patchy light rain with thunder': '局部小雨伴雷电',
+        'moderate or heavy rain with thunder': '中到大雨伴雷电',
+        'patchy light snow with thunder': '局部小雪伴雷电',
+        'moderate or heavy snow with thunder': '中到大雪伴雷电',
+    });
+    const WEATHER_CONDITIONS_BY_LENGTH = Object.keys(WEATHER_CONDITION_ZH).sort((a, b) => b.length - a.length);
+
+    function localizeWeatherCondition(value) {
+        const raw = String(value || '').trim();
+        return WEATHER_CONDITION_ZH[raw.toLowerCase().replace(/\s+/g, ' ')] || raw;
+    }
+
+    function localizeWeatherText(value) {
+        let output = String(value || '');
+        WEATHER_CONDITIONS_BY_LENGTH.forEach((condition) => {
+            const escaped = condition.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+            output = output.replace(new RegExp(`\\b${escaped}\\b`, 'gi'), WEATHER_CONDITION_ZH[condition]);
+        });
+        return output;
+    }
+
+    function localizeWeatherPresentation(documentData) {
+        const data = { ...(documentData || {}) };
+        const sections = Array.isArray(data.sections) ? data.sections : [];
+        const hasWeather = sections.some((section) => section?.kind === 'weather') || !!data.pre_departure?.weather;
+        if (!hasWeather) return data;
+        data.summary = localizeWeatherText(data.summary);
+        data.plain_text = localizeWeatherText(data.plain_text);
+        data.sections = sections.map((section) => {
+            if (section?.kind !== 'weather') return section;
+            return {
+                ...section,
+                body: localizeWeatherText(section.body),
+                items: (Array.isArray(section.items) ? section.items : []).map((item) => ({
+                    ...item,
+                    value: localizeWeatherText(item.value),
+                    detail: localizeWeatherText(item.detail),
+                })),
+                days: (Array.isArray(section.days) ? section.days : []).map((day) => ({
+                    ...day,
+                    condition: localizeWeatherCondition(day.condition),
+                })),
+            };
+        });
+        if (data.pre_departure?.weather) {
+            data.pre_departure = {
+                ...data.pre_departure,
+                weather: {
+                    ...data.pre_departure.weather,
+                    condition: localizeWeatherText(data.pre_departure.weather.condition),
+                    advice: localizeWeatherText(data.pre_departure.weather.advice),
+                },
+            };
+        }
+        return data;
+    }
+
     function splitLegacyList(value) {
         return String(value || '').split(/[；;\n]/).map((item) => item.replace(/^[\s•-]+/, '').trim()).filter(Boolean);
     }
@@ -409,7 +514,7 @@
     function create(documentData) {
         const normalized = normalizeMachinePlaceholders(documentData);
         const timeline = upgradeLegacyTripTimeline(normalized);
-        const data = upgradeLegacyPreDeparture(timeline);
+        const data = localizeWeatherPresentation(upgradeLegacyPreDeparture(timeline));
         const card = element('article', 'answer-card');
         card.setAttribute('aria-label', data.title || '查询结果');
 
@@ -443,5 +548,5 @@
         return card;
     }
 
-    window.HommeyAnswerCard = { create };
+    window.HommeyAnswerCard = { create, localizeWeatherCondition };
 })();

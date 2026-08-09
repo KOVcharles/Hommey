@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260809-layout-v2">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260809-knowledge-layout-v5">
     <link rel="stylesheet" href="/static/answer-card.css?v=20260809-cards-v7">
     <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260809-intake-v5">
 </head>
@@ -104,6 +104,103 @@
                 <p class="disclaimer">Hommey 可能会出错，请核对重要的出行信息。</p>
             </footer>
         </main>
+
+        <main id="knowledgeView" class="screen knowledge-view" aria-label="企业知识库">
+            <div class="knowledge-shell">
+                <header class="knowledge-overview">
+                    <div>
+                        <div class="knowledge-eyebrow">
+                            <span class="knowledge-pulse" aria-hidden="true"></span>
+                            <span>RAG SOURCE LIBRARY</span>
+                        </div>
+                        <h1>企业知识库</h1>
+                        <p>查阅 Hommey 回答差旅问题时所依据的制度与指南。</p>
+                    </div>
+                    <div class="knowledge-header-side">
+                        <div class="knowledge-summary" aria-label="知识库统计">
+                            <strong id="knowledgeDocumentCount">—</strong>
+                            <span>份可查阅文档</span>
+                        </div>
+                        <div class="knowledge-admin-actions" aria-label="知识库管理">
+                            <label id="knowledgeUploadButton" class="knowledge-admin-button">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 14v5h14v-5"/></svg>
+                                <span id="knowledgeUploadLabel">上传文档</span>
+                                <input id="knowledgeFileInput" type="file" multiple accept=".txt,.md,.pdf" hidden>
+                            </label>
+                            <button id="knowledgeRefreshButton" class="knowledge-admin-button primary" type="button">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.2-2.3L20 9M4 15l2.7 2.3A7 7 0 0 0 17.9 15"/></svg>
+                                <span>刷新数据库</span>
+                            </button>
+                        </div>
+                    </div>
+                </header>
+
+                <div id="knowledgeWorkspace" class="knowledge-workspace">
+                    <section class="knowledge-library" aria-label="文档目录">
+                        <label class="knowledge-search">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                            <input id="knowledgeSearch" type="search" placeholder="搜索制度、指南或关键词" autocomplete="off">
+                            <kbd>⌘ K</kbd>
+                        </label>
+                        <div class="knowledge-filter-row">
+                            <span>全部文档</span>
+                            <span id="knowledgeResultCount">—</span>
+                        </div>
+                        <div id="knowledgeList" class="knowledge-list" aria-live="polite">
+                            <div class="knowledge-list-loading">
+                                <span></span><span></span><span></span>
+                            </div>
+                        </div>
+                    </section>
+
+                    <article class="knowledge-reader" aria-live="polite">
+                        <div id="knowledgeEmpty" class="knowledge-empty">
+                            <div class="knowledge-empty-mark" aria-hidden="true">
+                                <svg width="34" height="34" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.35"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M8 7h8M8 11h6"/></svg>
+                            </div>
+                            <h2>选择一份文档开始阅读</h2>
+                            <p>原始资料会在这里以清晰的章节结构呈现。</p>
+                        </div>
+
+                        <div id="knowledgeDocument" class="knowledge-document" hidden>
+                            <button id="knowledgeBack" class="knowledge-back" type="button">
+                                <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m15 18-6-6 6-6"/></svg>
+                                返回文档目录
+                            </button>
+                            <header class="document-head">
+                                <div class="document-kicker">
+                                    <span id="documentCategory"></span>
+                                    <span id="documentType"></span>
+                                </div>
+                                <h2 id="documentTitle"></h2>
+                                <div id="documentMeta" class="document-meta"></div>
+                            </header>
+                            <nav id="documentToc" class="document-toc" aria-label="本文目录" hidden></nav>
+                            <div id="documentBody" class="document-body"></div>
+                            <footer class="document-end">
+                                <span></span>
+                                <p>已到达文档末尾</p>
+                                <span></span>
+                            </footer>
+                        </div>
+                    </article>
+                </div>
+
+                <div id="knowledgeSyncBar" class="knowledge-sync-bar" hidden aria-live="polite">
+                    <div id="knowledgeSyncIcon" class="knowledge-sync-icon" aria-hidden="true">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.2-2.3L20 9M4 15l2.7 2.3A7 7 0 0 0 17.9 15"/></svg>
+                    </div>
+                    <div class="knowledge-sync-copy">
+                        <strong id="knowledgeSyncTitle">正在准备知识库刷新</strong>
+                        <span id="knowledgeSyncDetail">文档会在后台完成解析与向量化。</span>
+                    </div>
+                    <div class="knowledge-sync-progress" aria-hidden="true"><span id="knowledgeSyncProgress"></span></div>
+                    <button id="knowledgeSyncClose" class="knowledge-sync-close" type="button" aria-label="关闭状态提示">
+                        <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                    </button>
+                </div>
+            </div>
+        </main>
     </div>
 
     <button id="scrim" class="scrim" type="button" aria-label="关闭侧栏"></button>
@@ -126,14 +223,21 @@
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
                     <span>新对话</span>
                 </button>
-                <button id="searchToggle" class="sidebar-action" type="button">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-                    <span>搜索会话</span>
+                <div class="sidebar-search-group">
+                    <button id="searchToggle" class="sidebar-action" type="button" aria-expanded="false" aria-controls="historySearchBox">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                        <span>搜索会话</span>
+                    </button>
+                    <label id="historySearchBox" class="history-search" aria-hidden="true">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                        <input id="historySearch" type="search" placeholder="输入会话名称" tabindex="-1">
+                    </label>
+                </div>
+                <button id="knowledgeButton" class="sidebar-action knowledge-entry" type="button">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h7"/></svg>
+                    <span>知识库</span>
+                    <span class="sidebar-action-note">在线查阅</span>
                 </button>
-                <label id="historySearchBox" class="history-search">
-                    <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-                    <input id="historySearch" type="search" placeholder="输入会话名称">
-                </label>
             </div>
         </div>
         <div id="historyList" class="history-list">
@@ -235,8 +339,8 @@
     </section>
 
     <div id="toast" class="toast" role="status"></div>
-    <script src="/static/answer-card.js?v=20260809-cards-v7"></script>
+    <script src="/static/answer-card.js?v=20260809-weather-zh-v8"></script>
     <script src="/static/trip-intake-card.js?v=20260809-intake-v5"></script>
-    <script src="/static/app.js?v=20260809-app-v6"></script>
+    <script src="/static/app.js?v=20260809-knowledge-admin-v3"></script>
 </body>
 </html>
