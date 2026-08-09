@@ -4,11 +4,21 @@ from __future__ import annotations
 import asyncio
 from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
+from core.intent_catalog import (
+    pause_spec_for_intent,
+    execution_steps_for_intent,
+    intent_to_skill,
+)
+
 from .events import task_event
 from .graph_builder import TaskGraphBuilder
-from .models import ExecutionTask, ProgressEvent, TaskResult
+from .models import ExecutionTask, PauseInfo, ProgressEvent, TaskResult
 
 ProgressCallback = Callable[[ProgressEvent], Awaitable[None]]
+
+
+def _nested(data: Dict[str, Any]) -> Dict[str, Any]:
+    return data.get("data") if isinstance(data.get("data"), dict) else data
 
 
 class TaskExecutor:
@@ -20,18 +30,90 @@ class TaskExecutor:
         tasks: Iterable[ExecutionTask],
         base_context: Dict[str, Any],
         progress: Optional[ProgressCallback] = None,
-    ) -> List[TaskResult]:
+        lifecycle=None,
+        previous_results: Optional[List[TaskResult]] = None,
+        active_goal_ids: Optional[set[str]] = None,
+    ) -> tuple[List[TaskResult], List[PauseInfo]]:
         task_list = list(tasks)
-        results: List[TaskResult] = []
+        task_by_id = {task.task_id: task for task in task_list}
+        results: List[TaskResult] = list(previous_results or [])
+        completed_ids = {
+            item.task_id for item in results if item.status in {"success", "skipped"}
+        }
+        pauses: List[PauseInfo] = []
+        paused_goals: set[str] = set()
+        blocked_ids: set[str] = set()
+        skipped: set = set()
+
         for batch in TaskGraphBuilder.batches(task_list):
-            for task in batch:
+            if lifecycle is not None and await lifecycle.should_interrupt():
+                await lifecycle.mark_interrupted()
+                break
+            active = [
+                task for task in batch
+                if task.task_id not in skipped
+                and task.task_id not in completed_ids
+                and task.task_id not in blocked_ids
+                and task.goal_id not in paused_goals
+                and (active_goal_ids is None or task.goal_id in active_goal_ids)
+            ]
+            if not active:
+                continue
+            for task in active:
                 await self._emit(progress, task_event("queued", task.task_id, task.intent))
             batch_results = await asyncio.gather(*[
-                self._run_one(task, base_context, results, progress)
-                for task in batch
+                self._run_one(task, base_context, results, progress, lifecycle)
+                for task in active
             ])
             results.extend(batch_results)
-        return sorted(results, key=lambda item: item.display_order)
+
+            # abort-halt：错误 + 步骤声明 abort → 下游（同意图后继 + 传递依赖）标跳过。
+            # 不加 break：同一批内多个 goal 各自的 abort 失败都要处理，
+            # _mark_downstream_skipped 经共享 skipped 集合幂等，重复处理安全。
+            for result in batch_results:
+                task = task_by_id.get(result.task_id)
+                if result.status == "error" and task is not None and task.failure_policy == "abort":
+                    newly_skipped = self._mark_downstream_skipped(
+                        task_list, result, task_by_id, results, skipped
+                    )
+                    if lifecycle is not None:
+                        for skipped_result in newly_skipped:
+                            await lifecycle.node_finished(skipped_result)
+
+            # pause gate：声明 pause 的步骤在 pause_field 为 False 时等待用户。
+            for result in batch_results:
+                info = self._pause_info(result, task_by_id)
+                if info is not None:
+                    if not any(item.goal_id == info.goal_id for item in pauses):
+                        pauses.append(info)
+                    paused_goals.add(info.goal_id)
+                    self._block_waiting_goal(
+                        task_list, result.task_id, info.goal_id, blocked_ids
+                    )
+
+        return sorted(results, key=lambda item: item.display_order), pauses
+
+    @staticmethod
+    def _block_waiting_goal(
+        task_list: List[ExecutionTask], paused_task_id: str,
+        goal_id: str, blocked_ids: set[str],
+    ) -> None:
+        """Freeze only the waiting goal and dependency descendants.
+
+        Unrelated goals remain runnable, so a missing field in a planning goal
+        cannot truncate a parallel policy/weather goal.
+        """
+        blocked_ids.update(task.task_id for task in task_list if task.goal_id == goal_id)
+        blocked_ids.discard(paused_task_id)
+        changed = True
+        while changed:
+            changed = False
+            for task in task_list:
+                if task.task_id in blocked_ids:
+                    continue
+                if any(dep in blocked_ids or dep == paused_task_id for dep in task.depends_on):
+                    blocked_ids.add(task.task_id)
+                    changed = True
 
     async def _run_one(
         self,
@@ -39,10 +121,22 @@ class TaskExecutor:
         base_context: Dict[str, Any],
         previous: List[TaskResult],
         progress: Optional[ProgressCallback],
+        lifecycle=None,
     ) -> TaskResult:
         await self._emit(progress, task_event("running", task.task_id, task.intent))
+        if lifecycle is not None:
+            await lifecycle.node_started(task)
         scoped_context = dict(base_context)
+        request_original = (
+            scoped_context.get("request_original_query")
+            or scoped_context.get("original_query")
+            or scoped_context.get("agent_query")
+        )
+        scoped_context["request_original_query"] = request_original
+        scoped_context["original_query"] = task.query
+        scoped_context["agent_query"] = task.query
         scoped_context["rewritten_query"] = task.query
+        scoped_context["user_query"] = task.query
         scoped_context["active_task"] = {
             "task_id": task.task_id,
             "intent": task.intent,
@@ -50,28 +144,68 @@ class TaskExecutor:
             "entities": task.entities,
         }
         previous_results = [self._legacy_result(item) for item in previous]
-        runtime = await self.agent_runner(
-            agent_name=task.agent_name,
-            context=scoped_context,
-            reason=task.reason,
-            expected_output=task.expected_output,
-            previous_results=previous_results,
-            task_params={"task_id": task.task_id, "intent": task.intent, "query": task.query},
-            max_retries=task.max_retries,
+        operation_id = (
+            f"{lifecycle.run_id}:{task.task_id}" if lifecycle is not None else task.task_id
         )
+        runner_task = asyncio.create_task(self.agent_runner(
+            agent_name=task.agent_name, context=scoped_context, reason=task.reason,
+            expected_output=task.expected_output, previous_results=previous_results,
+            task_params={
+                "task_id": task.task_id, "intent": task.intent, "query": task.query,
+                "operation_id": operation_id,
+            },
+            max_retries=task.max_retries,
+        ))
+        interrupted = False
+        while not runner_task.done():
+            try:
+                await asyncio.wait_for(asyncio.shield(runner_task), timeout=0.25)
+            except asyncio.TimeoutError:
+                if lifecycle is not None and await lifecycle.should_interrupt():
+                    interrupted = True
+                    try:
+                        await asyncio.wait_for(asyncio.shield(runner_task), timeout=3.0)
+                    except asyncio.TimeoutError:
+                        runner_task.cancel()
+                        await asyncio.gather(runner_task, return_exceptions=True)
+                    break
+        if interrupted and not runner_task.done():
+            runtime = {}
+        elif interrupted and runner_task.cancelled():
+            runtime = {}
+        else:
+            runtime = await runner_task
+        if interrupted and not runtime:
+            result = TaskResult(
+                task_id=task.task_id, goal_id=task.goal_id,
+                intent=task.intent, agent_name=task.agent_name,
+                status="skipped", error_code="TURN_INTERRUPTED",
+                error_message="当前执行已由用户停止", display_order=task.display_order,
+                operation_id=operation_id,
+            )
+            if lifecycle is not None:
+                await lifecycle.node_finished(result)
+            return result
         status = runtime.get("status", "error")
         normalized_status = status if status in {"success", "error", "skipped"} else "error"
         data = runtime.get("data") if isinstance(runtime.get("data"), dict) else {}
         error_message = runtime.get("error_message")
         error_code = runtime.get("error_code")
-        if task.intent == "information_query" and data.get("query_success") is False:
+        # 步骤级 result_rules（来自 skill 声明）取代按 intent 硬编码的特殊分支。
+        if task.result_rules and data.get(task.result_rules.get("error_when_field")) is False:
             nested = data.get("results") if isinstance(data.get("results"), dict) else {}
             normalized_status = "error"
-            error_code = error_code or "INFORMATION_QUERY_UNAVAILABLE"
-            error_message = error_message or nested.get("message") or nested.get("error") or "外部信息暂时不可用"
+            error_code = error_code or task.result_rules.get("error_code")
+            error_message = (
+                error_message
+                or nested.get("message")
+                or nested.get("error")
+                or "该查询暂时不可用，请稍后重试。"
+            )
         evidence = self._evidence(data)
         result = TaskResult(
             task_id=task.task_id,
+            goal_id=task.goal_id,
             intent=task.intent,
             agent_name=task.agent_name,
             status=normalized_status,
@@ -81,11 +215,95 @@ class TaskExecutor:
             attempts=int(runtime.get("attempts") or 1),
             error_code=error_code,
             error_message=error_message,
+            operation_id=operation_id,
             display_order=task.display_order,
         )
         event_phase = "completed" if result.status == "success" else "failed"
         await self._emit(progress, task_event(event_phase, task.task_id, task.intent))
+        if lifecycle is not None:
+            await lifecycle.node_finished(result)
         return result
+
+    @staticmethod
+    def _pause_info(result: TaskResult, task_by_id: Dict[str, ExecutionTask]) -> Optional[PauseInfo]:
+        task = task_by_id.get(result.task_id)
+        if task is None:
+            return None
+        spec = pause_spec_for_intent(task.intent)
+        if spec is None or not spec.enabled or spec.pause_agent is None:
+            return None
+        if task.agent_name != spec.pause_agent:
+            return None
+        data = _nested(result.data)
+        if data.get(spec.pause_field) is not False:
+            return None
+        steps = execution_steps_for_intent(task.intent)
+        remaining = [
+            step.model_dump(mode="json") for step in steps if step.priority > task.priority
+        ]
+        return PauseInfo(
+            intent=task.intent,
+            goal_id=task.goal_id,
+            node_id=task.task_id,
+            skill=intent_to_skill(task.intent) or task.intent,
+            pause_agent=spec.pause_agent,
+            pause_field=spec.pause_field,
+            planning_ready=False,
+            steps_remaining=remaining,
+            collected_facts=result.data,
+            entities=task.entities,
+        )
+
+    @staticmethod
+    def _mark_downstream_skipped(
+        task_list: List[ExecutionTask],
+        failed: TaskResult,
+        task_by_id: Dict[str, ExecutionTask],
+        results: List[TaskResult],
+        skipped: set,
+    ) -> List[TaskResult]:
+        failed_task = task_by_id.get(failed.task_id)
+        if failed_task is None:
+            return []
+        dependents: Dict[str, set] = {}
+        for task in task_list:
+            for dep in task.depends_on:
+                dependents.setdefault(dep, set()).add(task.task_id)
+
+        downstream: set = set()
+        stack = [failed.task_id]
+        while stack:
+            current = stack.pop()
+            for dependent in dependents.get(current, set()):
+                if dependent not in downstream:
+                    downstream.add(dependent)
+                    stack.append(dependent)
+        # 同意图、更高优先级的模板后继步骤也是下游（abort 会停住整个 workflow 链）。
+        for task in task_list:
+            if task.goal_id == failed_task.goal_id and task.priority > failed_task.priority:
+                downstream.add(task.task_id)
+
+        executed = {item.task_id for item in results}
+        newly_skipped: List[TaskResult] = []
+        for task_id in downstream:
+            if task_id in executed or task_id in skipped:
+                continue
+            task = task_by_id.get(task_id)
+            if task is None:
+                continue
+            skipped.add(task_id)
+            skipped_result = TaskResult(
+                task_id=task_id, goal_id=task.goal_id,
+                intent=task.intent,
+                agent_name=task.agent_name,
+                status="skipped",
+                error_code="UPSTREAM_DEPENDENCY_FAILED",
+                error_message="依赖的上游任务失败，未执行",
+                display_order=task.display_order,
+            )
+            results.append(skipped_result)
+            newly_skipped.append(skipped_result)
+        return newly_skipped
 
     @staticmethod
     def _legacy_result(result: TaskResult) -> Dict[str, Any]:

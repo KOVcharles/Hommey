@@ -141,9 +141,13 @@ class MilvusKnowledgeStore:
         self.ensure_collection()
 
     def _new_client(self):
+        # pymilvus 在 db_name 为空时会从 uri 路径首段推断 database 名（如
+        # /app/data/... 会推断成 "app"），导致 Milvus Lite 报
+        # "database 'app' does not exist"。显式指定 default database。
         return MilvusClient(
             self.milvus_uri,
             grpc_options=self.grpc_options,
+            db_name="default",
         )
 
     def _reset_client(self) -> None:

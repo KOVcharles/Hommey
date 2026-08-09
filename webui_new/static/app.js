@@ -74,6 +74,7 @@
         queued: '任务已经排好，马上开始',
     };
 
+    // 进度标签：优先用 GET /api/intents 动态填充，失败时退回本地保底 map。
     const progressAgentLabels = {
         rag_knowledge: '差旅标准',
         information_query: '天气与出行',
@@ -83,11 +84,30 @@
         itinerary_planning: '行程规划',
         trip_compliance: '合规检查',
     };
+    let dynamicAgentLabels = null;
+
+    function getAgentLabel(intent) {
+        if (dynamicAgentLabels && dynamicAgentLabels[intent]) return dynamicAgentLabels[intent];
+        return progressAgentLabels[intent] || null;
+    }
+
+    async function loadIntentLabels() {
+        try {
+            const intents = await fetchJson('/api/intents');
+            dynamicAgentLabels = {};
+            for (const [key, meta] of Object.entries(intents)) {
+                dynamicAgentLabels[key] = meta.display;
+            }
+        } catch (err) {
+            // 保底：继续使用本地 progressAgentLabels。
+        }
+    }
 
     // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
     let pendingAttachments = [];
     let currentRequestId = '';
     let retryRequestPending = false;
+    let interruptPending = false;
 
     const rotatingPrompts = [
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
@@ -140,7 +160,10 @@
         homeInput.addEventListener('input', () => resizeInput(homeInput));
         chatInput.addEventListener('keydown', handleComposerKeydown);
         homeInput.addEventListener('keydown', handleComposerKeydown);
-        sendBtn.addEventListener('click', submitCurrentInput);
+        sendBtn.addEventListener('click', () => {
+            if (isProcessing) interruptCurrentTurn();
+            else submitCurrentInput();
+        });
         homeComposer.addEventListener('submit', (event) => {
             event.preventDefault();
             submitHomeInput();
@@ -199,6 +222,7 @@
         promptRotator.addEventListener('focusin', stopPromptRotation);
         promptRotator.addEventListener('focusout', startPromptRotation);
         document.addEventListener('hommey:fill-composer', handlePresentationFill);
+        document.addEventListener('hommey:submit-message', handlePresentationSubmit);
         chatMessages.addEventListener('scroll', markConversationScrolling, { passive: true });
 
         document.addEventListener('click', (event) => {
@@ -225,6 +249,7 @@
                 if (!initData.success) throw createApiError(initData, '初始化失败');
             }
 
+            loadIntentLabels();
             await Promise.all([loadUserSummary(), loadActiveTrip(), loadSessions()]);
             hideInitOverlay();
             setInputEnabled(true);
@@ -279,6 +304,24 @@
             return;
         }
         sendMessage();
+    }
+
+    function handlePresentationSubmit(event) {
+        const text = String(event.detail?.text || '').trim();
+        if (!text || isProcessing || isOnboarding) {
+            event.preventDefault();
+            if (isProcessing) showToast('当前任务正在处理，请完成后再提交。');
+            return;
+        }
+        // Card submissions use the same chat endpoint, request id, locking and
+        // durable Turn path. Keep any composer draft/attachments untouched.
+        sendMessage(text, {
+            preserveComposer: true,
+            includeAttachments: false,
+            inlineSubmission: true,
+        }).then((success) => {
+            if (typeof event.detail?.complete === 'function') event.detail.complete(success);
+        });
     }
 
     function enterChatView() {
@@ -781,22 +824,31 @@
         stack.appendChild(wrap);
     }
 
-    async function sendMessage() {
-        const text = chatInput.value.trim();
-        const hasAttachments = pendingAttachments.some((a) => a.status === 'ready');
+    async function sendMessage(explicitText, options = {}) {
+        const hasExplicitText = typeof explicitText === 'string';
+        const text = hasExplicitText ? explicitText.trim() : chatInput.value.trim();
+        const includeAttachments = options.includeAttachments !== false;
+        const hasAttachments = includeAttachments && pendingAttachments.some((a) => a.status === 'ready');
         if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
-        const sendingEntries = pendingAttachments.filter((a) => a.status === 'ready');
+        const sendingEntries = includeAttachments
+            ? pendingAttachments.filter((a) => a.status === 'ready')
+            : [];
         const sendingAttachmentIds = sendingEntries.map((a) => a.id);
         const sendingAttachments = sendingEntries.map((a) => ({ filename: a.filename, kind: a.kind }));
         let requestCompleted = false;
         enterChatView();
         addMessage('user', text, undefined, sendingAttachments);
-        chatInput.value = '';
-        resizeInput(chatInput);
-        pendingAttachments = [];
-        renderPendingAttachments();
+        if (!options.preserveComposer) {
+            chatInput.value = '';
+            resizeInput(chatInput);
+        }
+        if (includeAttachments) {
+            pendingAttachments = [];
+            renderPendingAttachments();
+        }
         isProcessing = true;
-        sendBtn.disabled = true;
+        interruptPending = false;
+        sendBtn.disabled = false;
         chatInput.placeholder = 'Hommey 正在整理…';
         setSendLoading(true);
         showProcessingIndicator([]);
@@ -824,6 +876,7 @@
             let presentationRendered = false;
             let nextPlaceholder = '';
             let preferencesUpdated = false;
+            let turnInterrupted = false;
             let responseSources = [];
             const reader = response.body.getReader();
             const decoder = new TextDecoder('utf-8');
@@ -847,6 +900,11 @@
                         }
                     }
                     if (event.type === 'agents') updateAgentTags(event.agents);
+                    if (event.type === 'interrupted') {
+                        turnInterrupted = true;
+                        removeProcessingIndicator();
+                        addMessage('ai', '已停止当前执行。输入“继续”可以从最近一次安全状态接着完成。');
+                    }
                     if (event.type === 'answer_document') {
                         removeProcessingIndicator();
                         addAnswerMessage(event.document);
@@ -895,7 +953,9 @@
             if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
 
             removeProcessingIndicator();
-            if (!streamMessage && !presentationRendered) addMessage('ai', '我收到了，但这次没有返回具体内容。');
+            if (!streamMessage && !presentationRendered && !turnInterrupted) {
+                addMessage('ai', '我收到了，但这次没有返回具体内容。');
+            }
             if (streamMessage && responseSources.length) {
                 renderAttachmentCards(streamMessage.stack, responseSources);
             }
@@ -905,19 +965,26 @@
             requestCompleted = true;
         } catch (err) {
             removeProcessingIndicator();
-            addMessage('ai', formatDisplayError(err, '网络错误，请检查连接后重试。'));
-            // Preserve the body and request ID so an explicit retry remains idempotent.
-            chatInput.value = text;
-            const sendingIds = new Set(sendingAttachmentIds);
-            pendingAttachments = [
-                ...sendingEntries,
-                ...pendingAttachments.filter((entry) => !sendingIds.has(entry.id)),
-            ];
+            const errorText = formatDisplayError(err, '网络错误，请检查连接后重试。');
+            if (options.inlineSubmission) showToast(errorText);
+            else addMessage('ai', errorText);
+            // Preserve the body and request ID so an explicit retry remains
+            // idempotent. Inline card submissions retain their values in-card
+            // and never overwrite an unrelated composer draft.
+            if (!options.preserveComposer) chatInput.value = text;
+            if (includeAttachments) {
+                const sendingIds = new Set(sendingAttachmentIds);
+                pendingAttachments = [
+                    ...sendingEntries,
+                    ...pendingAttachments.filter((entry) => !sendingIds.has(entry.id)),
+                ];
+            }
             retryRequestPending = true;
-            renderPendingAttachments();
-            resizeInput(chatInput);
+            if (includeAttachments) renderPendingAttachments();
+            if (!options.preserveComposer) resizeInput(chatInput);
         } finally {
             isProcessing = false;
+            interruptPending = false;
             sendBtn.disabled = false;
             setSendLoading(false);
             chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
@@ -926,6 +993,35 @@
                 retryRequestPending = false;
             }
             chatInput.focus();
+        }
+        return requestCompleted;
+    }
+
+    async function interruptCurrentTurn() {
+        if (!isProcessing || interruptPending || !currentRequestId) return;
+        interruptPending = true;
+        setSendLoading(true, true);
+        try {
+            const response = await authFetch(
+                `/api/${encodeURIComponent(userId)}/orchestration/interrupt`,
+                {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        client_request_id: currentRequestId,
+                        session_id: activeSessionId || null,
+                    }),
+                },
+            );
+            if (!response.ok) {
+                const error = await response.json();
+                throw createApiError(error, '停止失败，请重试', response.status);
+            }
+            chatInput.placeholder = '正在停止当前执行…';
+        } catch (err) {
+            interruptPending = false;
+            setSendLoading(true);
+            showToast(formatDisplayError(err, '停止失败，请重试。'));
         }
     }
 
@@ -1055,7 +1151,7 @@
             flushProcessingStatus();
         }
         if (event.type === 'task_status' && event.intent && event.phase === 'running') {
-            const label = progressAgentLabels[event.intent];
+            const label = getAgentLabel(event.intent);
             if (label) updateAgentTags([{ name: event.intent, display: label }]);
         }
     }
@@ -1173,9 +1269,15 @@
         input.style.height = `${Math.min(input.scrollHeight, 160)}px`;
     }
 
-    function setSendLoading(loading) {
+    function setSendLoading(loading, stopping = false) {
+        sendBtn.classList.toggle('is-running', loading);
+        sendBtn.classList.toggle('is-stopping', stopping);
+        sendBtn.setAttribute('aria-label', loading ? (stopping ? '正在停止' : '停止生成') : '发送');
+        sendBtn.title = loading ? (stopping ? '正在停止' : '停止生成') : '发送';
         sendBtn.innerHTML = loading
-            ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8" stroke-dasharray="28 18" style="animation:logo-turn .8s linear infinite;transform-origin:center"/></svg>'
+            ? (stopping
+                ? '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="8" stroke-dasharray="28 18" style="animation:logo-turn .8s linear infinite;transform-origin:center"/></svg>'
+                : '<svg width="16" height="16" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="7" y="7" width="10" height="10" rx="1.5"/></svg>')
             : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>';
     }
 

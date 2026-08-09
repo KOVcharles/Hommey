@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import json
-from typing import Any, Dict, List, Literal
+from typing import Any, Dict, List
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
@@ -22,24 +22,17 @@ class IntentItem(BaseModel):
     should_call_skill: bool = False
 
 
-class AgentScheduleItem(BaseModel):
-    agent_name: str
-    priority: int
-    reason: str = ""
-    expected_output: str = ""
-    on_failure: Literal["abort", "continue"] = "abort"
-    max_retries: int = Field(default=0, ge=0, le=2)
-
-
 class IntentResult(BaseModel):
-    model_config = ConfigDict(extra="allow")
+    # Ignore stale model fields during rolling upgrades, but do not propagate
+    # them into the execution contract. In particular, intent recognition no
+    # longer produces an executable schedule.
+    model_config = ConfigDict(extra="ignore")
 
     routing: Routing
     reasoning: str = ""
     intents: List[IntentItem] = Field(default_factory=list)
     key_entities: Dict[str, Any] = Field(default_factory=dict)
     rewritten_query: str = ""
-    agent_schedule: List[AgentScheduleItem] = Field(default_factory=list)
     clarification: str = ""
 
 

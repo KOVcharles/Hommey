@@ -1,7 +1,7 @@
-"""Unit tests for orchestration ordering, failure handling, and request context."""
+"""Tests for the DAG-facing child-agent execution adapter."""
 
-import json
 import asyncio
+import json
 
 from agents.orchestration_agent import OrchestrationAgent
 from agentscope.message import Msg
@@ -32,96 +32,25 @@ class _CapturingAgent(_ReplyAgent):
         return await super().reply(message)
 
 
-def test_orchestration_returns_no_agents_for_empty_schedule():
-    orchestrator = OrchestrationAgent(agent_registry={}, memory_manager=None)
-
-    result = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps({"agent_schedule": []}),
-                role="assistant",
-            )
-        )
-    )
-
-    payload = json.loads(result.content)
-    assert payload["status"] == "no_agents"
+async def _execute(orchestrator, agent_name, context=None, **overrides):
+    kwargs = {
+        "agent_name": agent_name,
+        "context": context or {},
+        "reason": "test",
+        "expected_output": "result",
+        "previous_results": [],
+        "max_retries": 0,
+    }
+    kwargs.update(overrides)
+    return await orchestrator.execute_task(**kwargs)
 
 
-def test_orchestration_rejects_invalid_intention_json():
-    orchestrator = OrchestrationAgent(agent_registry={}, memory_manager=None)
+def test_unregistered_agent_returns_structured_error():
+    result = asyncio.run(_execute(OrchestrationAgent(agent_registry={}), "missing"))
 
-    result = asyncio.run(
-        orchestrator.reply(
-            Msg(name="intention", content="not-json", role="assistant")
-        )
-    )
-
-    payload = json.loads(result.content)
-    assert payload["error"] == "Invalid intention format"
-
-
-def test_required_agent_failure_stops_and_skips_downstream_agents():
-    required = _ReplyAgent("required", [{"error": "invalid input"}])
-    downstream = _ReplyAgent("downstream", [{"answer": "should not run"}])
-    orchestrator = OrchestrationAgent(
-        agent_registry={"required": required, "downstream": downstream},
-        memory_manager=None,
-    )
-
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps(
-                    {
-                        "agent_schedule": [
-                            {"agent_name": "required", "priority": 1, "on_failure": "abort"},
-                            {"agent_name": "downstream", "priority": 2, "on_failure": "abort"},
-                        ]
-                    }
-                ),
-                role="assistant",
-            )
-        )
-    )
-
-    payload = json.loads(response.content)
-    assert payload["status"] == "failed"
-    assert [item["status"] for item in payload["results"]] == ["error", "skipped"]
-    assert downstream.calls == 0
-
-
-def test_optional_agent_failure_returns_partial_success_and_continues():
-    optional = _ReplyAgent("optional", [{"error": "service unavailable"}])
-    required = _ReplyAgent("required", [{"answer": "usable result"}])
-    orchestrator = OrchestrationAgent(
-        agent_registry={"optional": optional, "required": required},
-        memory_manager=None,
-    )
-
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps(
-                    {
-                        "agent_schedule": [
-                            {"agent_name": "optional", "priority": 1, "on_failure": "continue"},
-                            {"agent_name": "required", "priority": 2, "on_failure": "abort"},
-                        ]
-                    }
-                ),
-                role="assistant",
-            )
-        )
-    )
-
-    payload = json.loads(response.content)
-    assert payload["status"] == "partial_failure"
-    assert [item["status"] for item in payload["results"]] == ["error", "success"]
-    assert required.calls == 1
+    assert result["status"] == "error"
+    assert result["error_code"] == "AGENT_NOT_REGISTERED"
+    assert result["attempts"] == 0
 
 
 def test_transient_agent_failure_retries_only_that_agent_once():
@@ -131,35 +60,17 @@ def test_transient_agent_failure_retries_only_that_agent_once():
     async def run():
         budget = ExecutionBudget(max_agent_calls=8)
         with execution_budget_scope(budget):
-            response = await orchestrator.reply(
-                Msg(
-                    name="intention",
-                    content=json.dumps(
-                        {
-                            "agent_schedule": [
-                                {
-                                    "agent_name": "retrying",
-                                    "priority": 1,
-                                    "on_failure": "abort",
-                                    "max_retries": 1,
-                                }
-                            ]
-                        }
-                    ),
-                    role="assistant",
-                )
-            )
-        return response, budget
+            result = await _execute(orchestrator, "retrying", max_retries=1)
+        return result, budget
 
-    response, budget = asyncio.run(run())
-    payload = json.loads(response.content)
-    assert payload["status"] == "completed"
-    assert payload["results"][0]["attempts"] == 2
+    result, budget = asyncio.run(run())
+    assert result["status"] == "success"
+    assert result["attempts"] == 2
     assert agent.calls == 2
     assert budget.agent_calls == 2
 
 
-def test_agent_call_budget_turns_unbounded_execution_into_failure():
+def test_agent_call_budget_stops_the_next_execution():
     first = _ReplyAgent("first", [{"answer": "ok"}])
     second = _ReplyAgent("second", [{"answer": "should not run"}])
     orchestrator = OrchestrationAgent(
@@ -170,24 +81,13 @@ def test_agent_call_budget_turns_unbounded_execution_into_failure():
     async def run():
         budget = ExecutionBudget(max_agent_calls=1)
         with execution_budget_scope(budget):
-            return await orchestrator.reply(
-                Msg(
-                    name="intention",
-                    content=json.dumps(
-                        {
-                            "agent_schedule": [
-                                {"agent_name": "first", "priority": 1},
-                                {"agent_name": "second", "priority": 2},
-                            ]
-                        }
-                    ),
-                    role="assistant",
-                )
-            )
+            first_result = await _execute(orchestrator, "first")
+            second_result = await _execute(orchestrator, "second")
+        return first_result, second_result
 
-    payload = json.loads(asyncio.run(run()).content)
-    assert payload["status"] == "failed"
-    assert payload["results"][1]["error_code"] == "AGENT_CALL_LIMIT_EXCEEDED"
+    first_result, second_result = asyncio.run(run())
+    assert first_result["status"] == "success"
+    assert second_result["error_code"] == "AGENT_CALL_LIMIT_EXCEEDED"
     assert second.calls == 0
 
 
@@ -197,25 +97,17 @@ def test_attachment_context_bypasses_rewritten_query():
         agent_registry={"rag_knowledge": agent},
         memory_manager=None,
     )
-
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps({
-                    "rewritten_query": "请总结附件",
-                    "agent_schedule": [{"agent_name": "rag_knowledge", "priority": 1}],
-                }),
-                role="assistant",
-            ),
-            request_context={
-                "original_query": "住宿上限是多少",
-                "agent_query": "住宿上限是多少\n附件正文：每天 500 元",
-                "attachment_sources": [{"filename": "policy.docx"}],
-            },
-        )
+    context = orchestrator.prepare_context(
+        {"rewritten_query": "请总结附件", "intents": [], "key_entities": {}},
+        request_context={
+            "original_query": "住宿上限是多少",
+            "agent_query": "住宿上限是多少\n附件正文：每天 500 元",
+            "attachment_sources": [{"filename": "policy.docx"}],
+        },
     )
 
-    assert json.loads(response.content)["status"] == "completed"
+    result = asyncio.run(_execute(orchestrator, "rag_knowledge", context=context))
+
+    assert result["status"] == "success"
     assert agent.last_input["context"]["rewritten_query"] == "请总结附件"
     assert "每天 500 元" in agent.last_input["context"]["agent_query"]

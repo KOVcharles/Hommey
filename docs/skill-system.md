@@ -214,7 +214,8 @@ agent_name ──→ skill name
   → 高置信度规则路由（能命中时）
   → LLM 多意图识别（需要上下文时）
   → 逐意图置信度门槛
-  → hommey.yaml execution 生成 Agent 调度表
+  → 语义任务分解与授权校验
+  → hommey.yaml execution 编译可信 DAG
 ```
 
 默认 Skill 置信度门槛是 `0.65`；外部信息查询因涉及联网，门槛是 `0.75`，并额外要求明确查询对象和公司差旅上下文。
@@ -226,11 +227,11 @@ agent_name ──→ skill name
 - 预订、付款、转账、审批和报销提交；
 - 信息不足、只有标点或过短的输入。
 
-### 5.3 声明式调度
+### 5.3 声明式编排
 
-`core/schedule_builder.py` 不维护独立的硬编码 Skill 表，而是从每个 Hommey 扩展的 `execution` 生成调度规则。
+`core/orchestration/graph_builder.py` 从每个 Hommey 扩展的 `execution` 编译执行节点。意图识别层不选择 Agent，也不生成执行顺序。
 
-多意图时，调度器按 `agent_name` 去重并按优先级排序。同一 Agent 被多个意图要求时，通常保留更早优先级；在行程规划工作流中，制度和外部信息查询会被保留在事项收集之后，防止显式的附加意图把它们提前到信息尚未完整的阶段。
+多意图时，validator 先确保每个语义任务都来自已授权意图；graph builder 再展开 Skill 工作流，并在 DAG 层折叠被工作流覆盖的独立节点。行程规划中的制度与外部信息查询因此仍位于事项收集之后。
 
 ## 6. 编排与执行协议
 

@@ -6,6 +6,7 @@ import logging
 from typing import Iterable
 
 from core.execution_budget import consume_agent_call
+from core.intent_catalog import section_kind_for_intent
 from core.intent_result import parse_json_object
 from core.llm_response import extract_text_from_response
 from core.presentation import AnswerDocument, render_plain_text
@@ -15,6 +16,10 @@ from .fallback_composer import FallbackComposer
 from .models import IntentTask, TaskResult
 
 logger = logging.getLogger(__name__)
+
+_ALLOWED_KINDS = {
+    "policy", "weather", "memory", "preference", "trip", "notice", "general",
+}
 
 
 class AnswerComposer:
@@ -31,7 +36,14 @@ class AnswerComposer:
     ) -> AnswerDocument:
         task_list = list(tasks)
         result_list = list(results)
-        if self.model is None:
+        # Trip plans already have a rich, typed itinerary contract. Letting a
+        # second LLM redesign that contract made identical trips alternate
+        # between a two-column grid and a timeline, depending on whether its
+        # JSON happened to validate. Render structured trips deterministically;
+        # the model remains responsible for the itinerary facts, not UI shape.
+        if self.model is None or any(
+            section_kind_for_intent(task.intent) == "trip" for task in task_list
+        ):
             return self.fallback.compose(task_list, result_list)
         try:
             consume_agent_call("AnswerComposer")
@@ -77,6 +89,7 @@ class AnswerComposer:
         sections = []
         for raw_section in normalized.get("sections") or []:
             section = dict(raw_section)
+            section["goal_id"] = section.get("goal_id") or ""
             section["body"] = section.get("body") or ""
             section["items"] = section.get("items") or []
             section["days"] = section.get("days") or []
@@ -105,17 +118,16 @@ class AnswerComposer:
         compact_results = []
         for result in results:
             data = result.data
-            if result.intent == "rag_knowledge":
-                facts = {
-                    "answer": data.get("answer") or data.get("content"),
-                }
-            elif result.intent == "information_query":
-                facts = data.get("results") if isinstance(data.get("results"), dict) else data
+            if isinstance(data.get("results"), dict):
+                facts = data["results"]
             else:
                 facts = data
             compact_results.append({
                 "task_id": result.task_id,
+                "goal_id": result.goal_id,
                 "intent": result.intent,
+                "agent": result.agent_name,
+                "kind": section_kind_for_intent(result.intent),
                 "status": result.status,
                 "facts": facts,
                 "error_message": result.error_message,
@@ -131,7 +143,8 @@ class AnswerComposer:
 
 生成一张紧凑的统一答案卡片。要求：
 - 按用户提问顺序组织 section，不提 Agent、RAG、编排或知识库缺少天气。
-- policy section 只整理制度；weather section 只整理天气。
+- 每个任务 Goal 至少有一个 section，并原样填写该任务的 task_id 到 goal_id；不得把不同 Goal 合并后遗漏。
+- 每个意图的 section.kind 用结果中标注的 kind（policy/weather/memory/preference/trip/notice/general）。
 - 尽量使用 items 和 days，避免大段文字。
 - 失败任务保留对应 section，status=error，并给出一句简短提示。
 - summary 不超过80个中文字符。
@@ -144,7 +157,8 @@ JSON结构：
   "summary": "一句综合结论",
   "sections": [
     {{
-      "kind": "policy或weather",
+      "goal_id": "对应任务的task_id",
+      "kind": "policy或weather或memory或preference或trip或notice或general",
       "title": "分区标题",
       "status": "success、partial或error",
       "body": "必要时使用的短文本",

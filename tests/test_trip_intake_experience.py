@@ -1,14 +1,11 @@
 import asyncio
-import json
 from pathlib import Path
+from types import SimpleNamespace
 
-from agentscope.message import Msg
-from agents.orchestration_agent import OrchestrationAgent
 from context.long_term_memory import FileLongTermMemory
-from core.presentation import build_trip_intake_document
+from core.presentation import build_trip_intake_document, recover_trip_intake_document
 from core.trip_intake import evaluate_trip_intake
 from webui_new.manager import HommeyWebInstance
-from settings import RESILIENCE_CONFIG, TRIP_INTAKE_CONFIG
 
 
 BASE_TRIP = {
@@ -89,30 +86,85 @@ def test_trip_intake_document_is_structured_and_has_plain_text_fallback():
     assert "已完成 2/5 项" in document.plain_text
 
 
-def test_manager_builds_trip_intake_presentation_only_while_paused():
-    paused = HommeyWebInstance._trip_intake_presentation({
-        "results": [{
-            "agent_name": "event_collection",
-            "status": "success",
-            "data": {**BASE_TRIP, **evaluate_trip_intake(BASE_TRIP)},
-        }],
-    })
-    ready_trip = {
+def test_legacy_plain_text_intake_recovers_as_typed_card():
+    text = """\
+行程框架已保存
+北京 → 广州
+已完成 3/5 项。还差 2 项，即可生成详细方案。
+已确认：出发地：北京；目的地：广州；出发日期：2026-08-18
+需要补充：
+- 行程时长：填写出差天数，或直接告诉我返程日期
+- 出差目的：这次出差主要要完成什么工作
+可选补充：客户或会议地点、会面及工作时间
+可以直接回复：出差2天，参加客户会议"""
+
+    document = recover_trip_intake_document(text)
+
+    assert document is not None
+    assert document.route.model_dump() == {"origin": "北京", "destination": "广州"}
+    assert document.progress.model_dump() == {"completed": 3, "total": 5}
+    assert [field.key for field in document.missing_required] == ["trip_length", "trip_purpose"]
+
+
+def test_history_repair_persists_recovered_intake_document():
+    document = build_trip_intake_document({
         **BASE_TRIP,
-        "start_date": "2026-08-05",
-        "duration_days": 2,
-        "trip_purpose": "会议",
-    }
-    ready = HommeyWebInstance._trip_intake_presentation({
-        "results": [{
-            "agent_name": "event_collection",
-            "status": "success",
-            "data": {**ready_trip, **evaluate_trip_intake(ready_trip)},
-        }],
+        "start_date": "2026-08-18",
     })
 
-    assert paused["type"] == "trip_intake"
-    assert ready is None
+    class Repository:
+        def __init__(self):
+            self.calls = []
+
+        def update_message_documents(self, **kwargs):
+            self.calls.append(kwargs)
+            return True
+
+    repository = Repository()
+    instance = object.__new__(HommeyWebInstance)
+    instance.user_id = "u1"
+    instance.memory_manager = SimpleNamespace(
+        memory_service=SimpleNamespace(repository=repository),
+    )
+    rows = [{
+        "message_id": "3ae34268-9dad-413f-98d7-4784344c3e04",
+        "role": "assistant",
+        "content": document.plain_text,
+        "answer_document": None,
+        "presentation_document": None,
+    }]
+
+    repaired = instance._recover_legacy_presentation_documents(rows)
+
+    assert repaired[0]["presentation_document"]["type"] == "trip_intake"
+    assert repository.calls[0]["presentation_document"]["route"]["destination"] == "南京"
+
+
+class _StubAsyncMemory:
+    def __init__(self):
+        self.messages = []
+
+    async def add_message(self, role, content, metadata=None):
+        self.messages.append((role, content, metadata or {}))
+
+
+def test_task_pipeline_paused_returns_trip_intake_presentation():
+    # 暂停的 presentation 契约由管线暂停输出驱动（_task_pipeline_paused）。
+    instance = object.__new__(HommeyWebInstance)
+    instance.async_memory = _StubAsyncMemory()
+    document = build_trip_intake_document(BASE_TRIP)
+    pipeline_output = SimpleNamespace(
+        presentation_document=document,
+        results=[],
+    )
+
+    result = asyncio.run(instance._task_pipeline_paused(pipeline_output, {}, 0.0, {}))
+
+    assert result["presentation_document"]["type"] == "trip_intake"
+    assert result["presentation_document"]["progress"] == {"completed": 2, "total": 5}
+    assert result["answer_document"] is None
+    assert result["response"] == document.plain_text
+    assert instance.async_memory.messages[0][2]["presentation_document"]["type"] == "trip_intake"
 
 
 def test_stream_emits_presentation_document_without_duplicate_text():
@@ -137,43 +189,6 @@ def test_stream_emits_presentation_document_without_duplicate_text():
         "status", "agents", "presentation_document", "done",
     ]
     assert not any(event["type"] == "chunk" for event in events)
-
-
-def test_legacy_planning_orchestrator_emits_live_task_progress():
-    class ReplyAgent:
-        async def reply(self, _message):
-            return Msg(
-                name="rag_knowledge",
-                content=json.dumps({"answer": "制度证据"}, ensure_ascii=False),
-                role="assistant",
-            )
-
-    orchestrator = OrchestrationAgent(
-        agent_registry={"rag_knowledge": ReplyAgent()},
-        memory_manager=None,
-    )
-    events = []
-
-    async def progress(event):
-        events.append(event.message_key)
-
-    async def run():
-        return await orchestrator.reply_with_progress(
-            Msg(
-                name="intention",
-                content=json.dumps({
-                    "agent_schedule": [{"agent_name": "rag_knowledge", "priority": 1}],
-                }),
-                role="assistant",
-            ),
-            progress,
-        )
-
-    asyncio.run(run())
-
-    assert events == ["policy_searching", "task_completed"]
-    assert RESILIENCE_CONFIG["request_timeout_sec"] >= 240
-    assert TRIP_INTAKE_CONFIG["enabled"] is True
 
 
 def test_file_memory_restores_presentation_document(tmp_path):
@@ -204,5 +219,15 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     assert "presentation_document" in app
     assert "collapseTripIntakeCards" in app
     assert "点击展开" in app
+    assert "hommey:submit-message" in app
+    assert "sendMessage(text, {" in app
+    assert "preserveComposer: true" in app
     assert "document.createElement" in card
     assert "innerHTML" not in card
+    assert "提交补充信息" in card
+    assert "buildReply" in card
+    assert "hommey:submit-message" in card
+    assert "hommey:fill-composer" not in card
+    template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert template.count("20260809-intake-v5") == 2
+    assert "20260809-app-v6" in template

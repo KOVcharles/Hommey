@@ -64,6 +64,17 @@ def test_migration_versions_are_unique():
     assert len(versions) == len(set(versions))
 
 
+def test_canonical_message_table_persists_structured_documents():
+    migration = (
+        Path(__file__).parents[1]
+        / "webui_new/auth/migrations/0016_conversation_message_documents.sql"
+    ).read_text(encoding="utf-8").upper()
+
+    assert "ALTER TABLE CONVERSATION_MESSAGES" in migration
+    assert "ANSWER_DOCUMENT JSONB" in migration
+    assert "PRESENTATION_DOCUMENT JSONB" in migration
+
+
 def test_legacy_answer_migration_versions_are_remapped_before_validation():
     cursor = MigrationCursor([
         ("0006", "0006_answer_documents.sql", "answer-checksum"),

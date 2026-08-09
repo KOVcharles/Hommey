@@ -184,23 +184,6 @@ def display_result(result):
         print(f"  {rewritten}")
         print()
 
-    # 智能体调度计划
-    schedule = result.get("agent_schedule", [])
-    if schedule:
-        print("【智能体调度计划】")
-        for agent in schedule:
-            agent_name = agent.get("agent_name") or agent.get("agent_type")  # 兼容两种命名
-            priority = agent.get("priority", 0)
-            reason = agent.get("reason", "")
-            expected_output = agent.get("expected_output", "")
-            print(f"  {priority}. {agent_name}")
-            if reason:
-                print(f"     原因: {reason}")
-            if expected_output:
-                print(f"     期望输出: {expected_output}")
-        print()
-
-
 if __name__ == "__main__":
     print("="*70)
     print("意图识别智能体测试")

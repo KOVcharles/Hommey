@@ -16,7 +16,8 @@ from fastapi.responses import StreamingResponse
 from utils.logging_safety import sanitize_for_log
 from utils.memory_safety import redact_sensitive_text
 from utils.observability import COMPONENT_HTTP, record_app_error, record_http_request
-from webui_new.auth import User, require_path_user
+from webui_new.auth import User, get_current_user, require_path_user
+from core.intent_catalog import intent_api_payload
 from webui_new.core.errors import (
     AppError,
     BusinessError,
@@ -25,7 +26,7 @@ from webui_new.core.errors import (
     request_id,
     stream_error_event,
 )
-from webui_new.schemas.requests import ChatRequest, SessionRenameRequest
+from webui_new.schemas.requests import ChatRequest, InterruptRequest, SessionRenameRequest
 
 logger = logging.getLogger(__name__)
 
@@ -124,6 +125,16 @@ def create_chat_router(manager):
             headers={"Cache-Control": "no-cache"},
         )
 
+    @router.post("/api/{user_id}/orchestration/interrupt")
+    async def interrupt_turn(
+        user_id: str,
+        data: InterruptRequest,
+        current_user: User = Depends(require_path_user),
+    ):
+        return await manager.interrupt_active_turn(
+            user_id, data.client_request_id, session_id=data.session_id,
+        )
+
     @router.get("/api/{user_id}/sessions")
     async def list_sessions(user_id: str, current_user: User = Depends(require_path_user)):
         instance = manager.get(user_id)
@@ -208,5 +219,14 @@ def create_chat_router(manager):
         if not instance or not instance.initialized:
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
         return {"active_session_id": instance.clear_chat_history()}
+
+    @router.get("/api/intents")
+    async def list_intents(current_user: User = Depends(get_current_user)):
+        """声明式意图目录：前端进度标签动态加载（app.js 本地 map 保底）。
+
+        载荷 ``{intent: {display, progress_key, description, skill}}`` 由 skill
+        目录派生；新增 skill 后无需改前端硬编码映射。
+        """
+        return intent_api_payload()
 
     return router

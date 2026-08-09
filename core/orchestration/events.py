@@ -1,18 +1,9 @@
 """Stable progress-event vocabulary for orchestration clients."""
 from __future__ import annotations
 
+from core.intent_catalog import progress_key_for_intent
+
 from .models import ProgressEvent
-
-
-RUNNING_MESSAGE_KEYS = {
-    "rag_knowledge": "policy_searching",
-    "information_query": "travel_info_searching",
-    "memory_query": "memory_searching",
-    "preference": "preference_updating",
-    "event_collection": "trip_details_collecting",
-    "itinerary_planning": "trip_planning",
-    "trip_compliance": "compliance_checking",
-}
 
 
 def phase_event(phase: str, message_key: str) -> ProgressEvent:
@@ -22,7 +13,7 @@ def phase_event(phase: str, message_key: str) -> ProgressEvent:
 def task_event(phase: str, task_id: str, intent: str) -> ProgressEvent:
     suffix = {
         "queued": "queued",
-        "running": RUNNING_MESSAGE_KEYS.get(intent, "task_running"),
+        "running": progress_key_for_intent(intent),
         "completed": "task_completed",
         "failed": "task_failed",
     }[phase]

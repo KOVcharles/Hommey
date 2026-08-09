@@ -46,7 +46,6 @@ def _valid_intent_result(**overrides):
         ],
         "key_entities": {},
         "rewritten_query": "test",
-        "agent_schedule": [],
     }
     data.update(overrides)
     return data

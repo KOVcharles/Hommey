@@ -1,6 +1,8 @@
 """Presentation-neutral answer contracts."""
 
 from .answer_document import (
+    ANSWER_SECTION_CAP,
+    ANSWER_SOURCE_CAP,
     AnswerDocument,
     AnswerItem,
     AnswerSection,
@@ -14,11 +16,13 @@ from .answer_document import (
 from .trip_intake_document import (
     TripIntakeDocument,
     build_trip_intake_document,
+    recover_trip_intake_document,
     render_trip_intake_text,
 )
-from .legacy_answer_document import build_legacy_answer_document
 
 __all__ = [
+    "ANSWER_SECTION_CAP",
+    "ANSWER_SOURCE_CAP",
     "AnswerDocument",
     "AnswerItem",
     "AnswerSection",
@@ -30,6 +34,6 @@ __all__ = [
     "render_plain_text",
     "TripIntakeDocument",
     "build_trip_intake_document",
+    "recover_trip_intake_document",
     "render_trip_intake_text",
-    "build_legacy_answer_document",
 ]

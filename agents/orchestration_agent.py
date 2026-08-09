@@ -1,21 +1,12 @@
 """
-协调器智能体 OrchestrationAgent
-职责：根据意图识别结果，协调调度多个子智能体完成任务
-
-核心功能：
-1. 接收 IntentionAgent 的调度决策
-2. 按照优先级顺序执行子智能体
-3. 管理智能体之间的消息传递
-4. 聚合多个智能体的结果
-5. 与三层记忆系统集成
-
-执行模式：
-- Sequential (顺序执行): 按优先级依次执行，前一个的输出作为后一个的输入
-- Parallel (并行执行): 同时执行多个智能体（暂不实现）
+OrchestrationAgent 执行层
+调度/暂停/聚合/记忆回写等编排语义已由 DAG 管线（MultiIntentPipeline）接管，
+本类只保留 DAG 管线需要的执行适配职责：准备共享上下文、执行一个已验证的
+任务、登记子智能体以及记录审计结果。它不识别意图，也不创建或维护执行计划。
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, List, Dict, Any
 import json
 import logging
 import asyncio
@@ -24,22 +15,17 @@ import uuid
 
 from core.skill_store import SkillPlatformStore
 from core.execution_budget import (
-    ExecutionBudget,
     ExecutionLimitExceeded,
     consume_agent_call,
-    current_execution_budget,
-    execution_budget_scope,
 )
-from settings import RESILIENCE_CONFIG
 from utils.skill_loader import SkillLoader
 from utils.llm_resilience import is_retriable_error
-from utils.memory_safety import filter_safe_memory_mapping, is_safe_preference_value
 
 logger = logging.getLogger(__name__)
 
 
 class OrchestrationAgent(AgentBase):
-    """协调器智能体 - 调度和协调多个子智能体"""
+    """DAG 任务执行适配器；执行计划由 ``MultiIntentPipeline`` 维护。"""
 
     def __init__(
         self,
@@ -79,295 +65,6 @@ class OrchestrationAgent(AgentBase):
         if agent_name in self.agent_registry:
             del self.agent_registry[agent_name]
             logger.info(f"Unregistered agent: {agent_name}")
-
-    async def reply(
-        self,
-        x: Optional[Union[Msg, List[Msg]]] = None,
-        *,
-        progress_callback=None,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """Execute with the caller's budget, or create one for non-Web entrypoints."""
-        if current_execution_budget() is not None:
-            return await self._reply_impl(
-                x,
-                progress_callback=progress_callback,
-                request_context=request_context,
-            )
-
-        rc = RESILIENCE_CONFIG
-        budget = ExecutionBudget(
-            max_agent_calls=rc.get("max_agent_calls_per_request", 8),
-            max_external_calls=rc.get("max_external_calls_per_request", 16),
-            max_external_calls_per_type=rc.get("max_external_calls_per_type", 6),
-        )
-        try:
-            with execution_budget_scope(budget):
-                return await asyncio.wait_for(
-                    self._reply_impl(
-                        x,
-                        progress_callback=progress_callback,
-                        request_context=request_context,
-                    ),
-                    timeout=rc.get("request_timeout_sec", 120.0),
-                )
-        finally:
-            logger.info("Orchestration execution budget: %s", budget.snapshot())
-
-    async def reply_with_progress(
-        self,
-        x,
-        progress_callback,
-        *,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """Explicit progress-capable entrypoint used by streaming Web clients."""
-        return await self.reply(
-            x,
-            progress_callback=progress_callback,
-            request_context=request_context,
-        )
-
-    async def _reply_impl(
-        self,
-        x: Optional[Union[Msg, List[Msg]]] = None,
-        *,
-        progress_callback=None,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """
-        协调执行流程
-
-        Args:
-            x: 输入消息，应包含 IntentionAgent 的输出
-
-        Returns:
-            Msg: 执行结果
-        """
-        if x is None:
-            return Msg(
-                name=self.name,
-                content=json.dumps({"error": "No input provided"}),
-                role="assistant"
-            )
-
-        # 解析输入
-        if isinstance(x, list):
-            intention_output = x[-1].content if x else "{}"
-        else:
-            intention_output = x.content
-
-        # 解析意图识别结果
-        try:
-            intention_data = json.loads(intention_output) if isinstance(intention_output, str) else intention_output
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse intention output: {e}")
-            return Msg(
-                name=self.name,
-                content=json.dumps({"error": "Invalid intention format"}),
-                role="assistant"
-            )
-
-        routing = intention_data.get("routing") or {}
-        if routing.get("should_call_skill") is False:
-            return Msg(
-                name=self.name,
-                content=json.dumps({
-                    "status": "no_agents",
-                    "routing": routing,
-                    "message": intention_data.get("clarification")
-                    or self._message_for_non_skill_intent(routing.get("intent")),
-                    "results": [],
-                }, ensure_ascii=False),
-                role="assistant",
-            )
-
-        # 获取智能体调度计划
-        agent_schedule = intention_data.get("agent_schedule", [])
-        agent_schedule, disabled_skills = self._filter_enabled_schedule(agent_schedule)
-        if not agent_schedule:
-            return Msg(
-                name=self.name,
-                content=json.dumps({
-                    "status": "no_agents",
-                    "message": (
-                        f"相关能力当前已停用：{', '.join(disabled_skills)}"
-                        if disabled_skills else "没有需要调度的智能体"
-                    )
-                }, ensure_ascii=False),
-                role="assistant"
-            )
-
-        # 按优先级排序
-        sorted_schedule = sorted(agent_schedule, key=lambda x: x.get("priority", 999))
-
-        logger.info(f"Orchestrating {len(sorted_schedule)} agents")
-
-        # 准备上下文信息
-        context = self.prepare_context(
-            intention_data,
-            request_context=request_context,
-        )
-
-        # 按优先级分批执行；同一优先级并行，不同优先级顺序执行。
-        results = []
-        halted = False
-        paused_for_input = False
-        priorities = sorted({task.get("priority", 999) for task in sorted_schedule})
-        for priority in priorities:
-            batch = [task for task in sorted_schedule if task.get("priority", 999) == priority]
-            await self._emit_batch_progress(progress_callback, batch, "running")
-            batch_results = await self._execute_parallel_agents(batch, context, results)
-            results.extend(batch_results)
-            await self._emit_result_progress(progress_callback, batch_results)
-
-            if self._has_abort_failure(batch_results):
-                remaining = [
-                    task for task in sorted_schedule
-                    if task.get("priority", 999) > priority
-                ]
-                results.extend(self._build_skipped_results(remaining))
-                halted = True
-                break
-
-            if self._pause_incomplete_trip_planning(sorted_schedule, results):
-                paused_for_input = True
-                break
-
-        if not halted and not paused_for_input:
-            await self._continue_ready_trip_planning(
-                sorted_schedule,
-                context,
-                results,
-                progress_callback=progress_callback,
-            )
-
-        # 聚合结果
-        final_result = self._aggregate_results(results, intention_data)
-
-        # 更新记忆
-        if self.memory_manager:
-            successful_results = [
-                item for item in results
-                if (item.get("result") or {}).get("status") == "success"
-            ]
-            self._update_memory(intention_data, successful_results)
-
-        self._record_skill_runs(intention_data, results)
-
-        return Msg(
-            name=self.name,
-            content=json.dumps(final_result, ensure_ascii=False),
-            role="assistant"
-        )
-
-    @staticmethod
-    async def _emit_batch_progress(progress_callback, batch: List[Dict], phase: str) -> None:
-        if progress_callback is None:
-            return
-        from core.orchestration.events import task_event
-        for task in batch:
-            agent_name = str(task.get("agent_name") or "task")
-            await progress_callback(task_event(phase, f"legacy-{agent_name}", agent_name))
-
-    @staticmethod
-    async def _emit_result_progress(progress_callback, results: List[Dict]) -> None:
-        if progress_callback is None:
-            return
-        from core.orchestration.events import task_event
-        for item in results:
-            agent_name = str(item.get("agent_name") or "task")
-            status = (item.get("result") or {}).get("status")
-            phase = "completed" if status == "success" else "failed"
-            await progress_callback(task_event(phase, f"legacy-{agent_name}", agent_name))
-
-    @staticmethod
-    def _pause_incomplete_trip_planning(schedule: List[Dict], results: List[Dict]) -> bool:
-        """Stop a planning workflow after collection until required facts exist."""
-        if not any(item.get("agent_name") == "itinerary_planning" for item in schedule):
-            return False
-        event_result = next(
-            (item for item in reversed(results) if item.get("agent_name") == "event_collection"),
-            None,
-        )
-        if not event_result:
-            return False
-        runtime_result = event_result.get("result") or {}
-        data = runtime_result.get("data") if isinstance(runtime_result, dict) else {}
-        return isinstance(data, dict) and data.get("planning_ready") is False
-
-    async def _continue_ready_trip_planning(
-        self,
-        schedule: List[Dict],
-        context: Dict[str, Any],
-        results: List[Dict],
-        progress_callback=None,
-    ) -> None:
-        """Resume an active trip as soon as its final required fact is collected."""
-        if any(item.get("agent_name") == "itinerary_planning" for item in schedule):
-            return
-        event_result = next(
-            (item for item in reversed(results) if item.get("agent_name") == "event_collection"),
-            None,
-        )
-        if not event_result:
-            return
-        data = (event_result.get("result") or {}).get("data") or {}
-        if not isinstance(data, dict) or data.get("planning_ready") is not True:
-            return
-
-        plan_definition = self.skill_definitions.get("plan-trip")
-        if not plan_definition:
-            return
-        executed_agents = {item.get("agent_name") for item in results}
-        follow_up = [
-            step.model_dump()
-            for step in plan_definition.execution
-            if step.agent_name != "event_collection" and step.agent_name not in executed_agents
-        ]
-        follow_up, _ = self._filter_enabled_schedule(follow_up)
-        priorities = sorted({item.get("priority", 999) for item in follow_up})
-        for priority in priorities:
-            batch = [item for item in follow_up if item.get("priority", 999) == priority]
-            await self._emit_batch_progress(progress_callback, batch, "running")
-            batch_results = await self._execute_parallel_agents(batch, context, results)
-            results.extend(batch_results)
-            await self._emit_result_progress(progress_callback, batch_results)
-            if self._has_abort_failure(batch_results):
-                remaining = [
-                    item for item in follow_up
-                    if item.get("priority", 999) > priority
-                ]
-                results.extend(self._build_skipped_results(remaining))
-                return
-
-    @staticmethod
-    def _has_abort_failure(results: List[Dict[str, Any]]) -> bool:
-        return any(
-            (item.get("result") or {}).get("status") == "error"
-            and item.get("on_failure", "abort") == "abort"
-            for item in results
-        )
-
-    @staticmethod
-    def _build_skipped_results(tasks: List[Dict[str, Any]]) -> List[Dict[str, Any]]:
-        return [
-            {
-                "agent_name": task.get("agent_name"),
-                "priority": task.get("priority", 0),
-                "on_failure": task.get("on_failure", "abort"),
-                "result": {
-                    "status": "skipped",
-                    "agent_name": task.get("agent_name"),
-                    "data": {},
-                    "error_code": "UPSTREAM_DEPENDENCY_FAILED",
-                    "error_message": "前置关键步骤失败，本步骤未执行",
-                    "retryable": False,
-                    "attempts": 0,
-                },
-            }
-            for task in tasks
-        ]
 
     def prepare_context(
         self,
@@ -417,19 +114,6 @@ class OrchestrationAgent(AgentBase):
     async def execute_task(self, **kwargs) -> Dict[str, Any]:
         """Public runner used by task-scoped orchestration pipelines."""
         return await self._execute_agent(**kwargs)
-
-    def _filter_enabled_schedule(self, schedule: List[Dict[str, Any]]):
-        enabled = []
-        disabled = []
-        for task in schedule:
-            skill_name = self._agent_skill_map.get(task.get("agent_name"))
-            definition = self.skill_definitions.get(skill_name) if skill_name else None
-            default = definition.enabled_by_default if definition else True
-            if skill_name and not self.skill_store.is_enabled(skill_name, default):
-                disabled.append(skill_name)
-                continue
-            enabled.append(task)
-        return enabled, disabled
 
     def _record_skill_runs(self, intention_data: Dict[str, Any], results: List[Dict]) -> None:
         if not self.skill_store.configured:
@@ -483,103 +167,6 @@ class OrchestrationAgent(AgentBase):
             })
         self._record_skill_runs(intention_data, legacy_results)
 
-    async def _execute_parallel_agents(
-        self,
-        tasks: List[Dict],
-        context: Dict[str, Any],
-        previous_results: List[Dict]
-    ) -> List[Dict]:
-        """
-        并行执行多个智能体
-
-        Args:
-            tasks: 任务列表，每个任务包含 agent_name, priority, reason, expected_output, params（可选，传递给 Agent 的额外参数）
-            context: 上下文信息
-            previous_results: 前序智能体的结果
-
-        Returns:
-            执行结果列表
-        """
-        if not tasks:
-            return []
-
-        # 如果只有一个任务，直接执行
-        if len(tasks) == 1:
-            task = tasks[0]
-            result = await self._execute_agent(
-                agent_name=task.get("agent_name"),
-                context=context,
-                reason=task.get("reason", ""),
-                expected_output=task.get("expected_output", ""),
-                previous_results=previous_results,
-                task_params=task.get("params", {}),
-                max_retries=task.get("max_retries", 0),
-            )
-            return [{
-                "agent_name": task.get("agent_name"),
-                "priority": task.get("priority", 0),
-                "on_failure": task.get("on_failure", "abort"),
-                "result": result
-            }]
-
-        # 多个任务并行执行
-        logger.info(f"Executing {len(tasks)} agents in parallel")
-
-        # 创建并行任务
-        parallel_coroutines = []
-        for task in tasks:
-            agent_name = task.get("agent_name")
-            priority = task.get("priority", 0)
-            reason = task.get("reason", "")
-            expected_output = task.get("expected_output", "")
-            task_params = task.get("params", {})
-
-            logger.info(f"Parallel executing agent: {agent_name} (priority={priority})")
-
-            # 创建协程
-            coroutine = self._execute_agent(
-                agent_name=agent_name,
-                context=context,
-                reason=reason,
-                expected_output=expected_output,
-                previous_results=previous_results,
-                task_params=task_params,
-                max_retries=task.get("max_retries", 0),
-            )
-            parallel_coroutines.append((agent_name, priority, task.get("on_failure", "abort"), coroutine))
-
-        # 使用 asyncio.gather 并行执行
-        execution_results = await asyncio.gather(
-            *[coro for _, _, _, coro in parallel_coroutines],
-            return_exceptions=True
-        )
-
-        # 整理结果
-        results = []
-        for (agent_name, priority, on_failure, _), exec_result in zip(parallel_coroutines, execution_results):
-            if isinstance(exec_result, Exception):
-                logger.error(f"Parallel agent execution failed: {agent_name}, error: {exec_result}")
-                result = {
-                    "status": "error",
-                    "agent_name": agent_name,
-                    "data": {"error": str(exec_result)},
-                    "error_code": "AGENT_EXECUTION_FAILED",
-                    "error_message": "Agent 并行执行失败",
-                    "retryable": is_retriable_error(exec_result),
-                    "attempts": 1,
-                }
-            else:
-                result = exec_result
-
-            results.append({
-                "agent_name": agent_name,
-                "priority": priority,
-                "on_failure": on_failure,
-                "result": result
-            })
-
-        return results
-
     async def _execute_agent(
         self,
         agent_name: str,
@@ -604,6 +191,19 @@ class OrchestrationAgent(AgentBase):
         Returns:
             执行结果
         """
+        # ``task_params.query`` is the final Goal-scope authority. Child agents
+        # historically read different context aliases; leaving the request-wide
+        # query in any of them lets policy/weather bleed into each other.
+        context = dict(context)
+        scoped_query = str((task_params or {}).get("query") or "").strip()
+        if scoped_query:
+            context.setdefault(
+                "request_original_query",
+                context.get("original_query") or context.get("agent_query") or "",
+            )
+            for key in ("original_query", "agent_query", "rewritten_query", "user_query"):
+                context[key] = scoped_query
+
         # 检查智能体是否注册
         if agent_name not in self.agent_registry:
             logger.warning(f"Agent not registered: {agent_name}")
@@ -762,180 +362,3 @@ class OrchestrationAgent(AgentBase):
             "error_message": public_message,
             "retryable": retryable,
         }
-
-    def _aggregate_results(
-        self,
-        results: List[Dict],
-        intention_data: Dict[str, Any]
-    ) -> Dict[str, Any]:
-        """
-        聚合多个智能体的结果
-
-        Args:
-            results: 所有智能体的执行结果
-            intention_data: 原始意图识别结果
-
-        Returns:
-            聚合后的最终结果
-        """
-        aggregated = {
-            "status": "completed",
-            "intention": {
-                "intents": intention_data.get("intents", []),
-                "key_entities": intention_data.get("key_entities", {})
-            },
-            "agents_executed": len(results),
-            "results": []
-        }
-
-        # 收集每个智能体的结果
-        for result in results:
-            aggregated["results"].append({
-                "agent_name": result["agent_name"],
-                "priority": result["priority"],
-                "on_failure": result.get("on_failure", "abort"),
-                "status": result["result"].get("status", "unknown"),
-                "duration_sec": result["result"].get("duration_sec"),
-                "attempts": result["result"].get("attempts", 1),
-                "data": result["result"].get("data", {}),
-                "error_code": result["result"].get("error_code"),
-                "error_message": result["result"].get("error_message"),
-                "retryable": bool(result["result"].get("retryable", False)),
-            })
-
-        # 检查是否有错误
-        errors = [r for r in results if (r.get("result") or {}).get("status") == "error"]
-        required_errors = [r for r in errors if r.get("on_failure", "abort") == "abort"]
-        skipped = [r for r in results if (r.get("result") or {}).get("status") == "skipped"]
-        if required_errors:
-            aggregated["status"] = "failed"
-        elif errors:
-            aggregated["status"] = "partial_failure"
-        aggregated["summary"] = {
-            "success": len(results) - len(errors) - len(skipped),
-            "error": len(errors),
-            "skipped": len(skipped),
-        }
-
-        return aggregated
-
-    def _message_for_non_skill_intent(self, intent: str) -> str:
-        if intent == "unsupported":
-            return (
-                "这个问题不属于公司差旅规划或报销范围，我暂时无法处理。"
-                "我可以帮你查询差旅政策、规划出差路线，或准备报销材料。"
-            )
-        return "我还不太确定这是否与公司差旅有关。请补充出差目的地、日期，或说明要查询的政策和报销问题。"
-
-    def _update_memory(self, intention_data: Dict[str, Any], results: List[Dict]):
-        """
-        更新记忆系统
-
-        Args:
-            intention_data: 意图识别结果
-            results: 智能体执行结果
-        """
-        if not self.memory_manager:
-            return
-
-        # 提取并保存信息到长期记忆
-        for result in results:
-            agent_name = result["agent_name"]
-            data = result["result"].get("data", {})
-
-            if agent_name == "event_collection" and isinstance(data, dict):
-                event_data = data.get("data") if isinstance(data.get("data"), dict) else data
-                event_data = filter_safe_memory_mapping(event_data)
-                if any(event_data.get(key) for key in ("origin", "destination", "start_date", "end_date", "work_location")):
-                    self.memory_manager.update_active_trip(event_data)
-
-            # 如果是偏好智能体，保存偏好信息到长期记忆
-            if agent_name == "preference" and isinstance(data, dict):
-                preferences_data = data.get("preferences", {})
-
-                # 新格式：preferences 是列表，包含 {type, value, action}
-                if isinstance(preferences_data, list):
-                    for pref_item in preferences_data:
-                        if not isinstance(pref_item, dict):
-                            continue
-
-                        pref_type = pref_item.get("type")
-                        pref_value = pref_item.get("value")
-                        pref_action = pref_item.get("action", "replace")  # 默认覆盖
-
-                        if not pref_type or not pref_value:
-                            continue
-                        if not is_safe_preference_value(pref_value):
-                            logger.warning("Skipped sensitive preference value for %s", pref_type)
-                            continue
-
-                        # 根据 action 决定操作
-                        if pref_action == "append":
-                            # 追加模式：获取现有值并追加
-                            current_prefs = self.memory_manager.long_term.get_preference()
-                            existing_value = current_prefs.get(pref_type)
-
-                            # 如果现有值是列表，追加
-                            if isinstance(existing_value, list):
-                                if pref_value not in existing_value:
-                                    existing_value.append(pref_value)
-                                self.memory_manager.long_term.save_preference(pref_type, existing_value)
-                                logger.info(f"Appended to {pref_type}: {pref_value}, total: {existing_value}")
-                            else:
-                                # 如果现有值不是列表，创建新列表
-                                new_list = [existing_value, pref_value] if existing_value else [pref_value]
-                                self.memory_manager.long_term.save_preference(pref_type, new_list)
-                                logger.info(f"Created list for {pref_type}: {new_list}")
-                        else:
-                            # 覆盖模式：直接保存新值
-                            self.memory_manager.long_term.save_preference(pref_type, pref_value)
-                            logger.info(f"Replaced {pref_type}: {pref_value}")
-
-                # 旧格式兼容：preferences 是字典
-                elif isinstance(preferences_data, dict):
-                    for pref_type, value in preferences_data.items():
-                        if value and pref_type != "has_preferences" and pref_type != "error":
-                            if not is_safe_preference_value(value):
-                                logger.warning("Skipped sensitive preference value for %s", pref_type)
-                                continue
-                            self.memory_manager.long_term.save_preference(pref_type, value)
-                            logger.info(f"Updated {pref_type}: {value} (legacy format)")
-
-            # 如果是行程规划智能体，保存行程到长期记忆
-            if agent_name == "itinerary_planning" and isinstance(data, dict):
-                itinerary = data.get("itinerary", {})
-                planning_complete = data.get("planning_complete")
-
-                # 只要有行程信息就保存（不管是否完全规划好）
-                if itinerary and planning_complete is not False and not data.get("error"):
-                    # 提取事项收集的信息（出发地、目的地等）
-                    event_data = {}
-                    for r in results:
-                        if r["agent_name"] == "event_collection":
-                            event_data = r["result"].get("data", {})
-                            if isinstance(event_data.get("data"), dict):
-                                event_data = event_data["data"]
-                            event_data = filter_safe_memory_mapping(event_data)
-                            break
-
-                    # 从 event_data 获取行程信息
-                    origin = event_data.get("origin")
-                    destination = event_data.get("destination")
-                    start_date = event_data.get("start_date")
-                    end_date = event_data.get("end_date")
-                    purpose = event_data.get("trip_purpose", "公司出差")
-
-                    # 保存到长期记忆（只要有目的地就保存）
-                    if destination:
-                        self.memory_manager.long_term.save_trip_history({
-                            "origin": origin,
-                            "destination": destination,
-                            "start_date": start_date,
-                            "end_date": end_date,
-                            "purpose": purpose,
-                            "request_id": getattr(self.memory_manager, "current_request_id", None),
-                        })
-                        self.memory_manager.complete_active_trip(reason="planning_completed")
-                        logger.info(f"Saved trip to long-term memory: {origin} -> {destination}")
-
-        logger.info("Memory updated after orchestration")

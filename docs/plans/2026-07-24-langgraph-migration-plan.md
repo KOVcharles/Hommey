@@ -1,5 +1,7 @@
 # LangGraph 多 Agent 架构迁移计划
 
+> 状态：已被 [任务级编排架构](../task-orchestration-v2.md) 取代，仅保留作历史设计记录。当前运行时不使用 LangGraph checkpointer，也不应按本文继续实现第二套状态源。
+
 ## 目标与边界
 
 将当前“意图识别 + 自定义调度器 + Skill Agent”的请求内编排，逐步迁移为可持久化的 LangGraph 工作流。迁移期间保持 Web、CLI、MCP 三个入口可用；PostgreSQL 继续作为业务事实源，Redis 继续只承担会话热缓存。
@@ -125,7 +127,7 @@ Redis：最近对话热缓存
 3. AgentScope MCP Client 为官方 MCP SDK 或经验证的 LangGraph/LangChain 适配。**注意范围**：本项目 `mcp-tool` skill 走的是自有的 `hommey_mcp/mcp_manager.py`，需先确认 AgentScope 内置 MCP client 是否实际被用到，仅替换真正依赖 AgentScope MCP 的路径，避免误伤自有 MCP 实现。
 4. 删除 `config_agentscope.py`、AgentScope 初始化和依赖。
 
-**意图识别单独评估**：`IntentionAgent` 的结构化输出（`routing` / `intents` / `agent_schedule` / `key_entities`）是驱动图调度的核心，其节点化与输出契约迁移不应与 `AgentBase/Msg` 替换混为一谈，需单独评估与回归，避免调度行为在移除阶段发生隐性改变。
+**意图识别单独评估**：`IntentionAgent` 的结构化输出（`routing` / `intents` / `key_entities`）只负责识别和授权，执行图由 Skill 声明经 `TaskGraphBuilder` 编译。其节点化与输出契约迁移不应与 `AgentBase/Msg` 替换混为一谈，需单独评估与回归，避免授权行为在移除阶段发生隐性改变。
 
 验收：运行时、CLI、Web、MCP 和全部测试均不再导入 `agentscope`；意图识别输出契约迁移有独立回归用例。
 

@@ -15,7 +15,7 @@ Hommey intent 的 Skill；只有标准 `SKILL.md`、没有意图扩展的包不�
 """
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, Optional, Tuple
+from typing import Dict, FrozenSet, List, Optional, Tuple
 
 from utils.skill_loader import SkillLoader
 
@@ -97,6 +97,9 @@ CHITCHAT_EXACT: FrozenSet[str] = frozenset({
     "谢谢", "感谢", "多谢",
     "再见", "拜拜", "bye",
     "ok", "okay", "好的",
+    "哈哈", "呵呵", "没事", "没什么", "算了",
+    "回头见", "明天见", "下次见",
+    "thanks", "thank",
 })
 
 # 寒暄的子串关键词（较长输入的包含匹配）
@@ -113,7 +116,131 @@ def build_intent_prompt_section() -> str:
     for intent, info in SKILL_INTENTS.items():
         lines.append(f"- {intent}: {info['description']}")
     for intent, info in NON_SKILL_INTENTS.items():
-        lines.append(
-            f"- {intent}: {info['description']}（不调用 skill，agent_schedule 必须为空）"
-        )
+        lines.append(f"- {intent}: {info['description']}（should_call_skill 必须为 false）")
     return "\n".join(lines)
+
+
+# ---- 声明式派生注册表 -------------------------------------------------
+# 从 skill 定义读取编排元数据，单一数据源（.agents/skills/*/hommey.yaml）。
+# 新增 skill 后这些 helper 自动生效，无需改任何 Python。
+
+_DEFINITIONS: Dict[str, object] = {
+    definition.name: definition
+    for definition in SkillLoader().load_definitions().values()
+}
+
+
+def _definition_for_intent(intent: str) -> Optional[object]:
+    skill = intent_to_skill(intent)
+    return _DEFINITIONS.get(skill) if skill else None
+
+
+def agent_for_intent(intent: str) -> Optional[str]:
+    """意图名 -> agent_name（该 intent 的 skill 声明的入口 agent）。"""
+    definition = _definition_for_intent(intent)
+    return getattr(definition, "agent_name", None)
+
+
+def definition_for_agent(agent_name: str) -> Optional[object]:
+    """agent_name -> SkillDefinition；用于 memory hook / preference 回写等反查。"""
+    for definition in _DEFINITIONS.values():
+        if getattr(definition, "agent_name", None) == agent_name:
+            return definition
+    return None
+
+
+def section_kind_for_intent(intent: str) -> Optional[str]:
+    """意图 -> AnswerSection.kind；未声明返回 None（composer 自行决定）。"""
+    definition = _definition_for_intent(intent)
+    answer = getattr(definition, "answer", None)
+    return answer.section_kind if answer else None
+
+
+def require_section_for_intent(intent: str) -> bool:
+    """该意图是否必须在 AnswerDocument 中出现对应 section（validator 契约）。"""
+    definition = _definition_for_intent(intent)
+    answer = getattr(definition, "answer", None)
+    return answer.require_section if answer else True
+
+
+def suppress_agents_for_intent(intent: str) -> List[str]:
+    """主 agent 成功后隐藏的工作流中间 agent（plan-trip 完成后折叠）。"""
+    definition = _definition_for_intent(intent)
+    answer = getattr(definition, "answer", None)
+    return list(answer.suppress_agents) if answer else []
+
+
+def primary_agent_for_intent(intent: str) -> Optional[str]:
+    definition = _definition_for_intent(intent)
+    answer = getattr(definition, "answer", None)
+    return answer.primary_agent if answer else None
+
+
+def side_effect_allowed(intent: str) -> bool:
+    """该意图允许携带副作用（记忆回写等），validator 白名单依据。"""
+    definition = _definition_for_intent(intent)
+    return bool(getattr(definition, "side_effect_allowed", False))
+
+
+def progress_key_for_intent(intent: str) -> str:
+    """前端进度文案 key；未声明回退 'task_running'。"""
+    definition = _definition_for_intent(intent)
+    return getattr(definition, "progress_key", None) or "task_running"
+
+
+def confidence_threshold_for_intent(intent: str) -> Optional[float]:
+    """意图级置信度门槛；None 表示使用默认阈值。"""
+    definition = _definition_for_intent(intent)
+    return getattr(definition, "confidence_threshold", None)
+
+
+def catalog_rank(intent: str) -> int:
+    """意图展示/主意图优先级排序键（catalog_order，小的优先）。"""
+    definition = _definition_for_intent(intent)
+    return getattr(definition, "catalog_order", 100)
+
+
+def updates_preferences_for_agent(agent_name: str) -> bool:
+    """该 agent 成功后是否应把 preference_updated 置 True（前端标记）。"""
+    definition = definition_for_agent(agent_name)
+    return bool(definition and getattr(definition, "updates_preferences", False))
+
+
+def pause_spec_for_intent(intent: str) -> Optional[object]:
+    """节点级等待用户输入声明；未声明返回 None。"""
+    definition = _definition_for_intent(intent)
+    return getattr(definition, "pause", None)
+
+
+def memory_hooks_for_intent(intent: str) -> List[object]:
+    """意图声明的记忆回写 hook（MemoryHook 列表）。"""
+    definition = _definition_for_intent(intent)
+    return list(getattr(definition, "memory_hooks", []) or [])
+
+
+def execution_steps_for_intent(intent: str) -> List[object]:
+    """意图的 skill execution 模板步骤（SkillExecutionStep 列表）。"""
+    definition = _definition_for_intent(intent)
+    return list(getattr(definition, "execution", []) or [])
+
+
+def result_rules_for_intent(intent: str) -> Dict[str, object]:
+    """意图首个步骤的 result_rules（executor 状态判定用）。"""
+    steps = execution_steps_for_intent(intent)
+    if steps:
+        rules = getattr(steps[0], "result_rules", None)
+        return dict(rules) if rules else {}
+    return {}
+
+
+def intent_api_payload() -> Dict[str, Dict[str, str]]:
+    """``GET /api/intents`` 的声明式载荷：前端进度标签无需硬编码意图名。"""
+    return {
+        intent: {
+            "display": info["display"],
+            "progress_key": progress_key_for_intent(intent),
+            "description": info["description"],
+            "skill": info["skill"],
+        }
+        for intent, info in SKILL_INTENTS.items()
+    }

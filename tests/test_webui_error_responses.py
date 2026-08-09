@@ -378,11 +378,15 @@ async def test_stream_error_event_contract(client, monkeypatch):
 
 @pytest.mark.anyio
 async def test_stream_optional_agent_error_returns_partial_success(client, monkeypatch):
+    # 阶段 4 后走 DAG 管线：continue 步骤失败不中止，composer 降级出卡片。
+    from core.orchestration.fallback_composer import FallbackComposer
+    from core.orchestration.models import ExecutionTask, PipelineOutput, TaskResult
+
     class FastRoute:
         def to_intention_data(self, _message):
             return {
                 "routing": {"should_call_skill": True},
-                "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
+                "intents": [{"type": "information_query", "should_call_skill": True}],
             }
 
     class Memory:
@@ -390,36 +394,46 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
             pass
 
     class Orchestrator:
-        async def reply(self, _message, request_context=None):
-            return type(
-                "Result",
-                (),
-                {
-                    "content": json.dumps(
-                        {
-                            "status": "partial_failure",
-                            "results": [
-                                    {
-                                        "agent_name": "event_collection",
-                                        "status": "error",
-                                        "on_failure": "continue",
-                                        "data": {"error": "Error in input stream"},
-                                    },
-                                    {
-                                        "agent_name": "rag_knowledge",
-                                        "status": "success",
-                                        "data": {"answer": "住宿标准以公司制度为准"},
-                                    },
-                            ],
-                        }
-                    )
-                },
-            )()
+        def prepare_context(self, _intention_data, *, request_context=None):
+            return {"rewritten_query": "查南京天气"}
+
+        def record_task_results(self, _intention_data, _results):
+            pass
+
+    class FakePipeline:
+        async def run(self, **kwargs):
+            task = ExecutionTask(
+                task_id="information_query-information_query",
+                intent="information_query",
+                query="查询南京天气",
+                entities={"destination": "南京"},
+                agent_name="information_query",
+                priority=1,
+                failure_policy="continue",
+                display_order=0,
+            )
+            result = TaskResult(
+                task_id="information_query-information_query",
+                intent="information_query",
+                agent_name="information_query",
+                status="error",
+                data={"results": {"error": "Error in input stream"}},
+                error_code="INFORMATION_QUERY_UNAVAILABLE",
+                error_message="天气服务暂时不可用",
+                display_order=0,
+            )
+            return PipelineOutput(
+                tasks=[task],
+                execution_tasks=[task],
+                results=[result],
+                answer_document=FallbackComposer().compose([task], [result]),
+            )
 
     instance = HommeyWebInstance("u1")
     instance.initialized = True
     instance.memory_manager = Memory()
     instance.orchestrator = Orchestrator()
+    instance.multi_intent_pipeline = FakePipeline()
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
@@ -442,19 +456,21 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     assert events[-1]["type"] == "done"
     documents = [event["document"] for event in events if event.get("type") == "answer_document"]
     assert len(documents) == 1
-    assert "住宿标准以公司制度为准" in documents[0]["plain_text"]
-    assert "降级处理" in documents[0]["plain_text"]
+    assert "天气服务暂时不可用" in documents[0]["plain_text"]
     assert not any(event.get("type") == "chunk" for event in events)
     assert "Error in input stream" not in response.text
 
 
 @pytest.mark.anyio
 async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
+    # abort 步骤失败由 _raise_on_pipeline_errors 上抛为公共错误流。
+    from core.orchestration.models import ExecutionTask, PipelineOutput, TaskResult
+
     class FastRoute:
         def to_intention_data(self, _message):
             return {
                 "routing": {"should_call_skill": True},
-                "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
+                "intents": [{"type": "event_collection", "should_call_skill": True}],
             }
 
     class Memory:
@@ -462,32 +478,41 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
             pass
 
     class Orchestrator:
-        async def reply(self, _message, request_context=None):
-            return type(
-                "Result",
-                (),
-                {
-                    "content": json.dumps(
-                        {
-                            "status": "failed",
-                            "results": [
-                                {
-                                    "agent_name": "event_collection",
-                                    "status": "error",
-                                    "on_failure": "abort",
-                                    "error_message": "internal failure",
-                                    "data": {"error": "Error in input stream"},
-                                }
-                            ],
-                        }
-                    )
-                },
-            )()
+        def prepare_context(self, _intention_data, *, request_context=None):
+            return {"rewritten_query": "收集出差信息"}
+
+        def record_task_results(self, _intention_data, _results):
+            pass
+
+    class FakePipeline:
+        async def run(self, **kwargs):
+            task = ExecutionTask(
+                task_id="event_collection-event_collection",
+                intent="event_collection",
+                query="收集出差信息",
+                entities={"destination": "南京"},
+                agent_name="event_collection",
+                priority=1,
+                failure_policy="abort",
+                display_order=0,
+            )
+            result = TaskResult(
+                task_id="event_collection-event_collection",
+                intent="event_collection",
+                agent_name="event_collection",
+                status="error",
+                data={"error": "Error in input stream"},
+                error_code="AGENT_EXECUTION_FAILED",
+                error_message="internal failure",
+                display_order=0,
+            )
+            return PipelineOutput(tasks=[task], execution_tasks=[task], results=[result])
 
     instance = HommeyWebInstance("u1")
     instance.initialized = True
     instance.memory_manager = Memory()
     instance.orchestrator = Orchestrator()
+    instance.multi_intent_pipeline = FakePipeline()
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
@@ -513,6 +538,7 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
         "request_id": "rid-agent-stream-fatal",
         "retryable": True,
     }
+    assert "internal failure" not in response.text
     assert "Error in input stream" not in response.text
 
 
@@ -562,20 +588,29 @@ async def test_manager_intention_error_does_not_return_raw_exception(monkeypatch
 async def test_manager_orchestration_error_does_not_return_raw_exception(monkeypatch):
     class FastRoute:
         def to_intention_data(self, _message):
-            return {"routing": {"should_call_skill": True}, "agent_schedule": [{"agent_name": "x", "priority": 1}]}
+            return {
+                "routing": {"should_call_skill": True},
+                "intents": [{"type": "event_collection", "should_call_skill": True}],
+            }
 
     class Memory:
         def add_message(self, *_args):
             pass
 
-    async def failing_reply(_message):
-        raise RuntimeError("password=secret-orchestration")
+    class Orchestrator:
+        def prepare_context(self, _intention_data, *, request_context=None):
+            return {"rewritten_query": "收集出差信息"}
+
+    class FakePipeline:
+        async def run(self, **_kwargs):
+            raise RuntimeError("password=secret-orchestration")
 
     instance = HommeyWebInstance("u1")
     instance.initialized = True
     instance.circuit_breaker = None
     instance.memory_manager = Memory()
-    instance.orchestrator = type("Orchestrator", (), {"reply": failing_reply})()
+    instance.orchestrator = Orchestrator()
+    instance.multi_intent_pipeline = FakePipeline()
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
 
     with pytest.raises(Exception) as exc_info:

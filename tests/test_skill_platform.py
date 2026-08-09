@@ -4,11 +4,10 @@ from pathlib import Path
 
 import pytest
 from agents.lazy_agent_registry import LazyAgentRegistry
-from agents.orchestration_agent import OrchestrationAgent
 from agentscope.message import Msg
 
 from context.long_term_memory import FileLongTermMemory
-from core.schedule_builder import build_agent_schedule
+from core.intent_catalog import execution_steps_for_intent
 from utils.skill_loader import SkillLoader
 from webui_new.auth.deps import require_admin
 from webui_new.auth.storage import User
@@ -32,24 +31,6 @@ class _Store:
 
     def set_enabled(self, skill_name, enabled, updated_by):
         self.values[skill_name] = {"enabled": enabled, "updated_by": updated_by}
-
-
-class _DisabledStore(_Store):
-    configured = False
-
-    def is_enabled(self, skill_name, default=True):
-        return skill_name != "ask-question"
-
-
-class _ReplyAgent:
-    def __init__(self, name, payload):
-        self.name = name
-        self.payload = payload
-        self.calls = 0
-
-    async def reply(self, _message):
-        self.calls += 1
-        return Msg(name=self.name, content=json.dumps(self.payload), role="assistant")
 
 
 def test_every_skill_has_standard_metadata_and_valid_runtime_config():
@@ -132,9 +113,9 @@ def test_skill_resource_reader_stays_inside_package():
 
 
 def test_plan_workflow_is_declarative_and_ends_with_compliance():
-    schedule = build_agent_schedule([{"type": "itinerary_planning"}])
+    steps = execution_steps_for_intent("itinerary_planning")
 
-    assert [(item["agent_name"], item["priority"]) for item in schedule] == [
+    assert [(item.agent_name, item.priority) for item in steps] == [
         ("event_collection", 1),
         ("rag_knowledge", 2),
         ("information_query", 2),
@@ -143,124 +124,46 @@ def test_plan_workflow_is_declarative_and_ends_with_compliance():
     ]
 
 
-def test_disabled_skill_is_removed_before_orchestration():
-    orchestrator = OrchestrationAgent(agent_registry={}, skill_store=_DisabledStore())
+def test_completed_plan_hides_workflow_intermediates():
+    from core.orchestration.fallback_composer import FallbackComposer
+    from core.orchestration.models import IntentTask, TaskResult
 
-    filtered, disabled = orchestrator._filter_enabled_schedule(
-        [
-            {"agent_name": "rag_knowledge", "priority": 1},
-            {"agent_name": "itinerary_planning", "priority": 2},
-        ]
+    task = IntentTask(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        query="规划广州出差行程",
+        entities={"destination": "广州"},
+        display_order=0,
     )
 
-    assert filtered == [{"agent_name": "itinerary_planning", "priority": 2}]
-    assert disabled == ["ask-question"]
-
-
-def test_orchestrator_returns_aggregated_multi_agent_results():
-    orchestrator = OrchestrationAgent(agent_registry={})
-
-    aggregated = orchestrator._aggregate_results(
-        [
-            {
-                "agent_name": "event_collection",
-                "priority": 1,
-                "result": {
-                    "status": "success",
-                    "duration_sec": 0.01,
-                    "data": {"destination": "南京"},
-                },
-            },
-            {
-                "agent_name": "rag_knowledge",
-                "priority": 1,
-                "result": {
-                    "status": "success",
-                    "duration_sec": 0.02,
-                    "data": {"answer": "住宿标准"},
-                },
-            },
-        ],
-        {"intents": [{"type": "rag_knowledge"}], "key_entities": {"destination": "南京"}},
-    )
-
-    assert aggregated["status"] == "completed"
-    assert aggregated["agents_executed"] == 2
-    assert [item["agent_name"] for item in aggregated["results"]] == [
-        "event_collection",
-        "rag_knowledge",
-    ]
-
-
-def test_incomplete_trip_stops_before_external_queries_and_planning():
-    schedule = build_agent_schedule([{"type": "itinerary_planning"}])
-    results = [
-        {
-            "agent_name": "event_collection",
-            "result": {
-                "status": "success",
-                "data": {"planning_ready": False, "missing_info": ["start_date"]},
-            },
-        }
-    ]
-
-    assert OrchestrationAgent._pause_incomplete_trip_planning(schedule, results) is True
-
-
-def test_ready_event_collection_automatically_resumes_trip_planning():
-    agents = {
-        "event_collection": _ReplyAgent("event_collection", {"planning_ready": True, "origin": "北京", "destination": "南昌"}),
-        "rag_knowledge": _ReplyAgent("rag_knowledge", {"answer": "制度"}),
-        "information_query": _ReplyAgent("information_query", {"results": {"summary": "天气与交通"}}),
-        "itinerary_planning": _ReplyAgent("itinerary_planning", {"itinerary": {"title": "南昌出差", "daily_plans": []}}),
-        "trip_compliance": _ReplyAgent("trip_compliance", {"verdict": "unknown"}),
-    }
-    orchestrator = OrchestrationAgent(agent_registry=agents)
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="IntentionAgent",
-                content=json.dumps({
-                    "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
-                    "rewritten_query": "7月14日去拜访客户",
-                }),
-                role="assistant",
-            )
+    def _res(agent, data):
+        return TaskResult(
+            task_id=f"itinerary_planning-{agent}",
+            intent="itinerary_planning",
+            agent_name=agent,
+            status="success",
+            data=data,
+            display_order=0,
         )
-    )
-    data = json.loads(response.content)
 
-    assert [item["agent_name"] for item in data["results"]] == [
-        "event_collection", "rag_knowledge", "information_query", "itinerary_planning", "trip_compliance",
+    results = [
+        _res("event_collection", {"destination": "广州"}),
+        _res("rag_knowledge", {"answer": "不应展示的中间制度回答"}),
+        _res("information_query", {"results": {"summary": "不应展示的中间外部信息"}}),
+        _res("itinerary_planning", {"itinerary": {"title": "广州两天出差", "daily_plans": []}}),
+        _res("trip_compliance", {"verdict": "unknown", "summary": "制度证据不足"}),
     ]
 
+    document = FallbackComposer().compose([task], results)
 
-def test_completed_plan_hides_intermediate_queries_and_softens_unknown_compliance():
-    web = object.__new__(HommeyWebInstance)
-    response = web._format_response(
-        {
-            "results": [
-                {"agent_name": "event_collection", "status": "success", "data": {"destination": "广州"}},
-                {"agent_name": "rag_knowledge", "status": "success", "data": {"answer": "不应展示的中间制度回答"}},
-                {"agent_name": "information_query", "status": "success", "data": {"results": {"summary": "不应展示的中间外部信息"}}},
-                {
-                    "agent_name": "itinerary_planning",
-                    "status": "success",
-                    "data": {"itinerary": {"title": "广州两天出差", "daily_plans": []}},
-                },
-                {
-                    "agent_name": "trip_compliance",
-                    "status": "success",
-                    "data": {"verdict": "unknown", "summary": "制度证据不足"},
-                },
-            ]
-        }
+    joined = document.plain_text + json.dumps(
+        [section.model_dump() for section in document.sections], ensure_ascii=False
     )
-
-    assert "广州两天出差" in response
-    assert "不应展示的中间制度回答" not in response
-    assert "不应展示的中间外部信息" not in response
-    assert "未检索到足以确认合规性" in response
+    assert "广州两天出差" in joined
+    assert "不应展示的中间制度回答" not in joined
+    assert "不应展示的中间外部信息" not in joined
+    # 合规结论以 notice 浮出（不在 trip 主 section 中隐藏）。
+    assert document.notices
 
 
 def test_compliance_skill_refuses_a_definite_verdict_without_rag_evidence():

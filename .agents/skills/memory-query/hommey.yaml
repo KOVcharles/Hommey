@@ -6,6 +6,9 @@ agent_name: memory_query
 user_facing: false
 risk_level: medium
 catalog_order: 70
+progress_key: memory_searching
+answer:
+  section_kind: memory
 tools: [memory]
 execution:
   - skill: memory-query

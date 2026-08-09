@@ -2,15 +2,9 @@ import asyncio
 import json
 
 from agents.intention_agent import IntentionAgent
-from agents.orchestration_agent import OrchestrationAgent
 from agentscope.message import Msg
 from core.intent_guard import can_call_information_query, guard_user_input
 from core.intent_router import FastIntentRouter
-
-
-def _schedule_agents(route):
-    data = route.to_intention_data("")
-    return [item.get("agent_name") for item in data.get("agent_schedule", [])]
 
 
 def test_short_input_does_not_call_information_query():
@@ -19,7 +13,26 @@ def test_short_input_does_not_call_information_query():
     assert result is not None
     assert result.intent == "unclear"
     assert result.should_call_skill is False
-    assert result.agent_schedule == []
+
+
+def test_short_field_value_with_trip_context_is_not_blocked():
+    # trip intake 收集流程中，短输入是"补字段值"（出差目的"培训"、出发地"北京"），
+    # 不应被通用短输入规则拦截为 unclear，应放行给 LLM 结合上下文识别。
+    result = guard_user_input(
+        "培训",
+        "行程框架已保存\n已确认：目的地：南京\n需要补充：\n- 出发地\n- 出差目的",
+    )
+
+    assert result is None
+
+
+def test_short_input_without_context_is_still_blocked():
+    # 首轮无上下文时，短输入仍按 unclear 拦截（安全网保持）。
+    result = guard_user_input("培训")
+
+    assert result is not None
+    assert result.intent == "unclear"
+    assert result.should_call_skill is False
 
 
 def test_chitchat_routes_to_skill():
@@ -29,7 +42,39 @@ def test_chitchat_routes_to_skill():
     data = route.to_intention_data("在吗")
     assert data["routing"]["intent"] == "chitchat"
     assert data["routing"]["should_call_skill"] is True
-    assert _schedule_agents(route) == ["chitchat"]
+    assert route.intent_types == ("chitchat",)
+
+
+def test_greeting_prefix_business_query_is_not_chitchat():
+    # P1-1：寒暄词作子串时不得短路业务请求。
+    route = FastIntentRouter.route("你好，帮我查一下杭州的差旅报销标准")
+
+    assert route is not None
+    assert route.intent_types == ("rag_knowledge",)
+    assert route.intent_type != "chitchat"
+
+
+def test_thanks_prefix_business_query_is_not_chitchat():
+    route = FastIntentRouter.route("谢谢，餐补多少")
+
+    assert route is not None
+    assert route.intent_types == ("rag_knowledge",)
+    assert route.intent_type != "chitchat"
+
+
+def test_capability_question_still_short_circuits_as_chitchat():
+    for query in ("你能做什么", "介绍一下你自己"):
+        route = FastIntentRouter.route(query)
+        assert route is not None
+        assert route.intent_types == ("chitchat",)
+        assert route.safe_to_short_circuit is True
+
+
+def test_social_single_words_short_circuit_as_chitchat():
+    for query in ("哈哈", "没事", "明天见"):
+        route = FastIntentRouter.route(query)
+        assert route is not None
+        assert route.intent_types == ("chitchat",)
 
 
 def test_weather_query_without_trip_context_does_not_fast_route():
@@ -50,7 +95,7 @@ def test_weather_query_with_trip_context_routes_to_information_query():
     data = route.to_intention_data("我明天去东京出差，帮我查一下天气")
     assert data["routing"]["intent"] == "information_query"
     assert data["routing"]["should_call_skill"] is True
-    assert _schedule_agents(route) == ["information_query"]
+    assert route.intent_types == ("information_query",)
 
 
 def test_weather_followup_can_use_existing_business_trip_context():
@@ -89,7 +134,6 @@ def test_intention_followup_uses_dialogue_context_instead_of_context_free_route(
                 ],
                 "key_entities": {"destination": "南京"},
                 "rewritten_query": "查询南京出差期间的天气",
-                "agent_schedule": [],
             },
             ensure_ascii=False,
         )
@@ -109,7 +153,6 @@ def test_intention_followup_uses_dialogue_context_instead_of_context_free_route(
     assert len(model_calls) == 1
     assert data["routing"]["intent"] == "information_query"
     assert data["routing"]["should_call_skill"] is True
-    assert data["agent_schedule"][0]["agent_name"] == "information_query"
 
 
 def test_programming_request_is_rejected_as_out_of_scope():
@@ -129,12 +172,45 @@ def test_private_tourism_request_is_rejected():
     assert result.should_call_skill is False
 
 
-def test_booking_payment_request_remains_advice_only():
+def test_booking_payment_request_passes_guard_to_llm_decision():
+    # 无 ticket skill 时 guard 不再硬拒订票请求：LLM 主导，由产品边界 prompt 判定。
     result = guard_user_input("帮我订票付款")
 
-    assert result is not None
-    assert result.intent == "unsupported"
-    assert result.should_call_skill is False
+    assert result is None
+
+
+def test_booking_request_without_ticket_skill_resolves_to_unsupported():
+    async def product_boundary_model(_messages):
+        return json.dumps(
+            {
+                "reasoning": "订票不在产品边界内",
+                "routing": {
+                    "intent": "unsupported",
+                    "confidence": 0.95,
+                    "reason": "不支持预订",
+                    "should_call_skill": False,
+                },
+                "intents": [
+                    {
+                        "type": "unsupported",
+                        "confidence": 0.95,
+                        "description": "",
+                        "reason": "不支持预订",
+                        "should_call_skill": False,
+                    }
+                ],
+                "key_entities": {},
+                "rewritten_query": "帮我订票付款",
+            },
+            ensure_ascii=False,
+        )
+
+    agent = IntentionAgent(name="IntentionAgent", model=product_boundary_model)
+    result = asyncio.run(agent.reply(Msg(name="user", content="帮我订票付款", role="user")))
+    data = json.loads(result.content)
+
+    assert data["routing"]["intent"] == "unsupported"
+    assert data["routing"]["should_call_skill"] is False
 
 
 def test_payment_receipt_policy_question_is_not_mistaken_for_payment_action():
@@ -159,9 +235,7 @@ def test_trip_request_routes_to_trip_planning():
     assert route is not None
     data = route.to_intention_data("我下周去上海出差，帮我安排两天行程")
     assert data["routing"]["intent"] == "itinerary_planning"
-    assert _schedule_agents(route) == [
-        "event_collection", "rag_knowledge", "information_query", "itinerary_planning", "trip_compliance"
-    ]
+    assert route.intent_types == ("itinerary_planning",)
 
 
 def test_policy_query_routes_to_rag_knowledge():
@@ -170,7 +244,7 @@ def test_policy_query_routes_to_rag_knowledge():
     assert route is not None
     data = route.to_intention_data("餐补标准是多少")
     assert data["routing"]["intent"] == "rag_knowledge"
-    assert _schedule_agents(route) == ["rag_knowledge"]
+    assert route.intent_types == ("rag_knowledge",)
 
 
 def test_generic_company_standard_does_not_enter_travel_rag_fast_path():
@@ -185,11 +259,35 @@ def test_compliance_request_routes_through_trip_context_rag_and_compliance():
     assert route is not None
     data = route.to_intention_data("检查一下南京出差行程是否合规")
     assert data["routing"]["intent"] == "trip_compliance"
-    assert _schedule_agents(route) == [
-        "event_collection",
-        "rag_knowledge",
-        "trip_compliance",
-    ]
+    assert route.intent_types == ("trip_compliance",)
+
+
+def test_policy_structure_query_is_not_mislabeled_as_trip():
+    # P1-3：裸"从X到Y出差"结构句是政策问题，不得产生 itinerary_planning 候选，
+    # 否则会以单个可短路意图触发 5 步行程采集，政策问题永不回答。
+    route = FastIntentRouter.route("从北京出差到上海的规定")
+
+    assert route is None
+    candidates = FastIntentRouter.detect("从北京出差到上海的规定")
+    assert all(candidate.type != "itinerary_planning" for candidate in candidates)
+
+
+def test_route_structure_with_plan_verb_still_routes_to_trip():
+    # 带显式规划动词的结构句仍是真正的行程请求，快路由行为保持。
+    route = FastIntentRouter.route("从北京到上海出差，帮我安排行程")
+
+    assert route is not None
+    assert route.intent_types == ("itinerary_planning",)
+    assert route.safe_to_short_circuit is True
+
+
+def test_mixed_plan_and_policy_query_stays_composite_not_short_circuited():
+    # 混合句的 trip 候选必须保留，且因有两个可调用意图而不短路（LLM 复合处理）。
+    route = FastIntentRouter.route("帮我规划去上海的行程，报销标准是多少")
+
+    assert route is not None
+    assert set(route.intent_types) == {"itinerary_planning", "rag_knowledge"}
+    assert route.safe_to_short_circuit is False
 
 
 def test_vague_browse_input_is_unclear_without_skill():
@@ -198,7 +296,6 @@ def test_vague_browse_input_is_unclear_without_skill():
     assert result is not None
     assert result.intent == "unclear"
     assert result.should_call_skill is False
-    assert result.agent_schedule == []
 
 
 def test_information_query_requires_clear_target():
@@ -206,7 +303,6 @@ def test_information_query_requires_clear_target():
 
     assert result.intent == "unclear"
     assert result.should_call_skill is False
-    assert result.agent_schedule == []
 
 
 def test_intention_connection_error_falls_back_without_information_query():
@@ -219,7 +315,6 @@ def test_intention_connection_error_falls_back_without_information_query():
 
     assert data["routing"]["intent"] == "fallback"
     assert data["routing"]["should_call_skill"] is False
-    assert data["agent_schedule"] == []
 
 
 def test_low_confidence_skill_call_is_blocked():
@@ -244,14 +339,6 @@ def test_low_confidence_skill_call_is_blocked():
                 ],
                 "key_entities": {},
                 "rewritten_query": "帮我处理这个内容",
-                "agent_schedule": [
-                    {
-                        "agent_name": "rag_knowledge",
-                        "priority": 1,
-                        "reason": "not sure",
-                        "expected_output": "",
-                    }
-                ],
             },
             ensure_ascii=False,
         )
@@ -262,27 +349,3 @@ def test_low_confidence_skill_call_is_blocked():
 
     assert data["routing"]["should_call_skill"] is False
     assert data["intents"][0]["should_call_skill"] is False
-    assert data["agent_schedule"] == []
-
-
-def test_orchestrator_respects_should_not_call_skill():
-    orchestrator = OrchestrationAgent(agent_registry={"information_query": object()}, memory_manager=None)
-    payload = {
-        "routing": {
-            "intent": "unclear",
-            "confidence": 0.9,
-            "reason": "输入过短",
-            "should_call_skill": False,
-        },
-        "agent_schedule": [{"agent_name": "information_query", "priority": 1}],
-    }
-
-    result = asyncio.run(
-        orchestrator.reply(
-            Msg(name="intention", content=json.dumps(payload, ensure_ascii=False), role="assistant")
-        )
-    )
-    data = json.loads(result.content)
-
-    assert data["status"] == "no_agents"
-    assert data["results"] == []

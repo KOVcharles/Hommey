@@ -13,7 +13,7 @@
     --sage: #315e4c;
     --sage-bg: #e5f1eb;
     --danger: #d74747;
-    --content: 760px;
+    --content: 800px;
     --shadow-1: 0 8px 30px rgba(25, 25, 22, .06);
     --shadow-2: 0 24px 80px rgba(25, 25, 22, .12);
     --shadow-3: 0 40px 120px rgba(25, 25, 22, .18);
@@ -339,6 +339,8 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 .send-button:hover { transform: scale(1.04); }
 .send-button:active { transform: scale(.93); }
 .send-button:disabled { cursor: default; opacity: .35; transform: none; }
+.send-button.is-running { cursor: pointer; }
+.send-button.is-stopping { cursor: wait; opacity: .72; }
 
 .prompt-rotator {
     width: min(560px, calc(100% - 28px));
@@ -403,7 +405,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     width: 100%;
     min-height: 0;
     margin: 0;
-    padding: 38px max(18px, calc((100% - var(--content)) / 2 + 8px)) 100px;
+    padding: 38px max(18px, calc((100% - var(--content)) / 2)) 100px;
     overflow-y: auto;
     scroll-behavior: smooth;
     scrollbar-width: thin;
@@ -427,9 +429,12 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 }
 @keyframes message-in { from { opacity: 0; transform: translateY(8px); } }
 .message-row.user { display: flex; justify-content: flex-end; }
-.message-row.ai { display: grid; grid-template-columns: 34px minmax(0, 1fr); gap: 8px; }
+.message-row.ai { position: relative; display: block; }
 .msg-avatar.user { display: none; }
 .msg-avatar.ai {
+    position: absolute;
+    top: 0;
+    right: calc(100% + 8px);
     width: 34px;
     height: 25px;
     background: center / 32px auto no-repeat url('/static/brand/hommey-mark.svg');
@@ -533,7 +538,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     z-index: 5;
     width: min(var(--content), calc(100% - 36px));
     margin: 0 auto;
-    padding: 0 8px 15px;
+    padding: 0 0 15px;
 }
 .chat-composer-shell .composer {
     box-shadow: 0 18px 55px rgba(25, 25, 22, .11);
@@ -1089,8 +1094,9 @@ html[data-motion="off"] *::after {
     .prompt-rotator { width: calc(100% - 12px); padding-right: 9px; padding-left: 9px; }
     .conversation-view { padding-top: 58px; }
     .chat-messages { width: 100%; padding: 25px 13px 90px; }
+    .msg-avatar.ai { display: none; }
     .message-row.user .msg-stack { width: 88%; }
-    .chat-composer-shell { width: calc(100% - 16px); padding-right: 0; padding-left: 0; }
+    .chat-composer-shell { width: calc(100% - 26px); padding-right: 0; padding-left: 0; }
     .sidebar { top: 6px; bottom: 6px; left: 6px; width: min(286px, calc(100vw - 12px)); }
     .modal-layer { padding: 10px; }
     .settings-body { padding: 13px; }

@@ -1,4 +1,4 @@
--- TravelAgent 鉴权系统 v1.0：用户表
+-- Hommey 鉴权系统 v1.0：用户表
 -- 幂等：可重复执行；字段与 PRD §3.1 一致。
 -- 该 DDL 同时由 webui_new/auth/storage.py::apply_migration 在代码内执行，
 -- 本文件供运维/CI 手工独立执行（见 design.md §2.3）。

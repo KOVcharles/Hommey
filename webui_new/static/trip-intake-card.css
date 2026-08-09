@@ -1,5 +1,5 @@
 .trip-intake-card {
-    width: min(680px, calc(100vw - 92px));
+    width: 100%;
     overflow: hidden;
     border: 1px solid var(--line);
     border-radius: 22px;
@@ -39,16 +39,22 @@
 .trip-intake-options { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
 .trip-intake-action { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2); background: var(--panel); font-size: 9px; transition: border-color .2s var(--ease), transform .2s var(--ease), background .2s var(--ease); }
 .trip-intake-action:hover { border-color: color-mix(in srgb, var(--route) 42%, var(--line)); transform: translateY(-1px); }
+.trip-intake-action.is-selected { color: var(--panel); border-color: var(--route); background: var(--route); box-shadow: 0 0 0 3px color-mix(in srgb, var(--route) 10%, transparent); }
+.trip-intake-action:disabled { cursor: not-allowed; opacity: .42; transform: none; }
 .trip-intake-action.is-primary { color: var(--panel); border-color: var(--ink); background: var(--ink); }
+.trip-intake-inline-input { width: min(100%, 320px); min-height: 34px; margin-top: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; outline: 0; color: var(--ink); background: var(--panel); font: inherit; font-size: 10px; transition: border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.trip-intake-inline-input:focus { border-color: color-mix(in srgb, var(--route) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--route) 8%, transparent); }
+.trip-intake-inline-input::placeholder { color: var(--ink-3); }
 .trip-intake-optional { margin: 0 24px; border-top: 1px solid var(--line); }
 .trip-intake-optional summary { padding: 13px 0; list-style: none; cursor: pointer; color: var(--ink-3); font-size: 9px; display: flex; justify-content: space-between; }
 .trip-intake-optional summary::-webkit-details-marker { display: none; }
 .trip-intake-optional summary::after { content: "+"; font-size: 13px; transition: transform .2s var(--ease); }
 .trip-intake-optional[open] summary::after { transform: rotate(45deg); }
 .trip-intake-optional-list { padding-bottom: 12px; display: grid; gap: 6px; }
-.trip-intake-optional-row { padding: 9px 10px; border: 0; border-radius: 10px; text-align: left; color: var(--ink-2); background: var(--soft); display: flex; justify-content: space-between; gap: 12px; }
+.trip-intake-optional-row { padding: 9px 10px; border: 0; border-radius: 10px; text-align: left; color: var(--ink-2); background: var(--soft); display: grid; grid-template-columns: minmax(0, .7fr) minmax(180px, 1fr); align-items: center; gap: 12px; }
 .trip-intake-optional-row span { font-size: 10px; }
-.trip-intake-optional-row small { color: var(--ink-3); font-size: 8px; }
+.trip-intake-optional-row small { margin-top: 3px; color: var(--ink-3); font-size: 8px; display: block; }
+.trip-intake-optional-row .trip-intake-inline-input { width: 100%; margin-top: 0; }
 .trip-intake-conflicts { padding: 0 24px 18px; }
 .trip-intake-conflict { padding: 12px 13px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 13px; background: color-mix(in srgb, var(--danger) 5%, var(--soft)); }
 .trip-intake-conflict strong { color: var(--danger); font-size: 10px; }
@@ -56,6 +62,9 @@
 .trip-intake-footer { padding: 16px 24px 18px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
 .trip-intake-footer span { color: var(--ink-3); font-size: 8px; }
 .trip-intake-footer p { margin: 3px 0 0; color: var(--ink-2); font-size: 9px; line-height: 1.5; }
+.trip-intake-submit { flex: none; min-width: 112px; }
+.trip-intake-card.is-submitting .trip-intake-field,
+.trip-intake-card.is-submitting .trip-intake-optional { opacity: .62; pointer-events: none; }
 .trip-intake-text-details { margin: 0 24px; border-top: 1px solid var(--line); }
 .trip-intake-text-details summary { padding: 12px 0; list-style: none; cursor: pointer; color: var(--ink-3); font-size: 9px; display: flex; align-items: center; justify-content: space-between; }
 .trip-intake-text-details summary::-webkit-details-marker { display: none; }
@@ -78,10 +87,10 @@
 .trip-intake-card.is-collapsed .trip-intake-header { cursor: pointer; }
 
 @media (max-width: 760px) {
-    .trip-intake-card { width: calc(100vw - 52px); border-radius: 18px; }
+    .trip-intake-card { width: 100%; border-radius: 18px; }
     .trip-intake-header, .trip-intake-required { padding-right: 17px; padding-left: 17px; }
     .trip-intake-optional { margin-right: 17px; margin-left: 17px; }
     .trip-intake-text-details { margin-right: 17px; margin-left: 17px; }
     .trip-intake-footer { padding-right: 17px; padding-left: 17px; align-items: flex-start; flex-direction: column; }
-    .trip-intake-optional-row { flex-direction: column; gap: 3px; }
+    .trip-intake-optional-row { grid-template-columns: 1fr; gap: 7px; }
 }

@@ -690,7 +690,7 @@ git commit -m "feat: add concurrency config and multi-worker uvicorn support"
 - Consumes: `create_distributed_lock` / `create_redis_semaphore` / `create_redis_circuit_breaker`（Task 2）；`AsyncMemoryFacade`（Task 1）；`CONCURRENCY_CONFIG`（Task 3）
 - Produces:
   - `WebHommeyManager.process_message(user_id, ...) -> dict`
-  - `HommeyWebInstance.process_message(...)`（**保留原名不动**，由 manager 入口包装调用；`reply_with_progress` 等既有方法不变）
+  - `HommeyWebInstance.process_message(...)`（**保留原名不动**，由 manager 入口包装调用）
   - SSE 断连路径在 `finally` 释放锁
 
 - [ ] **Step 1: 写失败测试**

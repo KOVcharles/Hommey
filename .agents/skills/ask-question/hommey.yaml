@@ -6,6 +6,14 @@ agent_name: rag_knowledge
 user_facing: true
 risk_level: medium
 catalog_order: 10
+confidence_threshold: 0.7
+progress_key: policy_searching
+scope:
+  forbidden_terms: [天气, 气温, 下雨, 降水, 预报]
+  expansion_terms: [住宿, 交通, 补贴, 报销, 审批, 餐饮, 餐费]
+  query_anchor_fields: [destination]
+answer:
+  section_kind: policy
 tools: [rag_retrieval]
 input_schema: schemas/input.json
 output_schema: schemas/output.json
@@ -17,3 +25,4 @@ execution:
     max_retries: 1
     reason: 查询企业差旅制度与报销政策
     expected_output: 有来源依据的企业差旅答案
+    query: 查询{destination}出差适用的公司差旅标准

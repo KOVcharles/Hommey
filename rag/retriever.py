@@ -39,6 +39,7 @@ class KnowledgeRetriever:
         vector_store: Optional[VectorStore] = None,
     ):
         self.initialized = False
+        self.top_k = max(1, int(top_k))
         self.store: Optional[VectorStore] = None
         self.retriever: Optional[VectorStoreRetriever] = None
         self.error: Optional[str] = None

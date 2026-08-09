@@ -6,6 +6,13 @@ agent_name: event_collection
 user_facing: true
 risk_level: low
 catalog_order: 20
+progress_key: trip_details_collecting
+answer:
+  section_kind: trip
+  require_section: false
+memory_hooks:
+  - agent: event_collection
+    effect: update_active_trip
 tools: [active_trip_context]
 input_schema: schemas/input.json
 output_schema: schemas/output.json
@@ -17,3 +24,4 @@ execution:
     max_retries: 1
     reason: 收集并更新当前出差事项
     expected_output: 结构化当前出差任务与缺失信息
+    query: 收集本次出差安排（出发地={origin} 目的地={destination} 日期={start_date} 天数={duration} 目的={purpose}）

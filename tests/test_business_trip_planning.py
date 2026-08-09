@@ -3,8 +3,9 @@ import json
 
 from agents.lazy_agent_registry import LazyAgentRegistry
 from agentscope.message import Msg
+from core.orchestration.fallback_composer import FallbackComposer
+from core.orchestration.models import IntentTask, TaskResult
 from utils.skill_loader import SkillLoader
-from webui_new.manager import HommeyWebInstance
 
 
 def test_trip_shaped_model_output_is_normalized_to_itinerary_contract():
@@ -84,11 +85,20 @@ def test_itinerary_agent_receives_business_trip_constraints():
     assert "仅提供建议" in prompts[0]
 
 
-def test_web_formatter_displays_transport_and_reimbursement_advice():
-    instance = object.__new__(HommeyWebInstance)
-    text = instance._format_agent_result(
-        "itinerary_planning",
-        {
+def test_itinerary_plain_text_shows_transport_and_lodging_advice():
+    task = IntentTask(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        query="规划南京出差行程",
+        entities={"destination": "南京"},
+        display_order=0,
+    )
+    result = TaskResult(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        agent_name="itinerary_planning",
+        status="success",
+        data={
             "itinerary": {
                 "title": "南京公司差旅方案",
                 "duration": "2天",
@@ -104,10 +114,15 @@ def test_web_formatter_displays_transport_and_reimbursement_advice():
                 "missing_info": ["出发地"],
             }
         },
+        display_order=0,
     )
 
-    assert "首选: 高铁" in text
-    assert "住宿建议" in text
-    assert "报销准备" in text
-    assert "交通票据" in text
-    assert "待补充" in text
+    document = FallbackComposer().compose([task], [result])
+
+    assert document.sections[0].kind == "trip"
+    items = {item.label: item.value for item in document.sections[0].items}
+    assert items.get("首选交通") == "高铁"
+    assert items.get("住宿建议") == "住在会议地点附近"
+    assert items.get("预算参考") == "待确认公司标准后估算"
+    assert "高铁" in document.plain_text
+    assert "南京" in document.title

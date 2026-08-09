@@ -133,6 +133,31 @@ def test_request_role_and_session_sequence_are_idempotent(repository):
         _delete_user(repository, user_id)
 
 
+def test_structured_documents_round_trip_with_canonical_message(repository):
+    user_id = f"integration-{uuid.uuid4().hex}"
+    answer = {
+        "version": "1.0", "title": "南京差旅信息", "summary": "已整理",
+        "sections": [{"kind": "trip", "title": "第 1 天"}],
+    }
+    try:
+        session = repository.get_or_create_session(user_id, idle_timeout_sec=600)
+        repository.append_message(
+            user_id=user_id,
+            session_id=session.session_id,
+            role="assistant",
+            content="南京差旅信息",
+            request_id="structured-request",
+            answer_document=answer,
+        )
+
+        rows = repository.get_messages(user_id, session_id=session.session_id)
+
+        assert rows[0]["answer_document"] == answer
+        assert rows[0]["presentation_document"] is None
+    finally:
+        _delete_user(repository, user_id)
+
+
 def test_message_and_attachment_binding_commit_together(repository):
     user_id = f"integration-{uuid.uuid4().hex}"
     attachment_id = f"att_{uuid.uuid4().hex}"

@@ -63,12 +63,6 @@ COMPOSER_CONFIG = {
 }
 
 
-ORCHESTRATION_V2_CONFIG = {
-    # Phase one is deliberately limited to independent policy + public-info requests.
-    "enabled": _bool_env("HOMMEY_TASK_ORCHESTRATION_V2", True),
-}
-
-
 TRIP_INTAKE_CONFIG = {
     "enabled": _bool_env("HOMMEY_TRIP_INTAKE_CARD", True),
 }

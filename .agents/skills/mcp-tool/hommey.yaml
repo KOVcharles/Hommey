@@ -7,6 +7,9 @@ user_facing: false
 enabled_by_default: false
 risk_level: high
 catalog_order: 100
+side_effect_allowed: true
+answer:
+  section_kind: general
 tools: [mcp]
 execution:
   - skill: mcp-tool
