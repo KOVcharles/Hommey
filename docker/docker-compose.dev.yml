@@ -23,5 +23,5 @@ services:
       - /app/venv
       - /app/env
       - /app/node_modules
-      - ../data/documents:/app/data/documents:ro
+      - ../data/documents:/app/data/documents
       - ../data/rag_knowledge:/app/data/rag_knowledge

@@ -8,6 +8,7 @@ import os
 import re
 import shutil
 import time
+import uuid
 from pathlib import Path, PosixPath
 from typing import Any, Dict, List, Optional
 
@@ -236,6 +237,84 @@ class MilvusKnowledgeStore:
         self.client.insert(collection_name=self.collection_name, data=rows)
         self.load_collection()
         return {"status": "success", "added_count": len(rows), "total_count": self.count()}
+
+    def replace_chunks_atomically(self, chunks: List[KnowledgeChunk]) -> Dict[str, Any]:
+        """Blue/green replacement with rollback-safe collection renames.
+
+        Embeddings are produced before any live collection is touched.  A
+        staging collection is then populated and verified.  Only after that do
+        we rename the live collection to a backup and promote staging.  If the
+        promotion fails, the backup is immediately restored.
+        """
+        if not chunks:
+            raise ValueError("refusing to replace the knowledge base with zero chunks")
+
+        vectors = self.embedding_model.embed_texts([chunk.content for chunk in chunks])
+        if len(vectors) != len(chunks):
+            raise RuntimeError("embedding service returned an incomplete vector batch")
+
+        suffix = uuid.uuid4().hex[:10]
+        staging = f"{self.collection_name}__staging_{suffix}"
+        backup = f"{self.collection_name}__backup_{suffix}"
+        rows = []
+        for doc_id, (chunk, vector) in enumerate(zip(chunks, vectors), start=1):
+            metadata = chunk.to_metadata()
+            metadata["chunk_id"] = f"{Path(chunk.source_path).stem}_{chunk.chunk_index}"
+            rows.append(
+                {
+                    "id": doc_id,
+                    "content": chunk.content,
+                    "metadata": json.dumps(metadata, ensure_ascii=False),
+                    "vector": vector,
+                }
+            )
+
+        live_moved = False
+        promoted = False
+        try:
+            self.client.create_collection(
+                collection_name=staging,
+                dimension=self.embedding_dim,
+                metric_type="COSINE",
+                auto_id=False,
+            )
+            self.client.insert(collection_name=staging, data=rows)
+            staged_count = int(
+                self.client.get_collection_stats(staging).get("row_count", 0) or 0
+            )
+            if staged_count != len(rows):
+                raise RuntimeError(
+                    f"staging collection verification failed: expected {len(rows)}, got {staged_count}"
+                )
+
+            if self.client.has_collection(self.collection_name):
+                self.client.rename_collection(self.collection_name, backup)
+                live_moved = True
+            try:
+                self.client.rename_collection(staging, self.collection_name)
+                promoted = True
+            except Exception:
+                if live_moved and self.client.has_collection(backup):
+                    self.client.rename_collection(backup, self.collection_name)
+                    live_moved = False
+                raise
+
+            self.load_collection()
+            if live_moved and self.client.has_collection(backup):
+                try:
+                    self.client.drop_collection(backup)
+                except Exception:
+                    # Promotion already succeeded.  A stale backup is harmless
+                    # and must not turn a completed refresh into a false error.
+                    logger.warning("Unable to remove retired RAG backup collection %s", backup)
+            return {
+                "status": "success",
+                "added_count": len(rows),
+                "total_count": len(rows),
+            }
+        finally:
+            if not promoted and self.client.has_collection(staging):
+                self.client.drop_collection(staging)
 
     def vector_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         self.load_collection()

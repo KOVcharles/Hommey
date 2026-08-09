@@ -121,12 +121,12 @@
                             <strong id="knowledgeDocumentCount">—</strong>
                             <span>份可查阅文档</span>
                         </div>
-                        <div class="knowledge-admin-actions" aria-label="知识库管理">
-                            <label id="knowledgeUploadButton" class="knowledge-admin-button">
+                        <div id="knowledgeAdminActions" class="knowledge-admin-actions" aria-label="知识库管理" hidden>
+                            <button id="knowledgeUploadButton" class="knowledge-admin-button" type="button">
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 16V4M7 9l5-5 5 5"/><path d="M5 14v5h14v-5"/></svg>
                                 <span id="knowledgeUploadLabel">上传文档</span>
-                                <input id="knowledgeFileInput" type="file" multiple accept=".txt,.md,.pdf" hidden>
-                            </label>
+                            </button>
+                            <input id="knowledgeFileInput" type="file" multiple accept=".txt,.md,.pdf" hidden>
                             <button id="knowledgeRefreshButton" class="knowledge-admin-button primary" type="button">
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M20 6v5h-5"/><path d="M4 18v-5h5"/><path d="M6.1 9a7 7 0 0 1 11.2-2.3L20 9M4 15l2.7 2.3A7 7 0 0 0 17.9 15"/></svg>
                                 <span>刷新数据库</span>
@@ -338,9 +338,9 @@
         </div>
     </section>
 
-    <div id="toast" class="toast" role="status"></div>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/answer-card.js?v=20260809-weather-zh-v8"></script>
     <script src="/static/trip-intake-card.js?v=20260809-intake-v5"></script>
-    <script src="/static/app.js?v=20260809-knowledge-admin-v3"></script>
+    <script src="/static/app.js?v=20260809-security-ux-v4"></script>
 </body>
 </html>

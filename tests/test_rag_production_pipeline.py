@@ -4,8 +4,9 @@ from types import SimpleNamespace
 import pytest
 
 from rag.config import RAGPipelineConfig
-from rag.parser import UnsupportedFileTypeError
+from rag.parser import DocumentParser, UnsupportedFileTypeError
 from rag.pipeline import RAGPipeline
+from rag.schemas import RawDocument
 from rag.vector_store import InMemoryVectorStore
 
 
@@ -82,6 +83,65 @@ def test_pipeline_handles_empty_txt_file(tmp_path: Path):
     assert report.documents_loaded == 1
     assert report.pages_parsed == 0
     assert report.chunks_loaded == 0
+
+
+def test_empty_full_refresh_keeps_previous_vectors(tmp_path: Path):
+    source = tmp_path / "source"
+    source.mkdir()
+    policy = source / "policy.txt"
+    policy.write_text("差旅住宿标准为每晚500元", encoding="utf-8")
+    store = InMemoryVectorStore()
+    pipeline = _pipeline(store)
+    assert pipeline.ingest(source, rebuild=True).status == "success"
+    previous_rows = list(store.rows)
+
+    policy.unlink()
+    report = pipeline.ingest(source, rebuild=True)
+
+    assert report.status == "error"
+    assert report.added_count == 0
+    assert store.rows == previous_rows
+
+
+def test_parse_failure_during_full_refresh_keeps_previous_vectors(tmp_path: Path):
+    class BrokenTxtParser(DocumentParser):
+        supported_file_types = ("txt",)
+
+        def parse(self, document: RawDocument):
+            raise RuntimeError("parser unavailable")
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "policy.txt").write_text("差旅制度", encoding="utf-8")
+    store = InMemoryVectorStore()
+    pipeline = _pipeline(store)
+    pipeline.vector_store.rows = [object()]
+    previous_rows = list(store.rows)
+    pipeline.parser_registry.register(BrokenTxtParser())
+
+    report = pipeline.ingest(source, rebuild=True)
+
+    assert report.status == "error"
+    assert store.rows == previous_rows
+
+
+def test_vector_store_write_failure_keeps_previous_vectors(tmp_path: Path):
+    class FailingReplacementStore(InMemoryVectorStore):
+        def replace_chunks(self, chunks):
+            raise RuntimeError("staging promotion failed")
+
+    source = tmp_path / "source"
+    source.mkdir()
+    (source / "policy.txt").write_text("差旅制度", encoding="utf-8")
+    store = FailingReplacementStore()
+    store.rows = [object()]
+    previous_rows = list(store.rows)
+
+    report = _pipeline(store).ingest(source, rebuild=True)
+
+    assert report.status == "error"
+    assert "staging promotion failed" in report.errors[0]["error"]
+    assert store.rows == previous_rows
 
 
 def test_pipeline_query_returns_result_metadata(tmp_path: Path):

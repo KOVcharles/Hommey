@@ -42,6 +42,7 @@
     const knowledgeFileInput = document.getElementById('knowledgeFileInput');
     const knowledgeUploadButton = document.getElementById('knowledgeUploadButton');
     const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
+    const knowledgeAdminActions = document.getElementById('knowledgeAdminActions');
     const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
@@ -71,6 +72,8 @@
     let knowledgeLoaded = false;
     let knowledgeLoading = false;
     let knowledgeRefreshTimer;
+    let knowledgeRefreshPollFailures = 0;
+    let isKnowledgeAdmin = false;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -241,6 +244,10 @@
         });
         knowledgeSearch.addEventListener('input', renderKnowledgeList);
         document.getElementById('knowledgeBack').addEventListener('click', closeKnowledgeDocument);
+        knowledgeUploadButton.addEventListener('click', () => {
+            if (!isKnowledgeAdmin || knowledgeUploadButton.disabled) return;
+            knowledgeFileInput.click();
+        });
         knowledgeFileInput.addEventListener('change', () => {
             uploadKnowledgeDocuments(knowledgeFileInput.files);
             knowledgeFileInput.value = '';
@@ -379,13 +386,18 @@
         setMainView('knowledge');
         closeSidebar();
         loadKnowledgeDocuments();
-        loadKnowledgeRefreshStatus();
+        if (isKnowledgeAdmin) loadKnowledgeRefreshStatus();
         setTimeout(() => knowledgeSearch.focus(), 180);
     }
 
     function setMainView(view) {
         appShell.dataset.view = view;
         document.getElementById('knowledgeButton').classList.toggle('active', view === 'knowledge');
+        if (view !== 'knowledge') {
+            clearTimeout(knowledgeRefreshTimer);
+            knowledgeRefreshTimer = null;
+            knowledgeRefreshPollFailures = 0;
+        }
     }
 
     function handleKnowledgeShortcut(event) {
@@ -414,6 +426,10 @@
     }
 
     async function uploadKnowledgeDocuments(fileList) {
+        if (!isKnowledgeAdmin) {
+            showToast('仅知识库管理员可以上传制度文档。');
+            return;
+        }
         const files = Array.from(fileList || []);
         if (!files.length) return;
         if (files.length > 10) {
@@ -443,10 +459,15 @@
     }
 
     async function startKnowledgeRefresh() {
+        if (!isKnowledgeAdmin) {
+            showToast('仅知识库管理员可以刷新数据库。');
+            return;
+        }
         if (knowledgeRefreshButton.classList.contains('busy')) return;
         setKnowledgeAdminBusy(true);
         try {
             const status = await fetchJson('/api/knowledge/refresh', { method: 'POST' });
+            knowledgeRefreshPollFailures = 0;
             renderKnowledgeRefreshStatus(status);
             scheduleKnowledgeRefreshPoll();
         } catch (err) {
@@ -457,6 +478,7 @@
     }
 
     async function loadKnowledgeRefreshStatus() {
+        if (!isKnowledgeAdmin) return;
         try {
             const status = await fetchJson('/api/knowledge/refresh/status');
             renderKnowledgeRefreshStatus(status);
@@ -467,10 +489,12 @@
     }
 
     function scheduleKnowledgeRefreshPoll() {
+        if (!isKnowledgeAdmin || appShell.dataset.view !== 'knowledge') return;
         clearTimeout(knowledgeRefreshTimer);
         knowledgeRefreshTimer = setTimeout(async () => {
             try {
                 const status = await fetchJson('/api/knowledge/refresh/status');
+                knowledgeRefreshPollFailures = 0;
                 renderKnowledgeRefreshStatus(status);
                 if (status.status === 'running') scheduleKnowledgeRefreshPoll();
                 else {
@@ -478,7 +502,17 @@
                     await loadKnowledgeDocuments(true);
                 }
             } catch (err) {
-                scheduleKnowledgeRefreshPoll();
+                knowledgeRefreshPollFailures += 1;
+                if (knowledgeRefreshPollFailures >= 6) {
+                    setKnowledgeAdminBusy(false);
+                    showToast('知识库状态暂时无法获取，请稍后重新打开知识库查看。');
+                    return;
+                }
+                clearTimeout(knowledgeRefreshTimer);
+                knowledgeRefreshTimer = setTimeout(
+                    scheduleKnowledgeRefreshPoll,
+                    Math.min(15000, 900 * (2 ** knowledgeRefreshPollFailures)),
+                );
             }
         }, 900);
     }
@@ -761,6 +795,7 @@
     async function loadUserSummary() {
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/summary`);
+            applyKnowledgePermissions(data.role === 'admin');
             panelName.textContent = data.name_display || userId;
             panelLevel.textContent = data.member_level || '个人账户';
             prefList.replaceChildren();
@@ -780,7 +815,19 @@
                 prefList.appendChild(row);
             });
         } catch (err) {
+            applyKnowledgePermissions(false);
             prefList.replaceChildren(createEmptyState('暂时无法读取偏好。'));
+        }
+    }
+
+    function applyKnowledgePermissions(isAdmin) {
+        isKnowledgeAdmin = !!isAdmin;
+        knowledgeAdminActions.hidden = !isKnowledgeAdmin;
+        if (!isKnowledgeAdmin) {
+            clearTimeout(knowledgeRefreshTimer);
+            knowledgeRefreshTimer = null;
+            knowledgeSyncBar.hidden = true;
+            setKnowledgeAdminBusy(false);
         }
     }
 
@@ -1173,24 +1220,39 @@
     }
 
     function renderPendingAttachments() {
-        const html = pendingAttachments.map((a) => {
-            const cls = a.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
-            return `<span class="${cls}" data-id="${a.id || ''}" title="${a.filename}">${escapeHtml(a.filename)}${a.status === 'failed' ? '（失败）' : ''}<button class="pending-chip-remove" aria-label="移除">×</button></span>`;
-        }).join('');
-        pendingContainers().forEach((c) => { c.innerHTML = html; c.style.display = html ? '' : 'none'; });
         pendingContainers().forEach((c) => {
-            c.querySelectorAll('.pending-chip-remove').forEach((btn) => {
-                btn.addEventListener('click', (e) => {
-                    const chip = e.target.closest('.pending-chip');
-                    const id = chip && chip.dataset.id;
-                    pendingAttachments = pendingAttachments.filter((a) => a.id !== id && a.tmpId !== chip.dataset.tmpid);
+            c.replaceChildren();
+            pendingAttachments.forEach((attachment) => {
+                const chip = document.createElement('span');
+                chip.className = attachment.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
+                chip.dataset.id = attachment.id || '';
+                chip.dataset.tmpId = attachment.tmpId || '';
+                chip.title = attachment.filename || '';
+                chip.appendChild(document.createTextNode(
+                    `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`
+                ));
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'pending-chip-remove';
+                remove.setAttribute('aria-label', `移除 ${attachment.filename || '附件'}`);
+                remove.textContent = '×';
+                remove.addEventListener('click', () => {
+                    pendingAttachments = pendingAttachments.filter((item) => {
+                        const sameId = !!chip.dataset.id && (item.id || '') === chip.dataset.id;
+                        const sameTemporaryId = !!chip.dataset.tmpId
+                            && (item.tmpId || '') === chip.dataset.tmpId;
+                        return !(sameId || sameTemporaryId);
+                    });
                     if (retryRequestPending) {
                         resetRequestId();
                         retryRequestPending = false;
                     }
                     renderPendingAttachments();
                 });
+                chip.appendChild(remove);
+                c.appendChild(chip);
             });
+            c.style.display = pendingAttachments.length ? '' : 'none';
         });
     }
 

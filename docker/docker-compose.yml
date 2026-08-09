@@ -38,7 +38,8 @@ services:
       # 切换到独立 Milvus 服务并外置实例状态，再显式恢复多 worker。
       UVICORN_WORKERS: "1"
     volumes:
-      - ../data/documents:/app/data/documents:ro
+      # 仅管理员 API 可写；知识库上传需要该目录可写。
+      - ../data/documents:/app/data/documents
       - ../data/rag_knowledge:/app/data/rag_knowledge
       - ../data/uploads:/app/data/uploads
     depends_on:

@@ -1252,7 +1252,7 @@ html[data-motion="off"] *::after {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 8px;
+    font-size: 9px;
     font-weight: 680;
     letter-spacing: .16em;
 }
@@ -1273,7 +1273,7 @@ html[data-motion="off"] *::after {
 .knowledge-overview p {
     margin: 7px 0 0;
     color: var(--ink-2);
-    font-size: 11px;
+    font-size: 13px;
     line-height: 1.55;
 }
 .knowledge-header-side {
@@ -1293,7 +1293,7 @@ html[data-motion="off"] *::after {
     letter-spacing: -.04em;
     font-weight: 580;
 }
-.knowledge-summary span { color: var(--ink-3); font-size: 9px; white-space: nowrap; }
+.knowledge-summary span { color: var(--ink-3); font-size: 11px; white-space: nowrap; }
 .knowledge-admin-actions { display: flex; align-items: center; gap: 7px; }
 .knowledge-admin-button {
     height: 38px;
@@ -1306,7 +1306,7 @@ html[data-motion="off"] *::after {
     align-items: center;
     justify-content: center;
     gap: 7px;
-    font-size: 10px;
+    font-size: 12px;
     font-weight: 560;
     white-space: nowrap;
     cursor: pointer;
@@ -1349,8 +1349,8 @@ html[data-motion="off"] *::after {
 .knowledge-sync-bar[data-status="success"] .knowledge-sync-icon { color: var(--sage); background: var(--sage-bg); }
 .knowledge-sync-bar[data-status="error"] .knowledge-sync-icon { color: var(--danger); background: color-mix(in srgb, var(--danger) 9%, var(--soft)); }
 .knowledge-sync-copy { min-width: 0; display: grid; gap: 3px; }
-.knowledge-sync-copy strong { overflow: hidden; font-size: 10px; font-weight: 610; text-overflow: ellipsis; white-space: nowrap; }
-.knowledge-sync-copy span { overflow: hidden; color: var(--ink-3); font-size: 8px; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-sync-copy strong { overflow: hidden; font-size: 12px; font-weight: 610; text-overflow: ellipsis; white-space: nowrap; }
+.knowledge-sync-copy span { overflow: hidden; color: var(--ink-3); font-size: 10px; text-overflow: ellipsis; white-space: nowrap; }
 .knowledge-sync-progress { position: absolute; inset: auto 0 0; height: 2px; background: var(--soft); }
 .knowledge-sync-progress span {
     width: 0;
@@ -1525,7 +1525,7 @@ html[data-motion="off"] *::after {
     animation: knowledge-shimmer 1.5s ease infinite;
 }
 @keyframes knowledge-shimmer { to { background-position: -220% 0; } }
-.knowledge-list-state { padding: 28px 12px; color: var(--ink-3); font-size: 10px; line-height: 1.7; text-align: center; }
+.knowledge-list-state { padding: 28px 12px; color: var(--ink-3); font-size: 12px; line-height: 1.7; text-align: center; }
 
 .knowledge-reader { min-width: 0; min-height: 0; overflow-y: auto; background: var(--panel); }
 .knowledge-empty {
@@ -1548,7 +1548,7 @@ html[data-motion="off"] *::after {
     transform: rotate(-2deg);
 }
 .knowledge-empty h2 { margin: 20px 0 0; font-size: 16px; letter-spacing: -.025em; font-weight: 590; }
-.knowledge-empty p { margin: 8px 0 0; color: var(--ink-3); font-size: 10px; }
+.knowledge-empty p { margin: 8px 0 0; color: var(--ink-3); font-size: 12px; }
 .knowledge-document { width: min(800px, calc(100% - 48px)); margin: 0 auto; padding: 33px 0 58px; }
 .knowledge-back {
     margin: -4px 0 19px;
@@ -1580,7 +1580,7 @@ html[data-motion="off"] *::after {
     letter-spacing: -.047em;
     font-weight: 620;
 }
-.document-meta { color: var(--ink-3); display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 9px; }
+.document-meta { color: var(--ink-3); display: flex; flex-wrap: wrap; align-items: center; gap: 7px; font-size: 11px; }
 .document-meta i { width: 2px; height: 2px; border-radius: 50%; background: currentColor; }
 .document-toc {
     margin: 22px 0 4px;
@@ -1605,7 +1605,7 @@ html[data-motion="off"] *::after {
     padding: 3px 0;
     color: var(--ink-2);
     background: transparent;
-    font-size: 9px;
+    font-size: 11px;
     text-align: left;
 }
 .document-toc button:hover { color: var(--route); }
@@ -1629,13 +1629,13 @@ html[data-motion="off"] *::after {
     display: block;
 }
 .document-body h3 { margin: 24px 0 9px; color: var(--ink); font-size: 13px; line-height: 1.5; font-weight: 620; }
-.document-body p { margin: 7px 0; font-size: 11px; line-height: 1.9; }
+.document-body p { margin: 8px 0; font-size: 13px; line-height: 1.85; }
 .document-body ul { margin: 7px 0 13px; padding: 0; list-style: none; }
 .document-body li {
     position: relative;
     margin: 5px 0;
     padding-left: 16px;
-    font-size: 11px;
+    font-size: 13px;
     line-height: 1.85;
 }
 .document-body li::before {

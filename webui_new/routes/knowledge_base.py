@@ -5,9 +5,10 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from fastapi import APIRouter, Depends, File, UploadFile
+from starlette.concurrency import run_in_threadpool
 
 from rag.document_loader import infer_category
-from webui_new.auth import User, get_current_user
+from webui_new.auth import User, get_current_user, require_admin
 from webui_new.core.errors import BusinessError, InternalError
 from webui_new.knowledge_base_service import (
     MAX_UPLOAD_BYTES,
@@ -154,18 +155,17 @@ def create_knowledge_base_router(
 
     @router.get("/api/knowledge/documents")
     async def list_knowledge_documents(current_user: User = Depends(get_current_user)):
-        documents = library.list_documents()
+        documents = await run_in_threadpool(library.list_documents)
+        statuses = await run_in_threadpool(management.document_index_statuses, documents)
         for document in documents:
-            path = library.root / document["id"]
-            document["index_status"] = management.document_index_status(document["id"], path)
+            document["index_status"] = statuses.get(document["id"], "pending")
         return {"documents": documents, "total": len(documents)}
 
     @router.post("/api/knowledge/documents")
     async def upload_knowledge_documents(
         files: list[UploadFile] = File(...),
-        current_user: User = Depends(get_current_user),
+        current_user: User = Depends(require_admin),
     ):
-        # Testing phase: every authenticated user may manage the knowledge base.
         if not files or len(files) > MAX_UPLOAD_FILES:
             raise BusinessError(
                 "KNOWLEDGE_FILE_COUNT_INVALID",
@@ -175,16 +175,17 @@ def create_knowledge_base_router(
         uploaded = []
         for file in files:
             content = await _read_upload(file)
-            uploaded.append(management.upload(file.filename or "upload", content))
+            uploaded.append(
+                await run_in_threadpool(management.upload, file.filename or "upload", content)
+            )
         return {"uploaded": uploaded, "total": len(uploaded), "refresh_required": True}
 
     @router.post("/api/knowledge/refresh")
-    async def refresh_knowledge_base(current_user: User = Depends(get_current_user)):
-        # Deliberately open to every authenticated user during the current test phase.
+    async def refresh_knowledge_base(current_user: User = Depends(require_admin)):
         return management.start_refresh(str(current_user.id))
 
     @router.get("/api/knowledge/refresh/status")
-    async def knowledge_refresh_status(current_user: User = Depends(get_current_user)):
+    async def knowledge_refresh_status(current_user: User = Depends(require_admin)):
         return management.status()
 
     @router.get("/api/knowledge/documents/{document_id:path}")
@@ -192,6 +193,6 @@ def create_knowledge_base_router(
         document_id: str,
         current_user: User = Depends(get_current_user),
     ):
-        return library.get_document(document_id)
+        return await run_in_threadpool(library.get_document, document_id)
 
     return router

@@ -16,7 +16,7 @@
     display: flex;
     align-items: center;
     gap: 7px;
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 650;
     letter-spacing: .06em;
     text-transform: uppercase;
@@ -38,12 +38,12 @@
     background: var(--route);
 }
 .answer-card-header h2 { margin: 0; max-width: 700px; font-size: 18px; line-height: 1.25; letter-spacing: -.035em; font-weight: 670; }
-.answer-card-header > p { margin: 5px 0 0; overflow: hidden; color: var(--ink-2); font-size: 10px; line-height: 1.45; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.answer-card-header > p { margin: 6px 0 0; overflow: hidden; color: var(--ink-2); font-size: 13px; line-height: 1.55; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .answer-card-sections { border-top: 1px solid var(--line); }
 .answer-section { padding: 13px 20px 14px; }
 .answer-section + .answer-section { border-top: 1px solid var(--line); }
 .answer-section-heading { display: flex; align-items: center; gap: 10px; }
-.answer-section-heading h3 { margin: 0; font-size: 12px; font-weight: 670; letter-spacing: -.015em; }
+.answer-section-heading h3 { margin: 0; font-size: 14px; font-weight: 670; letter-spacing: -.015em; }
 .answer-section-mark { width: 16px; height: 1px; border-radius: 0; position: relative; background: color-mix(in srgb, var(--sage) 45%, var(--line)); box-shadow: none; }
 .answer-section-mark::after { content: ""; position: absolute; top: -3px; right: 0; width: 7px; height: 7px; border-radius: 50%; background: var(--sage); box-shadow: 0 0 0 3px var(--sage-bg); }
 .answer-section-weather .answer-section-mark { background: color-mix(in srgb, var(--route) 45%, var(--line)); box-shadow: none; }
@@ -51,7 +51,7 @@
 .answer-section.is-error .answer-section-mark { background: color-mix(in srgb, var(--danger) 45%, var(--line)); box-shadow: none; }
 .answer-section.is-error .answer-section-mark::after { background: var(--danger); box-shadow: 0 0 0 3px color-mix(in srgb, var(--danger) 8%, var(--panel)); }
 .answer-section-content { margin-top: 9px; }
-.answer-section-body { position: relative; color: var(--ink-2); font-size: 10px; line-height: 1.55; }
+.answer-section-body { position: relative; color: var(--ink-2); font-size: 13px; line-height: 1.65; }
 .answer-section-body p { margin: 0; }
 .answer-section-body p + p { margin-top: 5px; }
 .answer-section-body p.is-heading { margin-top: 8px; color: var(--ink); font-weight: 680; }
@@ -62,9 +62,9 @@
 .answer-fact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; row-gap: 0; }
 .answer-fact { min-width: 0; padding: 8px 0 9px; border-top: 1px solid var(--line); display: flex; flex-direction: column; gap: 3px; }
 .answer-fact.is-wide { grid-column: 1 / -1; }
-.answer-fact-label { color: var(--ink-3); font-size: 8px; letter-spacing: .02em; }
-.answer-fact-value { font-size: 12px; font-weight: 650; line-height: 1.5; }
-.answer-fact-detail { max-width: 620px; overflow: hidden; color: var(--ink-2); font-size: 9px; line-height: 1.65; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
+.answer-fact-label { color: var(--ink-3); font-size: 10px; letter-spacing: .02em; }
+.answer-fact-value { font-size: 13px; font-weight: 650; line-height: 1.5; }
+.answer-fact-detail { max-width: 620px; overflow: hidden; color: var(--ink-2); font-size: 11px; line-height: 1.65; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .answer-section.is-overview:not(.is-expanded) .answer-fact.is-wide .answer-fact-value { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .answer-section.is-timeline .answer-section-content { margin-top: 7px; }
 .answer-section.is-timeline .answer-fact-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); column-gap: 24px; position: relative; }
@@ -74,16 +74,16 @@
 .answer-section.is-timeline .answer-fact-value { grid-column: 2; }
 .answer-section.is-timeline .answer-fact-detail { grid-column: 2; display: none; }
 .answer-section.is-timeline.is-expanded .answer-fact-detail { display: -webkit-box; }
-.answer-section-toggle { margin-top: 7px; padding: 5px 8px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); background: transparent; font-size: 8px; }
+.answer-section-toggle { min-height: 32px; margin-top: 8px; padding: 6px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); background: transparent; font-size: 10px; }
 .answer-section-toggle:hover { color: var(--ink); border-color: color-mix(in srgb, var(--sage) 45%, var(--line)); background: var(--soft); }
 .answer-weather-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .answer-weather-day { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--panel) 78%, transparent); display: flex; flex-direction: column; gap: 3px; }
 .answer-weather-day.is-current { background: color-mix(in srgb, var(--route) 5%, var(--panel)); }
-.answer-weather-date { color: var(--ink-3); font-size: 8px; }
-.answer-weather-condition { overflow: hidden; font-size: 11px; font-weight: 640; text-overflow: ellipsis; white-space: nowrap; }
-.answer-weather-temperature { color: var(--ink-2); font-size: 10px; }
-.answer-weather-rain { color: var(--ink-3); font-size: 8px; }
-.answer-notices { margin: 0 20px 12px; padding: 8px 10px; border-left: 2px solid color-mix(in srgb, var(--route) 45%, var(--line)); border-radius: 4px 10px 10px 4px; color: var(--ink-2); background: color-mix(in srgb, var(--route) 4%, var(--soft)); font-size: 9px; line-height: 1.45; }
+.answer-weather-date { color: var(--ink-3); font-size: 10px; }
+.answer-weather-condition { overflow: hidden; font-size: 13px; font-weight: 640; text-overflow: ellipsis; white-space: nowrap; }
+.answer-weather-temperature { color: var(--ink-2); font-size: 12px; }
+.answer-weather-rain { color: var(--ink-3); font-size: 10px; }
+.answer-notices { margin: 0 20px 12px; padding: 9px 11px; border-left: 2px solid color-mix(in srgb, var(--route) 45%, var(--line)); border-radius: 4px 10px 10px 4px; color: var(--ink-2); background: color-mix(in srgb, var(--route) 4%, var(--soft)); font-size: 11px; line-height: 1.55; }
 .answer-notices p { margin: 0; }
 .answer-notices p + p { margin-top: 5px; }
 .answer-notice-details { margin-top: 7px; border-top: 1px solid color-mix(in srgb, var(--line) 80%, transparent); }

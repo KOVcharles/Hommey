@@ -94,6 +94,12 @@ class KnowledgeBaseManagementService:
             raise BusinessError("KNOWLEDGE_FILENAME_INVALID", "文档名称不合法", status_code=400) from exc
 
         existed = destination.exists()
+        if existed:
+            raise BusinessError(
+                "KNOWLEDGE_DOCUMENT_EXISTS",
+                "同名文档已存在。为避免误覆盖制度文件，请先使用新文件名上传",
+                status_code=409,
+            )
         temporary = self.documents_dir / f".{uuid.uuid4().hex}.upload"
         try:
             with temporary.open("wb") as handle:
@@ -122,6 +128,24 @@ class KnowledgeBaseManagementService:
             return "indexed" if indexed.get("sha256") == self._sha256(path) else "pending"
         except OSError:
             return "pending"
+
+    def document_index_statuses(self, documents: list[dict]) -> dict[str, str]:
+        """Resolve a listing against one manifest read instead of N reads."""
+        manifest_documents = self._read_manifest().get("documents", {})
+        statuses: dict[str, str] = {}
+        for document in documents:
+            document_id = str(document.get("id") or "")
+            indexed = manifest_documents.get(document_id)
+            path = self.documents_dir / document_id
+            try:
+                statuses[document_id] = (
+                    "indexed"
+                    if indexed and indexed.get("sha256") == self._sha256(path)
+                    else "pending"
+                )
+            except OSError:
+                statuses[document_id] = "pending"
+        return statuses
 
     def start_refresh(self, requested_by: str) -> dict:
         with self._source_lock:
