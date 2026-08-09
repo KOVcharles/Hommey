@@ -196,7 +196,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     border-radius: 50%;
     color: #fff;
     background: #363632;
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 650;
 }
 
@@ -361,7 +361,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 .prompt-label {
     flex: 0 0 auto;
     color: var(--route);
-    font-size: 10px;
+    font-size: 11px;
     font-weight: 620;
 }
 .prompt-window { min-width: 0; flex: 1; overflow: hidden; }
@@ -379,7 +379,7 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 .privacy-note {
     margin: 11px 0 0;
     color: var(--ink-3);
-    font-size: 10px;
+    font-size: 11px;
     text-align: center;
 }
 
@@ -490,7 +490,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 .msg-time {
     margin-top: 6px;
     color: var(--ink-3);
-    font-size: 9px;
+    font-size: 10px;
 }
 .message-row.user .msg-time { display: none; }
 .option-list { margin-top: 11px; display: flex; flex-wrap: wrap; gap: 7px; }
@@ -501,7 +501,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     border-radius: 999px;
     color: var(--ink-2);
     background: var(--panel);
-    font-size: 11px;
+    font-size: 12px;
 }
 .option-pill:hover { color: var(--ink); border-color: var(--line-2); }
 .option-pill:disabled { opacity: .45; cursor: default; }
@@ -518,7 +518,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     padding: 4px 7px;
     border-radius: 999px;
     background: var(--soft);
-    font-size: 9px;
+    font-size: 10px;
 }
 .thinking-text {
     white-space: nowrap;
@@ -557,7 +557,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 .disclaimer {
     margin: 7px 0 0;
     color: var(--ink-3);
-    font-size: 9px;
+    font-size: 10px;
     text-align: center;
 }
 
@@ -629,7 +629,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 .sidebar-action-note {
     margin-left: auto;
     color: var(--ink-3);
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 480;
 }
 .history-search {
@@ -740,7 +740,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     background: #373733;
     display: grid;
     place-items: center;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 650;
 }
 .account-copy { min-width: 0; flex: 1; }
@@ -751,7 +751,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     white-space: nowrap;
 }
 .account-copy strong { font-size: 11px; font-weight: 590; }
-.account-copy span { margin-top: 2px; color: var(--ink-3); font-size: 9px; }
+.account-copy span { margin-top: 2px; color: var(--ink-3); font-size: 10px; }
 
 .session-popover {
     position: fixed;
@@ -818,7 +818,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 }
 .settings-body { max-height: calc(100vh - 102px); padding: 18px; overflow-y: auto; }
 .settings-section + .settings-section { margin-top: 24px; }
-.settings-label { margin: 0 3px 7px; color: var(--ink-3); font-size: 10px; }
+.settings-label { margin: 0 3px 7px; color: var(--ink-3); font-size: 11px; }
 .settings-card { overflow: hidden; border: 1px solid var(--line); border-radius: 15px; }
 .setting-row {
     min-height: 53px;
@@ -830,7 +830,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 }
 .setting-row + .setting-row { border-top: 1px solid var(--line); }
 .setting-title { font-size: 12px; font-weight: 560; }
-.setting-note { margin-top: 3px; color: var(--ink-3); font-size: 9px; }
+.setting-note { margin-top: 3px; color: var(--ink-3); font-size: 10px; }
 .theme-tabs { padding: 3px; border-radius: 10px; background: var(--soft); display: flex; }
 .theme-tab {
     height: 27px;
@@ -838,7 +838,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     border-radius: 8px;
     color: var(--ink-2);
     background: transparent;
-    font-size: 9px;
+    font-size: 10px;
 }
 .theme-tab.active { color: var(--ink); background: var(--panel); box-shadow: var(--shadow-1); }
 .toggle {
@@ -886,9 +886,9 @@ html[data-theme="dark"] .msg-avatar.ai {
     justify-content: space-between;
     gap: 12px;
     color: var(--ink-2);
-    font-size: 10px;
+    font-size: 11px;
 }
-.empty-state, .meta { padding: 8px 0; color: var(--ink-3); font-size: 10px; line-height: 1.6; }
+.empty-state, .meta { padding: 8px 0; color: var(--ink-3); font-size: 11px; line-height: 1.6; }
 .settings-details summary {
     min-height: 45px;
     padding: 0 12px;
@@ -934,7 +934,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     background: var(--panel-glass);
     box-shadow: var(--shadow-2);
     backdrop-filter: blur(18px);
-    font-size: 10px;
+    font-size: 12px;
     opacity: 0;
     transform: translate(-50%, 10px);
     pointer-events: none;
@@ -955,7 +955,7 @@ html[data-theme="dark"] .msg-avatar.ai {
 .init-card { text-align: center; }
 .init-card .mini-logo { width: 64px; height: 34px; margin: 0 auto 15px; }
 .init-status { font-size: 13px; font-weight: 590; }
-.init-sub { margin-top: 6px; color: var(--ink-3); font-size: 10px; }
+.init-sub { margin-top: 6px; color: var(--ink-3); font-size: 11px; }
 .init-sub a { color: var(--ink); }
 
 /* Authentication */
@@ -1076,7 +1076,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     padding: 0 3px;
     overflow: hidden;
     color: var(--danger);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.45;
     opacity: 0;
     transform: translateY(-3px);
@@ -1105,11 +1105,11 @@ html[data-theme="dark"] .msg-avatar.ai {
     min-height: 18px;
     margin-top: 8px;
     color: var(--danger);
-    font-size: 10px;
+    font-size: 11px;
     line-height: 1.5;
     text-align: center;
 }
-.auth-footnote { margin-top: 18px; color: var(--ink-3); font-size: 9px; line-height: 1.6; text-align: center; }
+.auth-footnote { margin-top: 18px; color: var(--ink-3); font-size: 10px; line-height: 1.6; text-align: center; }
 
 html[data-motion="off"] *,
 html[data-motion="off"] *::before,
@@ -1252,7 +1252,7 @@ html[data-motion="off"] *::after {
     display: flex;
     align-items: center;
     gap: 8px;
-    font-size: 9px;
+    font-size: 10px;
     font-weight: 680;
     letter-spacing: .16em;
 }
@@ -1419,7 +1419,7 @@ html[data-motion="off"] *::after {
     border: 0;
     outline: 0;
     background: transparent;
-    font-size: 11px;
+    font-size: 13px;
 }
 .knowledge-search input::placeholder { color: var(--ink-3); }
 .knowledge-search kbd {
@@ -1430,7 +1430,7 @@ html[data-motion="off"] *::after {
     color: var(--ink-3);
     background: var(--soft);
     font-family: inherit;
-    font-size: 8px;
+    font-size: 10px;
     text-align: center;
 }
 .knowledge-filter-row {
@@ -1438,7 +1438,7 @@ html[data-motion="off"] *::after {
     color: var(--ink-3);
     display: flex;
     justify-content: space-between;
-    font-size: 9px;
+    font-size: 11px;
 }
 .knowledge-list {
     min-height: 0;
@@ -1468,13 +1468,13 @@ html[data-motion="off"] *::after {
 .knowledge-card-tags { display: flex; align-items: center; gap: 6px; }
 .knowledge-category {
     color: var(--sage);
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 650;
     letter-spacing: .04em;
 }
 .knowledge-file-type {
     color: var(--ink-3);
-    font-size: 8px;
+    font-size: 10px;
     text-transform: uppercase;
 }
 .knowledge-index-state {
@@ -1482,13 +1482,13 @@ html[data-motion="off"] *::after {
     border-radius: 5px;
     color: var(--route);
     background: color-mix(in srgb, var(--route) 9%, transparent);
-    font-size: 7px;
+    font-size: 9px;
     font-weight: 640;
 }
 .knowledge-card h3 {
     margin: 8px 0 5px;
     overflow: hidden;
-    font-size: 12px;
+    font-size: 14px;
     font-weight: 610;
     line-height: 1.4;
     letter-spacing: -.015em;
@@ -1496,11 +1496,11 @@ html[data-motion="off"] *::after {
     white-space: nowrap;
 }
 .knowledge-card p {
-    height: 32px;
+    height: 40px;
     margin: 0;
     overflow: hidden;
     color: var(--ink-2);
-    font-size: 9px;
+    font-size: 11px;
     line-height: 1.65;
     display: -webkit-box;
     -webkit-line-clamp: 2;
@@ -1512,7 +1512,7 @@ html[data-motion="off"] *::after {
     display: flex;
     align-items: center;
     gap: 6px;
-    font-size: 8px;
+    font-size: 10px;
 }
 .knowledge-card-meta i { width: 2px; height: 2px; border-radius: 50%; background: currentColor; }
 .knowledge-list-loading { padding: 14px 10px; display: grid; gap: 10px; }
@@ -1559,17 +1559,17 @@ html[data-motion="off"] *::after {
     display: none;
     align-items: center;
     gap: 4px;
-    font-size: 10px;
+    font-size: 12px;
 }
 .knowledge-back:hover { color: var(--ink); background: var(--soft); }
 .document-head { padding-bottom: 25px; border-bottom: 1px solid var(--line); }
-.document-kicker { color: var(--sage); display: flex; align-items: center; gap: 8px; font-size: 9px; font-weight: 620; }
+.document-kicker { color: var(--sage); display: flex; align-items: center; gap: 8px; font-size: 11px; font-weight: 620; }
 .document-kicker span + span {
     padding: 3px 6px;
     border-radius: 6px;
     color: var(--ink-3);
     background: var(--soft);
-    font-size: 8px;
+    font-size: 10px;
     text-transform: uppercase;
 }
 .document-head h2 {
@@ -1597,7 +1597,7 @@ html[data-motion="off"] *::after {
     width: 100%;
     margin-bottom: 5px;
     color: var(--ink-3);
-    font-size: 8px;
+    font-size: 10px;
     font-weight: 650;
     letter-spacing: .08em;
 }
@@ -1651,7 +1651,7 @@ html[data-motion="off"] *::after {
 .document-body .document-lead { color: var(--ink); font-weight: 570; }
 .document-end { margin-top: 46px; color: var(--ink-3); display: flex; align-items: center; gap: 12px; }
 .document-end span { height: 1px; flex: 1; background: var(--line); }
-.document-end p { margin: 0; font-size: 8px; white-space: nowrap; }
+.document-end p { margin: 0; font-size: 10px; white-space: nowrap; }
 
 @media (max-width: 900px) {
     .knowledge-workspace { grid-template-columns: minmax(250px, 290px) minmax(0, 1fr); }
@@ -1662,7 +1662,7 @@ html[data-motion="off"] *::after {
     .knowledge-view { padding: 58px 8px 8px; }
     .knowledge-overview { padding: 7px 6px 10px; align-items: flex-start; flex-wrap: wrap; gap: 8px; }
     .knowledge-overview h1 { font-size: 24px; }
-    .knowledge-overview p { max-width: 255px; font-size: 9px; }
+    .knowledge-overview p { max-width: 290px; font-size: 12px; }
     .knowledge-header-side { width: 100%; justify-content: space-between; }
     .knowledge-summary { order: 2; padding-left: 14px; }
     .knowledge-summary strong { font-size: 20px; }
