@@ -1,21 +1,10 @@
-"""Compile semantic tasks into trusted execution tasks and dependency batches.
-
-One IntentTask expands into the full skill execution template (one
-ExecutionTask per step, ``task_id=f"{intent}-{agent}"``). Workflow intents
-absorb standalone intents whose agent set is a subset of their own
-(subsumption), so overlapping requests never double-execute an agent and each
-step's query stays scope-pure. Cross-intent ``depends_on`` edges connect the
-referenced intent's terminal step to this intent's first step.
-"""
+"""Compile semantic Goals into trusted execution nodes with explicit edges."""
 from __future__ import annotations
 
 import re
-from typing import Dict, Iterable, List, Optional, Tuple
+from typing import Dict, Iterable, List, Optional
 
-from core.intent_catalog import (
-    agent_for_intent,
-    execution_steps_for_intent,
-)
+from core.intent_catalog import execution_steps_for_intent
 
 from .models import ExecutionTask, IntentTask
 
@@ -32,98 +21,128 @@ _PLACEHOLDER_KEYS = {
 class TaskGraphBuilder:
     def compile(self, tasks: Iterable[IntentTask]) -> List[ExecutionTask]:
         task_list = list(tasks)
-        plans: List[Tuple[IntentTask, List]] = []
+        plans = []
         for task in task_list:
             steps = execution_steps_for_intent(task.intent)
             if not steps:
                 raise ValueError(f"no execution template for intent: {task.intent}")
             plans.append((task, steps))
 
-        coverage = {
-            task.intent: {step.agent_name for step in steps} for task, steps in plans
-        }
-
-        # subsumption：独立意图的 agent 集合 ⊆ 某 workflow 的 agent 集合 → 折叠。
-        query_overrides: Dict[str, str] = {}
-        entities_overrides: Dict[str, Dict[str, object]] = {}
-        survivors: List[Tuple[IntentTask, List]] = []
+        # A user-requested single-step Goal can satisfy the same capability
+        # inside a workflow.  Compile it once under its own Goal; workflow
+        # downstream nodes depend on it explicitly instead of stealing its
+        # intent/query identity as the old subsumption logic did.
+        standalone_by_agent: Dict[str, List[tuple[IntentTask, object]]] = {}
         for task, steps in plans:
-            workflow = next(
-                (
-                    other
-                    for other, _ in plans
-                    if other.intent != task.intent
-                    and coverage[task.intent]
-                    and coverage[task.intent] <= coverage[other.intent]
-                ),
-                None,
-            )
-            if workflow is not None:
-                for step in steps:
-                    query_overrides[step.agent_name] = task.query
-                    entities_overrides[step.agent_name] = dict(task.entities)
-            else:
-                survivors.append((task, steps))
+            if len(steps) == 1:
+                standalone_by_agent.setdefault(steps[0].agent_name, []).append((task, steps[0]))
 
         execution: List[ExecutionTask] = []
-        terminal_by_agent: Dict[str, str] = {}
+        by_id: Dict[str, ExecutionTask] = {}
+        first_by_goal: Dict[str, str] = {}
+        terminal_by_goal: Dict[str, str] = {}
         terminal_by_intent: Dict[str, str] = {}
+        intent_counts: Dict[str, int] = {}
+        for task in task_list:
+            intent_counts[task.intent] = intent_counts.get(task.intent, 0) + 1
         counter = 0
-        for task, steps in survivors:
-            terminal = max(steps, key=lambda step: step.priority)
-            for step in steps:
-                agent = step.agent_name
-                if len(steps) == 1:
-                    # 单步意图：语义任务 query 本身就是 scoped ask（LLM 或 fallback 生成）。
-                    query = task.query
-                    entities = dict(task.entities)
-                elif agent in query_overrides:
-                    query = query_overrides[agent]
-                    entities = {**task.entities, **entities_overrides.get(agent, {})}
-                else:
-                    query = self._render_query(step.query, task.entities) or task.query
-                    entities = dict(task.entities)
-                step_id = f"{task.intent}-{agent}"
-                execution.append(ExecutionTask(
-                    **task.model_dump(exclude={
-                        "task_id", "query", "entities", "depends_on",
-                        "side_effect", "failure_policy", "display_order",
-                    }),
-                    task_id=step_id,
-                    query=query,
-                    entities=entities,
-                    agent_name=agent,
-                    priority=step.priority,
-                    reason=step.reason or "",
-                    expected_output=step.expected_output or "",
-                    max_retries=step.max_retries,
-                    # 模板拥有失败策略与结果判定规则；LLM 的 advisory 字段被覆盖。
-                    failure_policy=step.on_failure,
-                    side_effect=task.side_effect and step is terminal,
-                    result_rules=dict(step.result_rules or {}),
-                    display_order=counter,
-                ))
-                counter += 1
-                terminal_by_agent[agent] = step_id
-                if step is terminal:
-                    terminal_by_intent[task.intent] = step_id
 
-        # 跨 intent depends_on 边：被引用意图的终点步骤 → 本意图的起点步骤。
-        for task, steps in survivors:
+        def add_node(owner: IntentTask, step) -> ExecutionTask:
+            nonlocal counter
+            node_id = f"{owner.task_id}-{step.agent_name}"
+            existing = by_id.get(node_id)
+            if existing is not None:
+                return existing
+            owner_steps = execution_steps_for_intent(owner.intent)
+            first_priority = min(item.priority for item in owner_steps)
+            if len(owner_steps) == 1 or step.priority == first_priority:
+                # Intake must see the complete scoped planning Goal so it can
+                # extract facts. Later capability phases receive only their
+                # declared query plus upstream structured results.
+                query = owner.query
+            else:
+                query = self._render_query(step.query, owner.entities) or step.reason
+            node = ExecutionTask(
+                **owner.model_dump(exclude={
+                    "task_id", "query", "entities", "depends_on",
+                    "side_effect", "failure_policy", "display_order",
+                }),
+                task_id=node_id, goal_id=owner.task_id,
+                query=query, entities=dict(owner.entities),
+                agent_name=step.agent_name, priority=step.priority,
+                reason=step.reason or "", expected_output=step.expected_output or "",
+                max_retries=step.max_retries, failure_policy=step.on_failure,
+                side_effect=(
+                    owner.side_effect
+                    and step.priority == max(
+                        item.priority for item in owner_steps
+                    )
+                ),
+                result_rules=dict(step.result_rules or {}), display_order=counter,
+            )
+            counter += 1
+            execution.append(node)
+            by_id[node_id] = node
+            return node
+
+        # Standalone Goals are first-class and always keep their own scoped query.
+        for task, steps in plans:
+            if len(steps) == 1:
+                node = add_node(task, steps[0])
+                first_by_goal[task.task_id] = node.task_id
+                terminal_by_goal[task.task_id] = node.task_id
+
+        # Compile workflow-owned nodes and wire every phase to all preceding
+        # workflow requirements. Substituted standalone nodes remain independent
+        # (so they can finish while intake waits) but are prerequisites of plan.
+        for task, steps in plans:
+            if len(steps) == 1:
+                continue
+            refs_by_priority: Dict[int, List[str]] = {}
+            for step in steps:
+                substitutes = standalone_by_agent.get(step.agent_name, [])
+                substitute = next((
+                    item for item in substitutes
+                    if item[0].task_id != task.task_id
+                    # Capability sharing is valid only inside the same
+                    # decomposition cohort.  A Goal added in a later Turn must
+                    # never retroactively become a dependency of an old Goal.
+                    and (
+                        item[0].group_id == task.group_id
+                        and (bool(task.group_id) or not item[0].group_id)
+                    )
+                ), None)
+                if substitute is not None:
+                    ref_id = f"{substitute[0].task_id}-{step.agent_name}"
+                else:
+                    ref_id = add_node(task, step).task_id
+                refs_by_priority.setdefault(step.priority, []).append(ref_id)
+            ordered_prior: List[str] = []
+            for priority in sorted(refs_by_priority):
+                current = refs_by_priority[priority]
+                for node_id in current:
+                    node = by_id[node_id]
+                    if node.goal_id == task.task_id:
+                        node.depends_on = sorted(set(node.depends_on) | set(ordered_prior))
+                ordered_prior.extend(current)
+            first_by_goal[task.task_id] = refs_by_priority[min(refs_by_priority)][0]
+            terminal_by_goal[task.task_id] = refs_by_priority[max(refs_by_priority)][-1]
+
+        for task in task_list:
+            if intent_counts[task.intent] == 1:
+                terminal_by_intent[task.intent] = terminal_by_goal[task.task_id]
+
+        # Semantic cross-Goal dependencies target Goal ids first; intent aliases
+        # are accepted only when unambiguous for backward-compatible LLM output.
+        for task in task_list:
             deps = [
-                self._resolve_dep_target(target, terminal_by_intent, terminal_by_agent)
+                self._resolve_dep_target(target, terminal_by_goal, terminal_by_intent)
                 for target in task.depends_on
             ]
             if not deps:
                 continue
-            first = min(steps, key=lambda step: step.priority)
-            first_id = f"{task.intent}-{first.agent_name}"
-            for execution_task in execution:
-                if execution_task.task_id == first_id:
-                    execution_task.depends_on = sorted(
-                        set(execution_task.depends_on) | set(deps)
-                    )
-                    break
+            first_id = first_by_goal[task.task_id]
+            by_id[first_id].depends_on = sorted(set(by_id[first_id].depends_on) | set(deps))
 
         self.batches(execution)
         return execution
@@ -131,14 +150,13 @@ class TaskGraphBuilder:
     @staticmethod
     def _resolve_dep_target(
         target: str,
+        terminal_by_goal: Dict[str, str],
         terminal_by_intent: Dict[str, str],
-        terminal_by_agent: Dict[str, str],
     ) -> str:
+        if target in terminal_by_goal:
+            return terminal_by_goal[target]
         if target in terminal_by_intent:
             return terminal_by_intent[target]
-        primary = agent_for_intent(target)
-        if primary and primary in terminal_by_agent:
-            return terminal_by_agent[primary]
         raise ValueError(f"depends_on target has no executable step: {target}")
 
     @classmethod

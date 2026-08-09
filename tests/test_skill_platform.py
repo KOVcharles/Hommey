@@ -4,11 +4,10 @@ from pathlib import Path
 
 import pytest
 from agents.lazy_agent_registry import LazyAgentRegistry
-from agents.orchestration_agent import OrchestrationAgent
 from agentscope.message import Msg
 
 from context.long_term_memory import FileLongTermMemory
-from core.schedule_builder import build_agent_schedule
+from core.intent_catalog import execution_steps_for_intent
 from utils.skill_loader import SkillLoader
 from webui_new.auth.deps import require_admin
 from webui_new.auth.storage import User
@@ -32,24 +31,6 @@ class _Store:
 
     def set_enabled(self, skill_name, enabled, updated_by):
         self.values[skill_name] = {"enabled": enabled, "updated_by": updated_by}
-
-
-class _DisabledStore(_Store):
-    configured = False
-
-    def is_enabled(self, skill_name, default=True):
-        return skill_name != "ask-question"
-
-
-class _ReplyAgent:
-    def __init__(self, name, payload):
-        self.name = name
-        self.payload = payload
-        self.calls = 0
-
-    async def reply(self, _message):
-        self.calls += 1
-        return Msg(name=self.name, content=json.dumps(self.payload), role="assistant")
 
 
 def test_every_skill_has_standard_metadata_and_valid_runtime_config():
@@ -132,85 +113,15 @@ def test_skill_resource_reader_stays_inside_package():
 
 
 def test_plan_workflow_is_declarative_and_ends_with_compliance():
-    schedule = build_agent_schedule([{"type": "itinerary_planning"}])
+    steps = execution_steps_for_intent("itinerary_planning")
 
-    assert [(item["agent_name"], item["priority"]) for item in schedule] == [
+    assert [(item.agent_name, item.priority) for item in steps] == [
         ("event_collection", 1),
         ("rag_knowledge", 2),
         ("information_query", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]
-
-
-def test_disabled_skill_is_removed_before_orchestration():
-    orchestrator = OrchestrationAgent(agent_registry={}, skill_store=_DisabledStore())
-
-    filtered, disabled = orchestrator._filter_enabled_schedule(
-        [
-            {"agent_name": "rag_knowledge", "priority": 1},
-            {"agent_name": "itinerary_planning", "priority": 2},
-        ]
-    )
-
-    assert filtered == [{"agent_name": "itinerary_planning", "priority": 2}]
-    assert disabled == ["ask-question"]
-
-
-def test_thin_reply_executes_schedule_and_returns_raw_results():
-    agents = {
-        "event_collection": _ReplyAgent("event_collection", {"destination": "南京"}),
-        "rag_knowledge": _ReplyAgent("rag_knowledge", {"answer": "住宿标准"}),
-    }
-    orchestrator = OrchestrationAgent(agent_registry=agents)
-
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps({
-                    "agent_schedule": [
-                        {"agent_name": "event_collection", "priority": 1},
-                        {"agent_name": "rag_knowledge", "priority": 1},
-                    ],
-                }),
-                role="assistant",
-            )
-        )
-    )
-    data = json.loads(response.content)
-
-    assert data["status"] == "completed"
-    assert [item["agent_name"] for item in data["results"]] == [
-        "event_collection",
-        "rag_knowledge",
-    ]
-
-
-def test_thin_reply_does_not_auto_expand_workflow():
-    # 暂停/续跑语义已移交给 DAG 管线：薄壳只执行给定 schedule，不做模板回放。
-    event_collection = _ReplyAgent("event_collection", {"planning_ready": True, "origin": "北京", "destination": "南昌"})
-    itinerary_planning = _ReplyAgent("itinerary_planning", {"itinerary": {"title": "南昌出差", "daily_plans": []}})
-    orchestrator = OrchestrationAgent(agent_registry={
-        "event_collection": event_collection,
-        "itinerary_planning": itinerary_planning,
-    })
-
-    response = asyncio.run(
-        orchestrator.reply(
-            Msg(
-                name="intention",
-                content=json.dumps({
-                    "agent_schedule": [{"agent_name": "event_collection", "priority": 1}],
-                }),
-                role="assistant",
-            )
-        )
-    )
-    data = json.loads(response.content)
-
-    assert [item["agent_name"] for item in data["results"]] == ["event_collection"]
-    assert itinerary_planning.calls == 0
 
 
 def test_completed_plan_hides_workflow_intermediates():

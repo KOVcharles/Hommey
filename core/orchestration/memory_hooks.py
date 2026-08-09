@@ -117,6 +117,9 @@ class MemoryHookExecutor:
             "start_date": active.get("start_date"),
             "end_date": active.get("end_date"),
             "purpose": active.get("trip_purpose", "公司出差"),
-            "request_id": getattr(self.memory_manager, "current_request_id", None),
+            # Stable per-node key: a stopped Turn may resume under a new request_id.
+            "request_id": result.operation_id or getattr(
+                self.memory_manager, "current_request_id", None
+            ),
         })
         self.memory_manager.complete_active_trip(reason="planning_completed")

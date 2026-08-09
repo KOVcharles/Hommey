@@ -11,6 +11,7 @@ progress_key: policy_searching
 scope:
   forbidden_terms: [天气, 气温, 下雨, 降水, 预报]
   expansion_terms: [住宿, 交通, 补贴, 报销, 审批, 餐饮, 餐费]
+  query_anchor_fields: [destination]
 answer:
   section_kind: policy
 tools: [rag_retrieval]

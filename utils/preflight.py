@@ -37,6 +37,7 @@ async def run_preflight(include_network: bool = False) -> dict:
         check_api_key,
         check_rag_embedding_config,
         check_milvus_data_dir,
+        check_runtime_topology,
         check_mcp_config,
     ]
 
@@ -159,6 +160,25 @@ async def check_milvus_data_dir() -> CheckResult:
         )
     except Exception:
         return _result("milvus_data_dir", COMPONENT_RAG, False, "milvus data directory unavailable", start, {"path": str(path)})
+
+
+async def check_runtime_topology() -> CheckResult:
+    """Milvus Lite and process-local Web instances require one worker."""
+    start = time.perf_counter()
+    try:
+        workers = int(os.getenv("UVICORN_WORKERS", "1"))
+    except ValueError:
+        workers = 0
+    ok = workers == 1
+    return _result(
+        "runtime_topology",
+        COMPONENT_RAG,
+        ok,
+        "single-worker Milvus Lite topology"
+        if ok else "Milvus Lite and process-local sessions require UVICORN_WORKERS=1",
+        start,
+        {"uvicorn_workers": workers},
+    )
 
 
 async def check_mcp_config() -> CheckResult:

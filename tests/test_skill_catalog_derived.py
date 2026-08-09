@@ -1,7 +1,7 @@
 """声明式编排元数据契约：core/intent_catalog 派生注册表 + guard_rules。
 
 约束单一数据源：一切编排元数据（section kind、progress_key、side_effect、
-checkpoint、memory hooks、result_rules、置信度门槛）都必须能从
+pause、memory hooks、result_rules、置信度门槛）都必须能从
 `.agents/skills/*/hommey.yaml` 派生，新增 skill 零 Python 改动。
 """
 from core.guard_rules import transaction_supported
@@ -9,7 +9,7 @@ from core.intent_catalog import (
     SKILL_INTENTS,
     agent_for_intent,
     catalog_rank,
-    checkpoint_spec_for_intent,
+    pause_spec_for_intent,
     confidence_threshold_for_intent,
     execution_steps_for_intent,
     intent_to_skill,
@@ -59,8 +59,8 @@ def test_plain_skills_get_defaults():
     assert require_section_for_intent("chitchat") is True
 
 
-def test_plan_trip_declares_checkpoint_and_side_effect():
-    spec = checkpoint_spec_for_intent("itinerary_planning")
+def test_plan_trip_declares_pause_and_side_effect():
+    spec = pause_spec_for_intent("itinerary_planning")
     assert spec is not None
     assert spec.enabled is True
     assert spec.pause_agent == "event_collection"
@@ -136,21 +136,6 @@ def test_transaction_keywords_are_catalog_derived():
     assert transaction_supported() is False
     from core.guard_rules import TRANSACTION_INTENTS
     assert not any(intent in SKILL_INTENTS for intent in TRANSACTION_INTENTS)
-
-
-def test_self_schedule_for_intent_derives_entry_agent():
-    from core.intent_catalog import self_schedule_for_intent
-
-    assert self_schedule_for_intent("chitchat") == [
-        {"agent_name": "chitchat", "priority": 1,
-         "reason": "明确的高置信度请求", "expected_output": "完成用户请求"},
-    ]
-    # 自定义文案保留，agent_name 仍取自目录。
-    schedule = self_schedule_for_intent("information_query", "明确的信息查询", "完成查询")
-    assert schedule[0]["agent_name"] == "information_query"
-    assert schedule[0]["reason"] == "明确的信息查询"
-    # 未知意图返回空调度（不调用任何 skill）。
-    assert self_schedule_for_intent("no_such_intent") == []
 
 
 def test_intent_api_payload_is_declarative():

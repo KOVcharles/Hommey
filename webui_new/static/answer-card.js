@@ -31,6 +31,56 @@
         return String(value || '').split(/[；;\n]/).map((item) => item.replace(/^[\s•-]+/, '').trim()).filter(Boolean);
     }
 
+    function normalizeMachinePlaceholders(documentData) {
+        const data = { ...(documentData || {}) };
+        const placeholder = (value) => ['unknown', 'none', 'null', 'n/a'].includes(String(value || '').trim().toLowerCase());
+        const humanUnknown = '合规信息尚待核验，请以公司制度和人工审核结果为准。';
+        data.notices = (Array.isArray(data.notices) ? data.notices : []).map((notice) => (
+            placeholder(notice) ? humanUnknown : notice
+        ));
+        data.sections = (Array.isArray(data.sections) ? data.sections : []).map((section) => ({
+            ...section,
+            body: section?.kind === 'notice' && placeholder(section?.body) ? humanUnknown : section?.body,
+            items: (Array.isArray(section?.items) ? section.items : []).map((item) => ({
+                ...item,
+                value: placeholder(item?.value) ? '待核验' : item?.value,
+            })),
+        }));
+        return data;
+    }
+
+    function upgradeLegacyTripTimeline(documentData) {
+        const data = { ...(documentData || {}) };
+        const sections = Array.isArray(data.sections) ? data.sections : [];
+        if (sections.some((section) => section?.kind === 'trip' && /^第\s*\d+\s*天/.test(section?.title || ''))) {
+            return { ...data, sections };
+        }
+        const timeLabel = /^\d{1,2}:\d{2}(?:\s*[-–—~～]\s*\d{1,2}:\d{2})?$/;
+        const upgraded = [];
+        sections.forEach((section) => {
+            const items = Array.isArray(section?.items) ? section.items : [];
+            const scheduled = section?.kind === 'trip'
+                ? items.filter((item) => timeLabel.test(String(item?.label || '').trim()))
+                : [];
+            if (scheduled.length < 2 || scheduled.length < Math.ceil(items.length * 0.6)) {
+                upgraded.push(section);
+                return;
+            }
+            const overviewItems = items.filter((item) => !scheduled.includes(item));
+            if (section.body || overviewItems.length) {
+                upgraded.push({ ...section, items: overviewItems, days: [] });
+            }
+            upgraded.push({
+                ...section,
+                title: '第 1 天',
+                body: '',
+                items: scheduled,
+                days: [],
+            });
+        });
+        return { ...data, sections: upgraded };
+    }
+
     function legacyReimbursementItem(value, index) {
         const categories = [
             [['高铁', '火车', '机票', '车票', '航班'], '交通票据'],
@@ -216,6 +266,13 @@
     function renderWeather(section, content) {
         if (!Array.isArray(section.days) || !section.days.length) return;
         const days = element('div', 'answer-weather-days');
+        (Array.isArray(section.items) ? section.items : []).forEach((item) => {
+            const card = element('div', 'answer-weather-day is-current');
+            card.appendChild(element('span', 'answer-weather-date', item.label));
+            card.appendChild(element('strong', 'answer-weather-condition', item.value || '—'));
+            if (item.detail) card.appendChild(element('span', 'answer-weather-temperature', item.detail));
+            days.appendChild(card);
+        });
         section.days.forEach((day) => {
             const card = element('div', 'answer-weather-day');
             card.appendChild(element('span', 'answer-weather-date', day.date));
@@ -228,21 +285,99 @@
         content.appendChild(days);
     }
 
-    function renderSection(section, index) {
+    function cleanInlineMarkdown(value) {
+        return String(value || '')
+            .replace(/^#{1,6}\s+/, '')
+            .replace(/\*\*(.*?)\*\*/g, '$1')
+            .replace(/__(.*?)__/g, '$1')
+            .replace(/`([^`]+)`/g, '$1')
+            .trim();
+    }
+
+    function renderBody(value) {
+        const body = element('div', 'answer-section-body');
+        let list = null;
+        String(value || '').split(/\n+/).forEach((rawLine) => {
+            const line = rawLine.trim();
+            if (!line) return;
+            const bullet = line.match(/^[-*•]\s+(.+)/);
+            if (bullet) {
+                if (!list) {
+                    list = element('ul', 'answer-section-body-list');
+                    body.appendChild(list);
+                }
+                list.appendChild(element('li', '', cleanInlineMarkdown(bullet[1])));
+                return;
+            }
+            list = null;
+            const heading = /^#{1,6}\s+/.test(line) || /^\*\*.*\*\*[:：]?$/.test(line);
+            body.appendChild(element('p', heading ? 'is-heading' : '', cleanInlineMarkdown(line)));
+        });
+        return body;
+    }
+
+    function disclosure(block, collapsedLabel, expandedLabel) {
+        const button = element('button', 'answer-section-toggle', collapsedLabel);
+        button.type = 'button';
+        button.setAttribute('aria-expanded', 'false');
+        button.addEventListener('click', () => {
+            const expanded = block.classList.toggle('is-expanded');
+            button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            button.textContent = expanded ? expandedLabel : collapsedLabel;
+        });
+        return button;
+    }
+
+    function renderSection(section, index, documentTitle) {
         const block = element('section', `answer-section answer-section-${section.kind || 'general'}`);
         if (section.status === 'error') block.classList.add('is-error');
         if (section.kind === 'trip' && index === 0) block.classList.add('is-overview');
         if (section.kind === 'trip' && /^第\s*\d+\s*天/.test(section.title || '')) block.classList.add('is-timeline');
-        const heading = element('div', 'answer-section-heading');
-        heading.appendChild(element('span', 'answer-section-mark'));
-        heading.appendChild(element('h3', '', section.title));
-        block.appendChild(heading);
+        const sectionTitle = String(section.title || '').trim();
+        if (sectionTitle && sectionTitle !== String(documentTitle || '').trim()) {
+            const heading = element('div', 'answer-section-heading');
+            heading.appendChild(element('span', 'answer-section-mark'));
+            heading.appendChild(element('h3', '', section.title));
+            block.appendChild(heading);
+        }
         const content = element('div', 'answer-section-content');
-        if (section.body) content.appendChild(element('p', 'answer-section-body', section.body));
-        renderItems(section, content);
-        renderWeather(section, content);
+        const longBody = String(section.body || '').length > 220;
+        const timelineDetails = section.kind === 'trip'
+            && /^第\s*\d+\s*天/.test(section.title || '')
+            && (section.items || []).some((item) => item?.detail);
+        const overviewDetails = block.classList.contains('is-overview')
+            && (section.items || []).some((item) => (
+                String(item?.value || '').length + String(item?.detail || '').length > 90
+            ));
+        if (longBody || timelineDetails || overviewDetails) block.classList.add('is-collapsible');
+        if (section.body) content.appendChild(renderBody(section.body));
+        if (section.kind === 'weather' && Array.isArray(section.days) && section.days.length) {
+            renderWeather(section, content);
+        } else {
+            renderItems(section, content);
+            renderWeather(section, content);
+        }
+        if (longBody) {
+            content.appendChild(disclosure(block, '展开完整内容', '收起详细内容'));
+        } else if (timelineDetails) {
+            content.appendChild(disclosure(block, '查看行程细节', '收起行程细节'));
+        } else if (overviewDetails) {
+            content.appendChild(disclosure(block, '查看方案说明', '收起方案说明'));
+        }
         block.appendChild(content);
         return block;
+    }
+
+    function renderNotices(values) {
+        const notices = element('div', 'answer-notices');
+        values.slice(0, 2).forEach((notice) => notices.appendChild(element('p', '', notice)));
+        if (values.length > 2) {
+            const more = element('details', 'answer-notice-details');
+            more.appendChild(element('summary', '', `查看其余 ${values.length - 2} 项提醒`));
+            values.slice(2).forEach((notice) => more.appendChild(element('p', '', notice)));
+            notices.appendChild(more);
+        }
+        return notices;
     }
 
     function renderDetails(label, body) {
@@ -272,7 +407,9 @@
     }
 
     function create(documentData) {
-        const data = upgradeLegacyPreDeparture(documentData);
+        const normalized = normalizeMachinePlaceholders(documentData);
+        const timeline = upgradeLegacyTripTimeline(normalized);
+        const data = upgradeLegacyPreDeparture(timeline);
         const card = element('article', 'answer-card');
         card.setAttribute('aria-label', data.title || '查询结果');
 
@@ -286,15 +423,15 @@
         card.appendChild(header);
 
         const sections = element('div', 'answer-card-sections');
-        (data.sections || []).forEach((section, index) => sections.appendChild(renderSection(section, index)));
+        (data.sections || []).forEach((section, index) => {
+            sections.appendChild(renderSection(section, index, data.title));
+        });
         card.appendChild(sections);
 
         if (data.pre_departure) card.appendChild(renderPreDeparture(data.pre_departure));
 
         if (Array.isArray(data.notices) && data.notices.length) {
-            const notices = element('div', 'answer-notices');
-            data.notices.forEach((notice) => notices.appendChild(element('p', '', notice)));
-            card.appendChild(notices);
+            card.appendChild(renderNotices(data.notices));
         }
 
         const footer = element('footer', 'answer-card-footer');

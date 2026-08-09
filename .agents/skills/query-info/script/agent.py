@@ -95,11 +95,20 @@ class InformationQueryAgent(AgentBase):
         content = x.content if not isinstance(x, list) else x[-1].content
 
         payload = {}
+        destination_hint = ""
         if isinstance(content, str):
             try:
                 payload = json.loads(content)
                 context = payload.get("context", {})
-                user_query = context.get("agent_query") or context.get("rewritten_query", "") or content
+                active_task = context.get("active_task") or {}
+                entities = active_task.get("entities") or {}
+                destination_hint = str(entities.get("destination") or "").strip()
+                user_query = (
+                    active_task.get("query")
+                    or context.get("agent_query")
+                    or context.get("rewritten_query", "")
+                    or content
+                )
             except json.JSONDecodeError:
                 user_query = content
         else:
@@ -114,7 +123,9 @@ class InformationQueryAgent(AgentBase):
         if self._is_weather_query(user_query):
             logger.info(f"Weather query: {user_query}")
             try:
-                result = await self._weather_query(user_query)
+                result = await self._weather_query(
+                    user_query, city_hint=destination_hint,
+                )
                 return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
             except ExecutionLimitExceeded:
                 raise
@@ -161,7 +172,10 @@ class InformationQueryAgent(AgentBase):
             "官方时刻与机场或车站接驳"
         )
         weather, transport = await asyncio.gather(
-            self._weather_query(weather_query),
+            # The collected trip is the authority for the destination. Passing
+            # it explicitly keeps this branch city-agnostic as well; otherwise
+            # international cities would fall back to heuristic name parsing.
+            self._weather_query(weather_query, city_hint=destination),
             self._web_search(transport_query),
             return_exceptions=True,
         )
@@ -195,7 +209,9 @@ class InformationQueryAgent(AgentBase):
             return False
         return "天气" in q or "气温" in q or "下雨" in q or "预报" in q
 
-    async def _weather_query(self, query: str) -> Dict[str, Any]:
+    async def _weather_query(
+        self, query: str, city_hint: str = "",
+    ) -> Dict[str, Any]:
         """
         使用 wttr.in 免费 API 查询天气（无需 API Key，结果可靠）。
         支持中文城市名，如：杭州、北京。
@@ -211,7 +227,7 @@ class InformationQueryAgent(AgentBase):
             }
 
         # 从问题中提取城市（简单取第一个常见城市名或整句前 10 字中连续中文）
-        city = self._extract_city_from_query(query)
+        city = city_hint or self._extract_city_from_query(query)
         if not city:
             return {
                 "query_type": "天气查询",

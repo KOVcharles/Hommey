@@ -16,11 +16,10 @@ project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
 from agents.intention_agent import IntentionAgent
-from agents.orchestration_agent import OrchestrationAgent, message_for_non_skill_intent
+from agents.orchestration_agent import OrchestrationAgent
 from settings import (
     CONCURRENCY_CONFIG,
     MEMORY_CONFIG,
-    ORCHESTRATION_V2_CONFIG,
     RESILIENCE_CONFIG,
 )
 from context.memory_manager import MemoryManager
@@ -37,11 +36,13 @@ from utils.memory_safety import redact_sensitive_text, wrap_untrusted_memory
 from utils.observability import COMPONENT_LLM, ERROR_CIRCUIT_OPEN, record_upstream_error
 from webui_new.core.errors import AppError, BusinessError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
-from core.intent_router import FastIntentRouter
+from core.intent_guard import is_pure_chitchat
+from core.intent_router import FastIntentRouter, message_for_non_skill_intent
 from core.intent_catalog import INTENT_DISPLAY_NAMES, updates_preferences_for_agent
-from core.orchestration.checkpoints import CheckpointStore
 from core.orchestration.memory_hooks import MemoryHookExecutor
 from core.orchestration.pipeline import MultiIntentPipeline
+from core.orchestration.state_store import OrchestrationStateStore, StateConflictError
+from core.orchestration.turn_resolver import TurnResolver
 from core.orchestration.validator import supports_task_pipeline
 from core.execution_budget import (
     ExecutionBudget,
@@ -61,18 +62,6 @@ AGENT_DISPLAY_NAMES = INTENT_DISPLAY_NAMES
 class HommeyWebInstance:
     """单个用户的 Hommey 实例"""
 
-    # 简单闲聊匹配规则（不经过 LLM）
-    CHITCHAT_PATTERNS = [
-        "你好", "您好", "嗨", "hi", "hello", "hey",
-        "谢谢", "感谢", "多谢", "thanks", "thank",
-        "再见", "拜拜", "bye", "回头见",
-        "在吗", "在不在", "有人吗",
-        "哈哈", "呵呵", "好的", "ok", "okay",
-        "没事", "没什么", "算了",
-        "再见", "明天见", "下次见",
-        "你叫什么", "你是谁", "你能做什么",
-    ]
-
     def __init__(self, user_id: str):
         self.user_id = user_id
         self.session_id = str(uuid.uuid4())[:8]
@@ -83,6 +72,7 @@ class HommeyWebInstance:
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
         self.multi_intent_pipeline: Optional[MultiIntentPipeline] = None
+        self.state_store: Optional[OrchestrationStateStore] = None
         self._agent_cache = {}
         self.circuit_breaker: Optional[CircuitBreaker] = None
         self.onboarding = InitialPreferenceOnboarding()
@@ -110,13 +100,13 @@ class HommeyWebInstance:
             self.session_id = self.memory_manager.session_id
             self.intention_agent = runtime.intention_agent
             self.orchestrator = runtime.orchestrator
-            self.checkpoint_store = CheckpointStore(user_id=self.user_id)
+            self.state_store = OrchestrationStateStore(user_id=self.user_id)
             self.multi_intent_pipeline = MultiIntentPipeline(
                 model=self.model,
                 composer_model=runtime.composer_model,
                 agent_runner=self.orchestrator.execute_task,
                 memory_hooks=MemoryHookExecutor(self.memory_manager),
-                checkpoint_store=self.checkpoint_store,
+                state_store=self.state_store,
             )
             self.attachment_service = getattr(runtime, "attachment_service", None)
             self._agent_cache = runtime.agent_cache
@@ -213,12 +203,47 @@ class HommeyWebInstance:
             limit=None,
             session_id=session_id,
         )
+        rows = self._recover_legacy_presentation_documents(rows)
         titles = self.memory_manager.long_term.get_chat_session_titles()
         return {
             "session_id": session_id,
             "title": titles.get(session_id),
             "messages": self._with_attachments(rows),
         }
+
+    def _recover_legacy_presentation_documents(self, rows: list[dict]) -> list[dict]:
+        """Repair typed intake cards that older canonical rows stored as text."""
+        from core.presentation import recover_trip_intake_document
+
+        repository = getattr(
+            getattr(self.memory_manager, "memory_service", None), "repository", None,
+        )
+        recovered_rows = []
+        for original in rows:
+            row = dict(original)
+            if (
+                row.get("role") == "assistant"
+                and not row.get("answer_document")
+                and not row.get("presentation_document")
+            ):
+                document = recover_trip_intake_document(row.get("content") or "")
+                if document is not None:
+                    payload = document.model_dump(mode="json")
+                    row["presentation_document"] = payload
+                    if repository is not None and row.get("message_id"):
+                        try:
+                            repository.update_message_documents(
+                                user_id=self.user_id,
+                                message_id=row["message_id"],
+                                presentation_document=payload,
+                            )
+                        except Exception as exc:
+                            logger.warning(
+                                "Could not persist repaired intake card message_id=%s: %s",
+                                row.get("message_id"), sanitize_for_log(exc),
+                            )
+            recovered_rows.append(row)
+        return recovered_rows
 
     def _with_attachments(self, rows: list[dict]) -> list[dict]:
         """给历史消息附带其绑定的附件清单（供前端渲染附件卡片）。仅在附件服务可用时生效。"""
@@ -317,18 +342,41 @@ class HommeyWebInstance:
             return {"active_trip": None}
         return {"active_trip": await self._ensure_async_memory().get_active_trip()}
 
+    async def interrupt_active_turn(
+        self, request_id: str, session_id: str | None = None,
+    ) -> dict:
+        """Interrupt the current turn without acquiring the request's long-held lock."""
+        if self.state_store is None:
+            raise BusinessError("NO_ACTIVE_RUN", "当前没有正在执行的任务")
+        state = await self.state_store.get_active(session_id or self.session_id)
+        if state is None or state.status not in {"ACTIVE", "INTERRUPTING"}:
+            raise BusinessError("NO_ACTIVE_RUN", "当前没有正在执行的任务")
+        try:
+            state = await self.state_store.request_interrupt(
+                state.run_id, state.current_turn_id or "", request_id=request_id,
+            )
+        except StateConflictError as exc:
+            raise BusinessError("STALE_INTERRUPT", "这次执行已经结束或被新的执行替代") from exc
+        return {
+            "run_id": state.run_id,
+            "turn_id": state.current_turn_id,
+            "status": state.status,
+            "revision": state.revision,
+            "resumable": True,
+        }
+
     @staticmethod
     def _is_simple_chitchat(message: str) -> bool:
-        """快速判断是否纯闲聊（不经过 LLM）"""
+        """快速判断是否纯闲聊（不经过 LLM）
+
+        复用 is_pure_chitchat 的残余文本判定：带业务前缀的问候/感谢
+        （如"谢谢，餐补多少"）不再被拦截，进入完整意图识别。
+        """
         msg = message.strip().lower()
-        # 纯问候/感谢/告别
-        for pattern in HommeyWebInstance.CHITCHAT_PATTERNS:
-            if msg == pattern or msg.startswith(pattern) and len(msg) < 15:
-                return True
-        # 单字/简单表情
+        # 单字/简单表情（保留原有快速路径）
         if len(msg) <= 2 and msg in ("嗯", "哦", "啊", "好", "行", "ok"):
             return True
-        return False
+        return is_pure_chitchat(msg)
 
     def _normalize_input(
         self, message: str, attachment_ids: list[str] | None
@@ -425,13 +473,17 @@ class HommeyWebInstance:
         }
         if normalized in cancel_commands:
             cancelled = await self._ensure_async_memory().cancel_active_trip()
-            if self.checkpoint_store is not None:
-                await self.checkpoint_store.clear()
+            if self.state_store is not None:
+                active = await self.state_store.get_active(self.session_id)
+                if active is not None:
+                    await self.state_store.finish_run(active.run_id, "ABANDONED")
             return "已取消当前行程任务。" if cancelled else "当前没有进行中的行程任务。"
         if normalized in complete_commands:
             completed = await self._ensure_async_memory().complete_active_trip(reason="user_completed")
-            if self.checkpoint_store is not None:
-                await self.checkpoint_store.clear()
+            if self.state_store is not None:
+                active = await self.state_store.get_active(self.session_id)
+                if active is not None:
+                    await self.state_store.finish_run(active.run_id, "COMPLETED")
             return "已结束当前行程任务。" if completed else "当前没有进行中的行程任务。"
         return None
 
@@ -544,6 +596,40 @@ class HommeyWebInstance:
             "warnings": list(normalized.warnings),
         }
 
+        active_run = (
+            await self.state_store.get_active(self.session_id)
+            if self.state_store is not None else None
+        )
+        # process_message is already inside the per-user local + distributed
+        # lock.  If a different request still sees ACTIVE here, the owning
+        # process died after its latest durable boundary; make it resumable
+        # before resolving this Turn.
+        if (
+            active_run is not None
+            and active_run.status == "ACTIVE"
+            and active_run.current_request_id != (request_id or "")
+        ):
+            active_run = await self.state_store.recover_orphaned_active_run(
+                active_run.run_id, incoming_request_id=request_id or "",
+            )
+        relation = TurnResolver.resolve(message, active_run) if active_run is not None else None
+        resume_state = active_run if relation and relation.kind == "resume" else None
+
+        # “继续上次任务”在当前会话没有目标时，只列出其他会话候选，不跨会话猜测。
+        if active_run is None and "".join(message.strip().lower().split()) in {
+            "继续", "接着做", "继续执行", "继续上次任务", "恢复任务",
+        } and self.state_store is not None:
+            candidates = await self.state_store.list_resumable()
+            if candidates:
+                response = (
+                    "当前对话没有暂停任务。其他对话中有可恢复任务，请先切换到对应对话再继续。"
+                    if len(candidates) == 1 else
+                    f"其他对话中有 {len(candidates)} 个可恢复任务，请先选择对应对话。"
+                )
+                await self._persist_user_message_async(display_message, user_metadata)
+                await self.async_memory.add_message("assistant", response, metadata)
+                return {"response": response, "agents": [], "preferences_updated": False, **input_result}
+
         lifecycle_response = await self._handle_task_lifecycle_command(message)
         if lifecycle_response:
             await self._persist_user_message_async(display_message, user_metadata)
@@ -557,7 +643,7 @@ class HommeyWebInstance:
 
         # ═══ 优化 1: 简单闲聊直接处理，不经过 LLM ═══
         # 带附件时不走闲聊短路，避免附件问题被草率打发。
-        if self._is_simple_chitchat(message) and not attachment_ids:
+        if resume_state is None and self._is_simple_chitchat(message) and not attachment_ids:
             await self._persist_user_message_async(display_message, user_metadata)
             response = await self._handle_chitchat(message)
             await self.async_memory.add_message("assistant", response, metadata)
@@ -572,9 +658,18 @@ class HommeyWebInstance:
         agent_max_retries = rc.get("agent_max_retries", 1)
         # 带附件时强制走完整意图链路（_build_context 会把 agent_query 含附件上下文喂给 LLM），
         # 不走绕过上下文的 fast_route，避免附件文本无法到达模型。
-        fast_route = None if attachment_ids else self._route_without_context(message)
+        fast_route = None if attachment_ids or active_run is not None else self._route_without_context(message)
 
-        if fast_route:
+        if resume_state is not None:
+            intention_data = resume_state.intention_data
+            intention_result = Msg(
+                name="StateCoordinator",
+                content=json.dumps(intention_data, ensure_ascii=False),
+                role="assistant",
+            )
+            timings["context"] = 0.0
+            timings["intent"] = 0.0
+        elif fast_route:
             intention_data = fast_route.to_intention_data(agent_query)
             intention_result = Msg(
                 name="IntentionAgent",
@@ -650,11 +745,9 @@ class HommeyWebInstance:
             "attachment_warnings": input_result["warnings"],
         }
 
-        # 阶段 4：gate 从 phase-one 精确集放开到全部 skill-backed 意图
-        # （supports_task_pipeline）—— 所有 skill 意图走统一 scoped DAG 管线。
+        # 所有已授权的 skill 意图都走统一 scoped DAG 管线。
         use_task_pipeline = bool(
-            ORCHESTRATION_V2_CONFIG.get("enabled", True)
-            and self.multi_intent_pipeline is not None
+            self.multi_intent_pipeline is not None
             and supports_task_pipeline(intention_data)
         )
         if use_task_pipeline:
@@ -664,20 +757,13 @@ class HommeyWebInstance:
                     intention_data,
                     request_context=request_context,
                 )
-                # 跨轮检查点恢复：上轮暂停且本轮意图命中 resume 集 → 续跑。
-                checkpoint = (
-                    await self.checkpoint_store.get()
-                    if self.checkpoint_store is not None
-                    else None
-                )
-                resume_intent = self._checkpoint_resume_intent(checkpoint, intention_data)
-                if resume_intent:
-                    pipeline_output = await self.multi_intent_pipeline.run_resume(
+                if resume_state is not None:
+                    pipeline_output = await self.multi_intent_pipeline.resume_run(
+                        state=resume_state,
                         original_query=display_message,
-                        intention_data=intention_data,
                         base_context=base_context,
                         progress=progress_callback,
-                        task_query=normalized.agent_query,
+                        request_id=request_id or "",
                     )
                 else:
                     pipeline_output = await self.multi_intent_pipeline.run(
@@ -686,6 +772,11 @@ class HommeyWebInstance:
                         base_context=base_context,
                         progress=progress_callback,
                         task_query=normalized.agent_query,
+                        # An independent question may be answered while another
+                        # goal is waiting; append it to the same durable Run.
+                        session_id=self.session_id,
+                        request_id=request_id or "",
+                        existing_state=active_run,
                     )
                 timings["orchestration"] = time.perf_counter() - orchestration_start
                 self.orchestrator.record_task_results(intention_data, pipeline_output.results)
@@ -717,6 +808,17 @@ class HommeyWebInstance:
                 return await self._task_pipeline_paused(
                     pipeline_output, metadata, start_time, timings
                 )
+            if pipeline_output.interrupted:
+                timings["total"] = time.perf_counter() - start_time
+                return {
+                    "response": "",
+                    "answer_document": None,
+                    "presentation_document": None,
+                    "agents": [],
+                    "interrupted": True,
+                    "preferences_updated": False,
+                    "timings": {key: round(value, 3) for key, value in timings.items()},
+                }
             # abort 语义的硬失败转入公共错误流；continue 降级（如天气不可用）走卡片。
             self._raise_on_pipeline_errors(pipeline_output)
             answer_document = pipeline_output.answer_document.model_dump(mode="json")
@@ -766,21 +868,6 @@ class HommeyWebInstance:
             "timings": {key: round(value, 3) for key, value in timings.items()},
             **input_result,
         }
-
-    @staticmethod
-    def _checkpoint_resume_intent(checkpoint, intention_data) -> str | None:
-        """命中 resume 集的意图名：检查点存在的 skill 意图且本轮仍要调用它。"""
-        if checkpoint is None:
-            return None
-        from core.intent_catalog import skill_to_intent
-
-        checkpoint_intent = skill_to_intent(checkpoint.skill) or checkpoint.skill
-        callable_types = {
-            str(item.get("type"))
-            for item in intention_data.get("intents", [])
-            if item.get("type") and item.get("should_call_skill")
-        }
-        return checkpoint_intent if checkpoint_intent in callable_types else None
 
     async def _task_pipeline_paused(self, pipeline_output, metadata, start_time, timings) -> dict:
         """跨轮暂停：返回 trip_intake presentation 契约，保持与 legacy 分支一致。"""
@@ -919,6 +1006,15 @@ class HommeyWebInstance:
         await request_task
         result = result_holder["result"]
 
+        if result.get("interrupted"):
+            yield {"type": "interrupted", "resumable": True}
+            yield {
+                "type": "done", "interrupted": True,
+                "preferences_updated": False,
+                "timings": result.get("timings", {}),
+            }
+            return
+
         if result.get("sources") or result.get("warnings"):
             yield {
                 "type": "attachment_context",
@@ -978,10 +1074,13 @@ class HommeyWebInstance:
             except (AttributeError, TypeError):
                 pass
         route = FastIntentRouter.route(message)
-        if not route or len(route.agent_schedule) != 1:
+        if (
+            not route or not route.should_call_skill
+            or len(route.intent_types) != 1
+            or not route.safe_to_short_circuit
+        ):
             return None
-        agent_name = route.agent_schedule[0].get("agent_name")
-        if agent_name in {"rag_knowledge", "information_query", "chitchat"}:
+        if route.intent_type in {"rag_knowledge", "information_query", "chitchat"}:
             return route
         return None
 
@@ -1146,6 +1245,15 @@ class WebHommeyManager:
             if not instance.initialized:
                 await instance.initialize()
             return instance
+
+    async def interrupt_active_turn(
+        self, user_id: str, request_id: str, session_id: str | None = None,
+    ) -> dict:
+        # Deliberately bypass _user_lock_scope: the active stream owns that lock.
+        instance = self.get_or_create(user_id)
+        if not instance.initialized:
+            await instance.initialize()
+        return await instance.interrupt_active_turn(request_id, session_id=session_id)
 
     @asynccontextmanager
     async def _user_lock_scope(self, user_id: str):

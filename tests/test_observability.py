@@ -81,6 +81,7 @@ async def test_preflight_is_componentized_and_does_not_require_network(monkeypat
     monkeypatch.setitem(preflight.RAG_CONFIG, "knowledge_base_path", str(tmp_path / "rag-store"))
     monkeypatch.setitem(preflight.MEMORY_CONFIG["short_term"], "backend", "memory")
     monkeypatch.setitem(preflight.MEMORY_CONFIG["long_term"], "backend", "file")
+    monkeypatch.setenv("UVICORN_WORKERS", "1")
 
     result = await run_preflight(include_network=False)
     checks = {item["name"]: item for item in result["checks"]}
@@ -89,6 +90,7 @@ async def test_preflight_is_componentized_and_does_not_require_network(monkeypat
     assert checks["api_key"]["ok"] is False
     assert checks["rag_embedding"]["ok"] is False
     assert checks["milvus_data_dir"]["ok"] is True
+    assert checks["runtime_topology"]["ok"] is True
     assert all("duration_ms" in item for item in result["checks"])
 
 

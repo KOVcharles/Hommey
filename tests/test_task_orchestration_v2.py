@@ -9,7 +9,7 @@ from core.orchestration.executor import TaskExecutor
 from core.orchestration.graph_builder import TaskGraphBuilder
 from core.orchestration.models import IntentTask, TaskResult
 from core.orchestration.pipeline import MultiIntentPipeline
-from core.orchestration.validator import TaskValidator, supports_phase_one, supports_task_pipeline
+from core.orchestration.validator import TaskValidator, supports_task_pipeline
 
 
 QUERY = "我现在需要去南京出差，相关的差旅标准有什么，顺便给我查一下这两天南京的天气"
@@ -30,7 +30,6 @@ def test_phase_one_fallback_creates_scoped_queries():
     )
     tasks = TaskValidator().validate(raw, INTENTION)
 
-    assert supports_phase_one(INTENTION) is True
     assert supports_task_pipeline(INTENTION) is True
     assert [task.intent for task in tasks] == ["rag_knowledge", "information_query"]
     assert "南京" in tasks[0].query
@@ -48,6 +47,66 @@ def test_task_validator_rejects_cross_intent_query_scope():
 
     with pytest.raises(ValueError, match="forbidden scope"):
         TaskValidator().validate(raw, INTENTION)
+
+
+def test_validator_restores_declared_query_anchors_dropped_by_llm():
+    raw = [
+        {
+            "task_id": "policy_query", "intent": "rag_knowledge",
+            "query": "查询公司的差旅标准", "entities": {}, "depends_on": [],
+            "side_effect": False, "failure_policy": "continue", "display_order": 0,
+        },
+        {
+            "task_id": "weather_query", "intent": "information_query",
+            "query": "查询最近天气", "entities": {}, "depends_on": [],
+            "side_effect": False, "failure_policy": "continue", "display_order": 1,
+        },
+    ]
+
+    tasks = TaskValidator().validate(raw, INTENTION)
+    policy, weather = tasks
+
+    assert policy.entities["destination"] == "南京"
+    assert policy.query.startswith("南京 ")
+    assert "天气" not in policy.query
+    assert weather.entities["start_date"] == "这两天"
+    assert weather.query.startswith("南京 这两天 ")
+    assert "标准" not in weather.query
+
+
+@pytest.mark.parametrize(("destination", "date"), [
+    ("南京", "2026-08-10"),
+    ("东京", "2026-09-01"),
+    ("上海", "明天"),
+    ("成都", "下周一"),
+])
+def test_query_scope_and_entity_anchors_are_city_agnostic(destination, date):
+    intention = {
+        "intents": [
+            {"type": "rag_knowledge", "confidence": .9, "should_call_skill": True},
+            {"type": "information_query", "confidence": .9, "should_call_skill": True},
+        ],
+        "key_entities": {"destination": destination, "date": date},
+        "rewritten_query": f"去{destination}出差，查询天气和差旅标准",
+    }
+    raw = [
+        {
+            "task_id": "policy", "intent": "rag_knowledge",
+            "query": "查询差旅标准", "entities": {}, "depends_on": [],
+            "side_effect": False, "failure_policy": "continue", "display_order": 0,
+        },
+        {
+            "task_id": "weather", "intent": "information_query",
+            "query": "查询天气", "entities": {}, "depends_on": [],
+            "side_effect": False, "failure_policy": "continue", "display_order": 1,
+        },
+    ]
+
+    policy, weather = TaskValidator().validate(raw, intention)
+
+    assert destination in policy.query and "天气" not in policy.query
+    assert destination in weather.query and str(date) in weather.query
+    assert "标准" not in weather.query
 
 
 def test_task_validator_rejects_policy_scope_expansion():
@@ -138,9 +197,9 @@ def test_executor_runs_independent_tasks_concurrently():
         await asyncio.wait_for(both_started.wait(), timeout=0.3)
         return {"status": "success", "data": {"query": kwargs["context"]["rewritten_query"]}}
 
-    results, paused = asyncio.run(TaskExecutor(runner).execute(execution_tasks, {}))
+    results, pauses = asyncio.run(TaskExecutor(runner).execute(execution_tasks, {}))
 
-    assert paused is None
+    assert pauses == []
     assert [result.status for result in results] == ["success", "success"]
     assert results[0].data["query"] != results[1].data["query"]
 
@@ -197,11 +256,11 @@ def test_plan_trip_absorbs_overlapping_independent_intents():
     tasks = TaskValidator().validate(raw, plan_intention)
     execution_tasks = TaskGraphBuilder().compile(tasks)
 
-    # subsumption：plan-trip 吸收 rag/info，不重复执行
-    assert [task.agent_name for task in execution_tasks] == [
+    # 独立 Goal 保留所有权，同时作为 workflow 的显式依赖，不重复执行。
+    assert sorted(task.agent_name for task in execution_tasks) == sorted([
         "event_collection", "rag_knowledge", "information_query",
         "itinerary_planning", "trip_compliance",
-    ]
+    ])
     by_agent = {task.agent_name: task for task in execution_tasks}
     assert "标准" in by_agent["rag_knowledge"].query
     assert "天气" in by_agent["information_query"].query
@@ -243,6 +302,44 @@ def test_abort_halt_skips_downstream_steps():
     assert output.answer_document.sections[0].status == "error"
 
 
+def test_same_batch_double_abort_skips_both_goals_downstreams():
+    # P1-4：同一批内两个 goal 各自的 abort 步骤同时失败时，两侧下游都要标
+    # SKIPPED。旧实现 break 只处理批内第一个 abort 失败，第二个 goal 的下游
+    # 会带失败依赖继续执行（runner 断言兜底：任何本应跳过的步骤都不允许运行）。
+    plan_query = "检查南京出差行程是否合规，并规划行程"
+    intention = {
+        "intents": [
+            {"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True},
+            {"type": "trip_compliance", "confidence": 0.85, "should_call_skill": True},
+        ],
+        "key_entities": {"destination": "南京"},
+        "rewritten_query": plan_query,
+    }
+
+    async def runner(**kwargs):
+        agent = kwargs["agent_name"]
+        task_id = kwargs["task_params"]["task_id"]
+        if agent == "event_collection":
+            return {"status": "error", "data": {}, "error_code": "INTAKE_FAILED", "error_message": "采集失败"}
+        if agent == "rag_knowledge" and task_id.startswith("trip_compliance-"):
+            return {"status": "error", "data": {}, "error_code": "RAG_FAILED", "error_message": "政策查询失败"}
+        raise AssertionError(f"abort 后不应执行 {task_id}")
+
+    pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
+    output = asyncio.run(pipeline.run(plan_query, intention, {}))
+
+    by_id = {result.task_id: result for result in output.results}
+    # 两个 goal 各自的 abort 失败
+    assert by_id["itinerary_planning-event_collection"].status == "error"
+    assert by_id["trip_compliance-event_collection"].status == "error"
+    # 两侧下游全部 SKIPPED
+    assert by_id["itinerary_planning-itinerary_planning"].status == "skipped"
+    assert by_id["itinerary_planning-itinerary_planning"].error_code == "UPSTREAM_DEPENDENCY_FAILED"
+    assert by_id["itinerary_planning-trip_compliance"].status == "skipped"
+    assert by_id["trip_compliance-trip_compliance"].status == "skipped"
+    assert by_id["trip_compliance-trip_compliance"].error_code == "UPSTREAM_DEPENDENCY_FAILED"
+
+
 def test_pause_gate_halts_workflow_and_builds_intake_presentation():
     plan_query = "我明天去上海出差3天，帮我规划一下行程"
     plan_intention = {
@@ -279,7 +376,15 @@ def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
     events = []
 
     async def runner(**kwargs):
-        seen[kwargs["agent_name"]] = kwargs["context"]["rewritten_query"]
+        context = kwargs["context"]
+        seen[kwargs["agent_name"]] = {
+            key: context[key]
+            for key in ("original_query", "agent_query", "rewritten_query", "user_query")
+        }
+        assert set(seen[kwargs["agent_name"]].values()) == {
+            kwargs["context"]["active_task"]["query"]
+        }
+        assert context["request_original_query"] == QUERY
         if kwargs["agent_name"] == "rag_knowledge":
             return {
                 "status": "success",
@@ -305,9 +410,9 @@ def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
     pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
     output = asyncio.run(pipeline.run(QUERY, INTENTION, {}, progress))
 
-    assert "天气" not in seen["rag_knowledge"]
-    assert "天气" in seen["information_query"]
-    assert "标准" not in seen["information_query"]
+    assert "天气" not in seen["rag_knowledge"]["agent_query"]
+    assert "天气" in seen["information_query"]["agent_query"]
+    assert "标准" not in seen["information_query"]["agent_query"]
     assert [section.kind for section in output.answer_document.sections] == ["policy", "weather"]
     assert len(output.answer_document.sections[1].days) == 2
     assert "400元/晚" in output.answer_document.plain_text

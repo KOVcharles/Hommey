@@ -2,6 +2,7 @@ from pathlib import Path
 import importlib.util
 
 from agents.lazy_agent_registry import LazyAgentRegistry
+from agentscope.message import Msg
 
 
 def test_rag_knowledge_skill_is_registered():
@@ -15,6 +16,93 @@ def test_rag_knowledge_skill_has_agent_script():
     script_path = Path(".agents/skills/ask-question/script/agent.py")
 
     assert script_path.exists()
+
+
+def test_rag_agent_prefers_active_task_query_over_request_wide_query():
+    import json
+
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
+    spec = importlib.util.spec_from_file_location("rag_agent_test_module_scope", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    agent = object.__new__(module.RAGKnowledgeAgent)
+    message = Msg(
+        name="Orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {
+                "agent_query": "查南京天气，然后查询差旅标准并规划行程",
+                "active_task": {
+                    "query": "南京 查询公司的差旅标准",
+                },
+            },
+        }, ensure_ascii=False),
+    )
+
+    query = agent._extract_query(message)
+
+    assert query == "南京 查询公司的差旅标准"
+    assert "天气" not in query and "规划" not in query
+
+
+def test_rag_agent_expands_broad_standard_retrieval_without_weather_terms():
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
+    spec = importlib.util.spec_from_file_location("rag_agent_test_module_multi_query", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    class FakeRetriever:
+        top_k = 3
+
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query, top_k=None):
+            self.queries.append(query)
+            return [{"id": query, "content": query}]
+
+    agent = object.__new__(module.RAGKnowledgeAgent)
+    agent.retriever = FakeRetriever()
+
+    documents = agent._retrieve_for_question(
+        "南京 查询公司的差旅标准"
+    )
+
+    assert agent.retriever.queries[0] == "南京 差旅标准"
+    assert any("南京 出差 住宿标准" == query for query in agent.retriever.queries)
+    assert any("南京 出差 交通标准" == query for query in agent.retriever.queries)
+    assert any("南京 出差 餐饮补贴 报销标准" == query for query in agent.retriever.queries)
+    assert all("天气" not in query and "规划" not in query for query in agent.retriever.queries)
+    assert len(documents) == 4
+
+
+def test_rag_standard_expansion_is_destination_driven_not_domestic_hardcoded():
+    script_path = Path(".agents/skills/ask-question/script/agent.py")
+    spec = importlib.util.spec_from_file_location("rag_agent_test_module_tokyo", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    assert module.RAGKnowledgeAgent._leading_location("东京的差旅标准") == "东京"
+    assert module.RAGKnowledgeAgent._leading_location("东京 差旅标准") == "东京"
+    assert module.RAGKnowledgeAgent._leading_location("Tokyo 差旅标准") == "Tokyo"
+
+    class FakeRetriever:
+        top_k = 3
+
+        def __init__(self):
+            self.queries = []
+
+        def search(self, query, top_k=None):
+            self.queries.append(query)
+            return []
+
+    agent = object.__new__(module.RAGKnowledgeAgent)
+    agent.retriever = FakeRetriever()
+    agent._retrieve_for_question("查询东京的差旅标准")
+
+    assert "东京 出差 住宿标准" in agent.retriever.queries
+    assert "东京 出差 交通标准" in agent.retriever.queries
+    assert all("国内出差" not in query and "南京" not in query for query in agent.retriever.queries)
 
 
 def test_rag_agent_extracts_async_stream_text():

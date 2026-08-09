@@ -22,20 +22,12 @@ from core.intent_catalog import (
 from .models import IntentTask
 
 
-PHASE_ONE_INTENTS = frozenset({"rag_knowledge", "information_query"})
-
-
 def callable_intents(intention_data: Dict[str, Any]) -> List[str]:
     return [
         str(item.get("type"))
         for item in intention_data.get("intents", [])
         if item.get("type") and item.get("should_call_skill")
     ]
-
-
-def supports_phase_one(intention_data: Dict[str, Any]) -> bool:
-    """Legacy exact-set gate; replaced by ``supports_task_pipeline`` at stage 4."""
-    return set(callable_intents(intention_data)) == PHASE_ONE_INTENTS
 
 
 def supports_task_pipeline(intention_data: Dict[str, Any]) -> bool:
@@ -71,10 +63,15 @@ class TaskValidator:
         merged = self._merge_by_intent(parsed)
 
         original_query = str(intention_data.get("rewritten_query") or "")
+        recognized_entities = self._normalized_entities(
+            intention_data.get("key_entities") or {}
+        )
         by_intent: Dict[str, IntentTask] = {}
         for task in merged:
             if task.intent not in allowed:
                 raise ValueError(f"task intent was not authorized: {task.intent}")
+            task.entities = {**recognized_entities, **task.entities}
+            self._restore_query_anchors(task)
             self._check_scope(task, original_query)
             if task.side_effect and not side_effect_allowed(task.intent):
                 raise ValueError(f"side effect not allowed for intent: {task.intent}")
@@ -89,6 +86,41 @@ class TaskValidator:
             raise ValueError(f"decomposer omitted authorized intents: {sorted(missing)}")
 
         return sorted(merged, key=lambda task: task.display_order)
+
+    @staticmethod
+    def _normalized_entities(entities: Dict[str, Any]) -> Dict[str, Any]:
+        normalized = {
+            key: value for key, value in entities.items()
+            if value is not None and value != "" and value != []
+        }
+        aliases = {
+            "date": "start_date",
+            "trip_length": "duration",
+            "duration_days": "duration",
+            "trip_purpose": "purpose",
+        }
+        for source, target in aliases.items():
+            if source in normalized and target not in normalized:
+                normalized[target] = normalized[source]
+        return normalized
+
+    @staticmethod
+    def _restore_query_anchors(task: IntentTask) -> None:
+        """Restore user-provided entity anchors dropped by decomposition."""
+        definition = _definition_for_intent(task.intent)
+        scope = getattr(definition, "scope", None) if definition else None
+        fields = list(getattr(scope, "query_anchor_fields", []) or [])
+        anchors = []
+        for field in fields:
+            value = task.entities.get(field)
+            if value is None or value == "" or str(value) in task.query:
+                continue
+            # Natural-language anchors preserve both vector semantics and BM25
+            # token matching; field-label syntax can degrade matching against
+            # corpus text that contains only the location value.
+            anchors.append(str(value))
+        if anchors:
+            task.query = f"{' '.join(anchors)} {task.query}"
 
     @staticmethod
     def _merge_by_intent(parsed: List[IntentTask]) -> List[IntentTask]:

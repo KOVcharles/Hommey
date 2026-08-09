@@ -8,7 +8,7 @@ risk_level: medium
 catalog_order: 30
 side_effect_allowed: true
 progress_key: trip_planning
-checkpoint:
+pause:
   enabled: true
   pause_agent: event_collection
   pause_field: planning_ready

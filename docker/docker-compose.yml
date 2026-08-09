@@ -33,7 +33,10 @@ services:
       HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
       HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
       HOMMEY_UPLOADS_PATH: /app/data/uploads
-      UVICORN_WORKERS: ${UVICORN_WORKERS:-2}
+      # 当前 RAG 使用 Milvus Lite 单文件库，且 WebHommeyManager 的热实例为
+      # 进程内状态；两者都不支持多个 Uvicorn worker 共享同一运行时。若未来
+      # 切换到独立 Milvus 服务并外置实例状态，再显式恢复多 worker。
+      UVICORN_WORKERS: "1"
     volumes:
       - ../data/documents:/app/data/documents:ro
       - ../data/rag_knowledge:/app/data/rag_knowledge

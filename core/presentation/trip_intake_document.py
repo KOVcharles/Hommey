@@ -1,6 +1,7 @@
 """Structured presentation contract for incomplete business-trip intake."""
 from __future__ import annotations
 
+import re
 from typing import Any, Dict, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -187,3 +188,50 @@ def render_trip_intake_text(document: TripIntakeDocument) -> str:
     if document.suggested_reply:
         lines.append(f"可以直接回复：{document.suggested_reply}")
     return "\n".join(lines)
+
+
+_HISTORY_LABEL_KEYS = {
+    "出发地": "origin",
+    "目的地": "destination",
+    "出发日期": "start_date",
+    "行程时长": "duration_days",
+    "出差目的": "trip_purpose",
+    "客户或会议地点": "work_location",
+    "会面及工作时间": "work_schedule",
+}
+
+
+def recover_trip_intake_document(text: str) -> TripIntakeDocument | None:
+    """Recover only the stable intake text emitted before migration 0016."""
+    lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
+    if not lines or lines[0] not in {
+        "行程框架已保存", "有一项行程信息需要确认", "行程信息已齐全",
+    }:
+        return None
+
+    raw: Dict[str, Any] = {}
+    route = next((line for line in lines[1:3] if "→" in line), "")
+    if route:
+        origin, destination = (part.strip() for part in route.split("→", 1))
+        raw.update(origin=origin, destination=destination)
+
+    confirmed = next((line for line in lines if line.startswith("已确认：")), "")
+    parts = confirmed.removeprefix("已确认：").split("；") if confirmed else []
+    for part in parts:
+        label, separator, value = part.partition("：")
+        key = _HISTORY_LABEL_KEYS.get(label.strip())
+        value = value.strip()
+        if not separator or not key or not value:
+            continue
+        if key == "duration_days":
+            duration = re.search(r"(\d+)\s*天", value)
+            if duration:
+                raw[key] = int(duration.group(1))
+            elif "返程" in value:
+                raw["end_date"] = value.split()[0]
+        else:
+            raw[key] = value
+
+    if not raw.get("origin") and not raw.get("destination"):
+        return None
+    return build_trip_intake_document(raw)

@@ -5,6 +5,11 @@ from typing import List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+# 结构性上限（单一数据源）：fallback 渲染按 goal / 按行程天数产出分区，
+# 上限必须高于任何现实组合，否则长行程 / 多 goal 会把整条管线打崩。
+ANSWER_SECTION_CAP = 60
+ANSWER_SOURCE_CAP = 30
+
 
 class AnswerItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
@@ -28,6 +33,7 @@ class AnswerSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     kind: Literal["policy", "weather", "memory", "preference", "trip", "notice", "general"]
+    goal_id: str = Field(default="", max_length=64)
     title: str = Field(min_length=1, max_length=80)
     status: Literal["success", "partial", "error"] = "success"
     body: str = Field(default="", max_length=4000)
@@ -83,9 +89,9 @@ class AnswerDocument(BaseModel):
     version: Literal["1.0"] = "1.0"
     title: str = Field(min_length=1, max_length=100)
     summary: str = Field(default="", max_length=500)
-    sections: List[AnswerSection] = Field(min_length=1, max_length=12)
+    sections: List[AnswerSection] = Field(min_length=1, max_length=ANSWER_SECTION_CAP)
     notices: List[str] = Field(default_factory=list, max_length=10)
-    sources: List[AnswerSource] = Field(default_factory=list, max_length=30)
+    sources: List[AnswerSource] = Field(default_factory=list, max_length=ANSWER_SOURCE_CAP)
     pre_departure: PreDepartureChecklist | None = None
     plain_text: str = Field(default="", max_length=12000)
 

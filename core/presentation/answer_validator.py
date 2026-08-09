@@ -17,12 +17,18 @@ class AnswerDocumentValidator:
     def validate(self, document: AnswerDocument, results: Iterable[TaskResult]) -> None:
         result_list = list(results)
         kinds = {section.kind for section in document.sections}
+        goal_kinds = {
+            (section.goal_id, section.kind)
+            for section in document.sections if section.goal_id
+        }
         for result in result_list:
             if not require_section_for_intent(result.intent):
                 continue
             expected = section_kind_for_intent(result.intent)
             if expected and expected not in kinds:
                 raise ValueError(f"answer omitted task section: {result.task_id}")
+            if result.goal_id and (result.goal_id, expected) not in goal_kinds:
+                raise ValueError(f"answer omitted goal coverage: {result.goal_id}")
 
         source_text = json.dumps(
             [

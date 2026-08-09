@@ -97,6 +97,9 @@ CHITCHAT_EXACT: FrozenSet[str] = frozenset({
     "谢谢", "感谢", "多谢",
     "再见", "拜拜", "bye",
     "ok", "okay", "好的",
+    "哈哈", "呵呵", "没事", "没什么", "算了",
+    "回头见", "明天见", "下次见",
+    "thanks", "thank",
 })
 
 # 寒暄的子串关键词（较长输入的包含匹配）
@@ -113,9 +116,7 @@ def build_intent_prompt_section() -> str:
     for intent, info in SKILL_INTENTS.items():
         lines.append(f"- {intent}: {info['description']}")
     for intent, info in NON_SKILL_INTENTS.items():
-        lines.append(
-            f"- {intent}: {info['description']}（不调用 skill，agent_schedule 必须为空）"
-        )
+        lines.append(f"- {intent}: {info['description']}（should_call_skill 必须为 false）")
     return "\n".join(lines)
 
 
@@ -205,10 +206,10 @@ def updates_preferences_for_agent(agent_name: str) -> bool:
     return bool(definition and getattr(definition, "updates_preferences", False))
 
 
-def checkpoint_spec_for_intent(intent: str) -> Optional[object]:
-    """跨轮暂停声明（CheckpointSpec）；未声明返回 None。"""
+def pause_spec_for_intent(intent: str) -> Optional[object]:
+    """节点级等待用户输入声明；未声明返回 None。"""
     definition = _definition_for_intent(intent)
-    return getattr(definition, "checkpoint", None)
+    return getattr(definition, "pause", None)
 
 
 def memory_hooks_for_intent(intent: str) -> List[object]:
@@ -230,27 +231,6 @@ def result_rules_for_intent(intent: str) -> Dict[str, object]:
         rules = getattr(steps[0], "result_rules", None)
         return dict(rules) if rules else {}
     return {}
-
-
-def self_schedule_for_intent(
-    intent: str,
-    reason: str = "",
-    expected_output: str = "",
-) -> List[Dict[str, str]]:
-    """入口 agent 的 SELF 步骤调度（guard/router 高置信度短路结果的确定性 schedule）。
-
-    agent_name 一律取自目录（``agent_for_intent``），取代 guard/router 里
-    硬编码的 ``{"agent_name": ...}``。新增 skill 后这些模块无需改调度构造。
-    """
-    agent = agent_for_intent(intent)
-    if not agent:
-        return []
-    return [{
-        "agent_name": agent,
-        "priority": 1,
-        "reason": reason or "明确的高置信度请求",
-        "expected_output": expected_output or "完成用户请求",
-    }]
 
 
 def intent_api_payload() -> Dict[str, Dict[str, str]]:

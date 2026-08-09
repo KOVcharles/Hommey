@@ -7,6 +7,7 @@ import asyncio
 
 from core.orchestration.memory_hooks import MemoryHookExecutor
 from core.orchestration.models import TaskResult
+from core.orchestration.pipeline import MultiIntentPipeline
 
 
 class _FakeLongTerm:
@@ -176,3 +177,42 @@ def test_executor_without_memory_manager_is_noop():
     asyncio.run(executor.apply([
         _result("event_collection", "event_collection", {"destination": "上海"}),
     ]))  # 不抛异常即通过
+
+
+def test_hook_fires_on_pause_turn():
+    # P1-6：多 goal 一轮里兄弟 goal 暂停时，已 SUCCEEDED 的结果也必须回写记忆；
+    # 否则 resume 按 previous_ids 过滤后这些回写会被永久跳过。
+    plan_query = "帮我规划上海出差行程，顺便把住宿偏好设为如家"
+    plan_intention = {
+        "intents": [
+            {"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True},
+            {"type": "preference", "confidence": 0.88, "should_call_skill": True},
+        ],
+        "key_entities": {"destination": "上海"},
+        "rewritten_query": plan_query,
+    }
+
+    async def runner(**kwargs):
+        agent = kwargs["agent_name"]
+        if agent == "event_collection":
+            return {"status": "success", "data": {
+                "origin": "北京", "destination": "上海", "start_date": "2026-08-08",
+                "duration_days": 3, "trip_purpose": "客户拜访",
+                "missing_fields": ["duration"], "planning_ready": False,
+            }}
+        if agent == "preference":
+            return {"status": "success", "data": {
+                "preferences": [{"type": "hotel_brand", "value": "如家", "action": "replace"}],
+            }}
+        raise AssertionError(f"暂停轮不应执行 {agent}")
+
+    manager = _FakeMemoryManager()
+    pipeline = MultiIntentPipeline(
+        model=None, composer_model=None, agent_runner=runner,
+        memory_hooks=MemoryHookExecutor(manager),
+    )
+    output = asyncio.run(pipeline.run(plan_query, plan_intention, {}))
+
+    assert output.paused is True
+    # 暂停轮已 SUCCEEDED 的 preference 结果必须回写，而不是被跳过。
+    assert manager.long_term.preferences.get("hotel_brand") == "如家"

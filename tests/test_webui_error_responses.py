@@ -434,7 +434,6 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
     instance.memory_manager = Memory()
     instance.orchestrator = Orchestrator()
     instance.multi_intent_pipeline = FakePipeline()
-    instance.checkpoint_store = None
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
@@ -514,7 +513,6 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
     instance.memory_manager = Memory()
     instance.orchestrator = Orchestrator()
     instance.multi_intent_pipeline = FakePipeline()
-    instance.checkpoint_store = None
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
     monkeypatch.setattr(manager, "get", lambda _user_id: instance)
 
@@ -613,7 +611,6 @@ async def test_manager_orchestration_error_does_not_return_raw_exception(monkeyp
     instance.memory_manager = Memory()
     instance.orchestrator = Orchestrator()
     instance.multi_intent_pipeline = FakePipeline()
-    instance.checkpoint_store = None
     monkeypatch.setattr(instance, "_route_without_context", lambda _message: FastRoute())
 
     with pytest.raises(Exception) as exc_info:

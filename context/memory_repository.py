@@ -121,7 +121,8 @@ class PostgresMemoryRepository:
     """
     _MESSAGE_COLUMNS = """
         message_id, request_id, turn_id, session_id, user_id, sequence_no,
-        role, content, content_type, created_at
+        role, content, content_type, answer_document, presentation_document,
+        created_at
     """
 
     def __init__(self, pool, *, raw_message_retention_days: int = 14):
@@ -278,7 +279,11 @@ class PostgresMemoryRepository:
         content_type: str = "text",
         token_count: int | None = None,
         attachment_ids: Iterable[str] | None = None,
+        answer_document: dict[str, Any] | None = None,
+        presentation_document: dict[str, Any] | None = None,
     ) -> MessageRecord:
+        from psycopg.types.json import Jsonb
+
         sid = stable_uuid(session_id, namespace="session")
         rid = stable_uuid(request_id, namespace=f"request:{user_id}")
         tid = stable_uuid(turn_id, namespace=f"turn:{user_id}:{rid}") if turn_id else uuid.uuid5(
@@ -300,6 +305,26 @@ class PostgresMemoryRepository:
                     )
                     existing = cur.fetchone()
                     if existing:
+                        # A retry may be the first process that has the typed
+                        # payload (for example after a response disconnect).
+                        # Fill null metadata only; never mutate an established
+                        # idempotent response.
+                        if role == "assistant" and (answer_document or presentation_document):
+                            cur.execute(
+                                f"""
+                                UPDATE conversation_messages
+                                SET answer_document = COALESCE(answer_document, %s),
+                                    presentation_document = COALESCE(presentation_document, %s)
+                                WHERE message_id = %s
+                                RETURNING {self._MESSAGE_COLUMNS}
+                                """,
+                                (
+                                    Jsonb(answer_document) if answer_document else None,
+                                    Jsonb(presentation_document) if presentation_document else None,
+                                    existing["message_id"],
+                                ),
+                            )
+                            existing = cur.fetchone()
                         record = MessageRecord.from_row(existing, inserted=False)
                         if role == "user" and attachment_ids:
                             self._bind_ready_attachments(
@@ -328,9 +353,9 @@ class PostgresMemoryRepository:
                         INSERT INTO conversation_messages (
                             message_id, request_id, turn_id, session_id, user_id,
                             sequence_no, role, content, content_type, token_count,
-                            retention_until
+                            retention_until, answer_document, presentation_document
                         )
-                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
+                        VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)
                         RETURNING {self._MESSAGE_COLUMNS}
                         """,
                         (
@@ -345,6 +370,8 @@ class PostgresMemoryRepository:
                             content_type,
                             token_count,
                             retention_until,
+                            Jsonb(answer_document) if answer_document else None,
+                            Jsonb(presentation_document) if presentation_document else None,
                         ),
                     )
                     inserted = cur.fetchone()
@@ -480,10 +507,44 @@ class PostgresMemoryRepository:
                 "role": row["role"],
                 "content": row["content"],
                 "content_type": row["content_type"],
+                "answer_document": row.get("answer_document"),
+                "presentation_document": row.get("presentation_document"),
                 "timestamp": row["created_at"].isoformat(),
             }
             for row in rows
         ]
+
+    def update_message_documents(
+        self,
+        *,
+        user_id: str,
+        message_id: str | uuid.UUID,
+        answer_document: dict[str, Any] | None = None,
+        presentation_document: dict[str, Any] | None = None,
+    ) -> bool:
+        """Fill missing typed payloads while repairing pre-0016 history."""
+        if not answer_document and not presentation_document:
+            return False
+        from psycopg.types.json import Jsonb
+
+        mid = stable_uuid(message_id, namespace="message")
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    """
+                    UPDATE conversation_messages
+                    SET answer_document = COALESCE(answer_document, %s),
+                        presentation_document = COALESCE(presentation_document, %s)
+                    WHERE user_id = %s AND message_id = %s
+                    """,
+                    (
+                        Jsonb(answer_document) if answer_document else None,
+                        Jsonb(presentation_document) if presentation_document else None,
+                        user_id,
+                        mid,
+                    ),
+                )
+                return cur.rowcount > 0
 
     def get_message_version(self, user_id: str) -> int:
         with self.pool.connection() as conn:
@@ -726,6 +787,8 @@ class PostgresCompatibilityStore:
             content=content,
             request_id=request_id,
             turn_id=metadata.get("turn_id"),
+            answer_document=metadata.get("answer_document"),
+            presentation_document=metadata.get("presentation_document"),
         )
         return result.inserted
 

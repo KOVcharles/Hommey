@@ -26,7 +26,7 @@ from webui_new.core.errors import (
     request_id,
     stream_error_event,
 )
-from webui_new.schemas.requests import ChatRequest, SessionRenameRequest
+from webui_new.schemas.requests import ChatRequest, InterruptRequest, SessionRenameRequest
 
 logger = logging.getLogger(__name__)
 
@@ -123,6 +123,16 @@ def create_chat_router(manager):
             event_stream(),
             media_type="application/x-ndjson; charset=utf-8",
             headers={"Cache-Control": "no-cache"},
+        )
+
+    @router.post("/api/{user_id}/orchestration/interrupt")
+    async def interrupt_turn(
+        user_id: str,
+        data: InterruptRequest,
+        current_user: User = Depends(require_path_user),
+    ):
+        return await manager.interrupt_active_turn(
+            user_id, data.client_request_id, session_id=data.session_id,
         )
 
     @router.get("/api/{user_id}/sessions")

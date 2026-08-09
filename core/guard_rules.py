@@ -89,7 +89,7 @@ PREFERENCE_KEYWORDS: Tuple[str, ...] = (
 )
 TRIP_KEYWORDS: Tuple[str, ...] = (
     "帮我规划", "帮我安排", "规划行程", "安排行程", "规划路线", "出行方案",
-    "怎么走最好", "路线怎么走", "从",
+    "怎么走最好", "路线怎么走",
 )
 
 GIBBERISH_RE = re.compile(r"^[\W_]+$")

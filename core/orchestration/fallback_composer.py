@@ -17,6 +17,8 @@ from core.intent_catalog import (
     suppress_agents_for_intent,
 )
 from core.presentation import (
+    ANSWER_SECTION_CAP,
+    ANSWER_SOURCE_CAP,
     AnswerDocument,
     AnswerItem,
     AnswerSection,
@@ -44,6 +46,13 @@ _LABEL_BY_KIND = {
     "trip": "行程安排",
     "notice": "合规提示",
     "general": "处理结果",
+}
+
+_VERDICT_LABELS = {
+    "compliant": "符合制度要求",
+    "non_compliant": "存在不合规项",
+    "partial": "部分事项仍需核验",
+    "unknown": "制度证据不足，暂时无法确认合规性",
 }
 
 
@@ -94,14 +103,17 @@ class FallbackComposer:
             ),
             "本次出差",
         )
-        by_intent: Dict[str, List[TaskResult]] = {}
+        by_goal: Dict[str, List[TaskResult]] = {}
         for result in result_list:
-            by_intent.setdefault(result.intent, []).append(result)
+            by_goal.setdefault(result.goal_id or result.intent, []).append(result)
 
         sections: List[AnswerSection] = []
         notices: List[str] = []
         for task in sorted(task_list, key=lambda item: item.display_order):
-            primary = self._primary(by_intent.get(task.intent, []))
+            group = by_goal.get(task.task_id, [])
+            if not group:  # compatibility for non-durable unit results
+                group = by_goal.get(task.intent, [])
+            primary = self._primary(group)
             if primary is None:
                 continue  # 该意图结果全部被工作流 suppress，不单独成区。
             kind = section_kind_for_intent(task.intent) or "general"
@@ -109,25 +121,76 @@ class FallbackComposer:
                 label = _LABEL_BY_KIND.get(kind, "处理结果")
                 message = primary.error_message or f"{label}暂时查询失败，请稍后重试。"
                 sections.append(AnswerSection(kind=kind, title=label, status="error", body=message))
+                sections[-1].goal_id = task.task_id
                 notices.append(message)
                 continue
             built = self._render(kind, primary)
+            for section in built:
+                section.goal_id = task.task_id
             sections.extend(built)
-            notices.extend(self._secondary_notices(by_intent[task.intent], primary))
+            if kind == "trip":
+                notices.extend(self._trip_notices(primary))
+            notices.extend(self._secondary_notices(group, primary))
 
         if not sections:
             sections.append(AnswerSection(kind="general", title="处理结果", body="已整理完成。"))
+
+        sections = self._fit_section_cap(sections, notices)
 
         summary = self._summary(sections)
         document = AnswerDocument(
             title=f"{destination}差旅信息" if destination != "本次出差" else destination,
             summary=summary,
             sections=sections,
-            notices=list(dict.fromkeys(notice for notice in notices if notice)),
+            notices=list(dict.fromkeys(notice for notice in notices if notice))[:10],
             sources=self.sources(result_list),
         )
         document.plain_text = render_plain_text(document)
         return document
+
+    @staticmethod
+    def _fit_section_cap(
+        sections: List[AnswerSection], notices: List[str],
+    ) -> List[AnswerSection]:
+        """Never let a pathological section count crash AnswerDocument construction.
+
+        Over the cap, first fold excess per-day trip sections into their trip
+        overview section (``AnswerSection.items`` is unbounded, so this is
+        lossless — long itineraries still render, days merge into the overview).
+        Sections still over the cap afterwards (pathological multi-goal runs)
+        are dropped from the tail and surfaced as a notice.
+        """
+        if len(sections) <= ANSWER_SECTION_CAP:
+            return sections
+        trip_overview = next(
+            (
+                section for section in sections
+                if section.kind == "trip" and not section.title.startswith("第 ")
+            ),
+            None,
+        )
+        if trip_overview is not None:
+            merged = False
+            kept: List[AnswerSection] = []
+            for section in sections:
+                if (
+                    section is not trip_overview
+                    and section.kind == "trip"
+                    and section.title.startswith("第 ")
+                ):
+                    trip_overview.items.extend(section.items)
+                    merged = True
+                else:
+                    kept.append(section)
+            if merged:
+                notices.append("行程天数较多，逐日安排已合并到行程总览。")
+            sections = kept
+        if len(sections) > ANSWER_SECTION_CAP:
+            dropped = sections[ANSWER_SECTION_CAP:]
+            sections = sections[:ANSWER_SECTION_CAP]
+            notices.append(f"内容较多，仅展示前 {ANSWER_SECTION_CAP} 个部分，其余已省略。")
+            notices.extend(f"已省略：{section.title}" for section in dropped)
+        return sections
 
     @staticmethod
     def _primary(group: List[TaskResult]) -> TaskResult | None:
@@ -149,15 +212,30 @@ class FallbackComposer:
                 continue
             data = _nested(result.data)
             text = _clean(
-                data.get("verdict")
-                or data.get("summary")
+                data.get("summary")
                 or data.get("answer")
                 or data.get("message")
                 or data.get("conclusion")
+                or _VERDICT_LABELS.get(str(data.get("verdict") or "").lower())
                 or "",
                 800,
             )
             if text:
+                notices.append(text)
+        return notices
+
+    @staticmethod
+    def _trip_notices(result: TaskResult) -> List[str]:
+        """Expose useful itinerary notes without leaking machine sentinels."""
+        data = _nested(result.data)
+        itinerary = data.get("itinerary") if isinstance(data.get("itinerary"), dict) else data
+        raw_notes = itinerary.get("notes") or []
+        if isinstance(raw_notes, str):
+            raw_notes = [raw_notes]
+        notices = []
+        for value in raw_notes:
+            text = _clean(value, 800)
+            if text and text.lower() not in {"unknown", "none", "null", "n/a"}:
                 notices.append(text)
         return notices
 
@@ -308,15 +386,17 @@ class FallbackComposer:
     def _notice_section(result: TaskResult) -> AnswerSection:
         data = _nested(result.data)
         body = _clean(
-            data.get("verdict") or data.get("summary") or data.get("conclusion")
-            or data.get("answer") or "合规检查完成。"
+            data.get("summary") or data.get("conclusion") or data.get("answer")
+            or _VERDICT_LABELS.get(str(data.get("verdict") or "").lower())
+            or "合规检查完成。"
         )
         items = []
         for check in data.get("checks") or []:
             if not isinstance(check, dict):
                 continue
             label = _clean(check.get("item") or check.get("rule") or check.get("label") or "检查项", 60)
-            status = _clean(check.get("status") or "", 60)
+            raw_status = str(check.get("status") or "").lower()
+            status = _clean(_VERDICT_LABELS.get(raw_status) or raw_status, 60)
             detail = _clean(check.get("detail") or check.get("message") or "", 600)
             if not status and not detail:
                 continue
@@ -371,4 +451,4 @@ class FallbackComposer:
                     if section_kind_for_intent(result.intent) == "weather"
                     else "",
                 ))
-        return sources
+        return sources[:ANSWER_SOURCE_CAP]

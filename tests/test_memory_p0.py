@@ -87,7 +87,6 @@ async def test_intention_prompt_keeps_stored_instructions_inside_untrusted_bound
                 }],
                 "key_entities": {},
                 "rewritten_query": "查询之前的上海行程",
-                "agent_schedule": [],
             },
             ensure_ascii=False,
         )

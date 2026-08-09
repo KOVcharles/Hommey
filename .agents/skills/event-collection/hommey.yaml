@@ -7,8 +7,6 @@ user_facing: true
 risk_level: low
 catalog_order: 20
 progress_key: trip_details_collecting
-checkpoint:
-  enabled: false
 answer:
   section_kind: trip
   require_section: false

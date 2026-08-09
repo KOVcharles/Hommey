@@ -1,25 +1,20 @@
 """Fast rule-based intent routing before LLM intent recognition.
 
 router 只在高置信度、可证明无歧义时短路（LLM 主导识别）：关键词表作为数据来自
-core/guard_rules.py，单意图 schedule 一律取自 intent_catalog 的入口 agent。
+core/guard_rules.py。这里只识别和授权意图，不生成可执行计划。
 """
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
-from core.schedule_builder import build_agent_schedule
 from core.intent_guard import (
     GuardResult,
     can_call_information_query,
     guard_user_input,
     has_business_travel_context,
+    is_pure_chitchat,
     passes_confidence_gate,
-)
-from core.intent_catalog import (
-    CHITCHAT_EXACT,
-    CHITCHAT_KEYWORDS,
-    self_schedule_for_intent,
 )
 from core.guard_rules import (
     COMPLIANCE_KEYWORDS,
@@ -44,11 +39,17 @@ class IntentCandidate:
 @dataclass(frozen=True)
 class IntentRoute:
     intent_type: str
-    agent_schedule: List[Dict[str, Any]]
     confidence: float
     reason: str
     key_entities: Dict[str, Any]
     should_call_skill: bool = True
+    # Keep all authorized candidates so callers can distinguish a genuinely
+    # single fast route from a multi-intent request without inspecting a plan.
+    intent_types: Tuple[str, ...] = ()
+    # Fast routing is an optimization, not an authority boundary.  Callers may
+    # bypass full recognition only when this flag proves the query is a complete
+    # single-intent request rather than one recognized clause of a mixed ask.
+    safe_to_short_circuit: bool = False
 
     def to_intention_data(self, user_query: str) -> Dict[str, Any]:
         return {
@@ -70,8 +71,17 @@ class IntentRoute:
             ],
             "key_entities": self.key_entities,
             "rewritten_query": user_query,
-            "agent_schedule": self.agent_schedule if self.should_call_skill else [],
         }
+
+
+def message_for_non_skill_intent(intent: str) -> str:
+    """Default response for a recognized intent that cannot call a skill."""
+    if intent == "unsupported":
+        return (
+            "这个问题不属于公司差旅规划或报销范围，我暂时无法处理。"
+            "我可以帮你查询差旅政策、规划出差路线，或准备报销材料。"
+        )
+    return "我还不太确定这是否与公司差旅有关。请补充出差目的地、日期，或说明要查询的政策和报销问题。"
 
 
 class FastIntentRouter:
@@ -80,7 +90,6 @@ class FastIntentRouter:
     @classmethod
     def route(cls, user_query: str) -> Optional[IntentRoute]:
         q = (user_query or "").strip()
-        q_lower = q.lower()
         if not q:
             return None
 
@@ -88,7 +97,7 @@ class FastIntentRouter:
         if guard_result:
             return cls._from_guard_result(guard_result)
 
-        if q_lower in CHITCHAT_EXACT or q in CHITCHAT_EXACT or any(keyword in q for keyword in CHITCHAT_KEYWORDS):
+        if is_pure_chitchat(q):
             return cls._single("chitchat", 0.99, "明确的寒暄或社交对话")
 
         candidates = cls.detect(q)
@@ -110,8 +119,11 @@ class FastIntentRouter:
                 confidence=primary["confidence"],
                 reason=primary["reason"],
                 key_entities={},
-                agent_schedule=build_agent_schedule(callable_intents),
                 should_call_skill=bool(callable_intents),
+                intent_types=tuple(item["type"] for item in callable_intents),
+                safe_to_short_circuit=(
+                    len(callable_intents) == 1 and not cls._potentially_composite(q)
+                ),
             )
 
         return None
@@ -169,7 +181,8 @@ class FastIntentRouter:
             confidence=confidence,
             reason=reason,
             key_entities={},
-            agent_schedule=self_schedule_for_intent(intent_type, reason, "完成用户请求"),
+            intent_types=(intent_type,),
+            safe_to_short_circuit=True,
         )
 
     @classmethod
@@ -179,9 +192,19 @@ class FastIntentRouter:
             confidence=result.confidence,
             reason=result.reason,
             key_entities={},
-            agent_schedule=result.agent_schedule,
             should_call_skill=result.should_call_skill and passes_confidence_gate(result.intent, result.confidence),
+            intent_types=(result.intent,) if result.should_call_skill else (),
+            safe_to_short_circuit=True,
         )
+
+    @staticmethod
+    def _potentially_composite(query: str) -> bool:
+        """Conservatively reject fast-pathing when the wording joins clauses."""
+        connectors = (
+            "然后", "顺便", "同时", "以及", "并且", "另外", "还要", "还想",
+            "再帮", "除此之外", "一并", "分别", "又", "并",
+        )
+        return any(term in (query or "") for term in connectors)
 
     @classmethod
     def _dedupe_candidates(cls, candidates: List[IntentCandidate]) -> List[IntentCandidate]:
@@ -200,8 +223,13 @@ class FastIntentRouter:
     def _looks_like_trip_request(cls, query: str) -> bool:
         if not has_business_travel_context(query):
             return False
-        if any(keyword in query for keyword in TRIP_KEYWORDS):
+        explicit_plan = any(keyword in query for keyword in TRIP_KEYWORDS) or (
+            "计划" in query and any(keyword in query for keyword in ("出差", "差旅", "去", "前往"))
+        )
+        if explicit_plan:
             if "从" in query and ("到" in query or "去" in query):
                 return True
-            return any(keyword in query for keyword in ("去", "规划", "安排", "行程", "路线", "出差", "差旅"))
+            return any(keyword in query for keyword in (
+                "去", "规划", "安排", "计划", "行程", "路线", "出差", "差旅",
+            ))
         return False

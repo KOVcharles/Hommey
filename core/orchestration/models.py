@@ -12,6 +12,7 @@ class IntentTask(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,63}$")
+    group_id: str = Field(default="", max_length=80)
     intent: str = Field(min_length=1, max_length=64)
     query: str = Field(min_length=1, max_length=600)
     entities: Dict[str, Any] = Field(default_factory=dict)
@@ -29,7 +30,9 @@ class ExecutionTask(IntentTask):
     template, so one IntentTask can produce multiple ExecutionTasks.
     """
 
+    task_id: str = Field(pattern=r"^[a-z][a-z0-9_-]{2,159}$")
     agent_name: str = Field(min_length=1, max_length=64)
+    goal_id: str = Field(default="", max_length=64)
     priority: int = Field(default=1, ge=1)
     reason: str = ""
     expected_output: str = ""
@@ -44,6 +47,7 @@ class TaskResult(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     task_id: str
+    goal_id: str = ""
     intent: str
     agent_name: str
     status: Literal["success", "error", "skipped"]
@@ -53,6 +57,7 @@ class TaskResult(BaseModel):
     attempts: int = 1
     error_code: str | None = None
     error_message: str | None = None
+    operation_id: str | None = None
     display_order: int = 0
 
 
@@ -62,6 +67,8 @@ class PauseInfo(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     intent: str
+    goal_id: str = ""
+    node_id: str = ""
     skill: str
     pause_agent: str
     pause_field: str = "planning_ready"
@@ -96,5 +103,7 @@ class PipelineOutput(BaseModel):
     results: List[TaskResult] = Field(default_factory=list)
     answer_document: Optional[Any] = None
     paused: bool = False
+    interrupted: bool = False
     pause_info: Optional[PauseInfo] = None
+    pause_infos: List[PauseInfo] = Field(default_factory=list)
     presentation_document: Optional[Any] = None

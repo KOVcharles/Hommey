@@ -1,0 +1,485 @@
+<title>Hommey 意图识别框架评估报告</title>
+<style>
+  :root{
+    --bg:#F4F6F8; --panel:#FFFFFF; --raised:#EEF2F6; --line:#DDE4EB; --line-strong:#C6D0DC;
+    --text:#1B2430; --muted:#5C6B7D; --faint:#8493A5;
+    --accent:#147D6F; --accent-soft:rgba(20,125,111,.10);
+    --p1:#C23A2A; --p1-soft:rgba(194,58,42,.09);
+    --p2:#A96B12; --p2-soft:rgba(169,107,18,.10);
+    --p3:#8F7A18; --p3-soft:rgba(143,122,24,.10);
+    --mono:ui-monospace,"SF Mono","JetBrains Mono","Cascadia Code",Consolas,"Liberation Mono",monospace;
+    --sans:system-ui,-apple-system,"Segoe UI",Roboto,"PingFang SC","Hiragino Sans GB","Microsoft YaHei","Noto Sans CJK SC",sans-serif;
+  }
+  @media (prefers-color-scheme: dark){
+    :root:not([data-theme="light"]){
+      --bg:#0C1016; --panel:#141B26; --raised:#1A2331; --line:#24303F; --line-strong:#33415A;
+      --text:#E9EDF3; --muted:#96A4B6; --faint:#6B7A8C;
+      --accent:#5CC9B8; --accent-soft:rgba(92,201,184,.12);
+      --p1:#EF6B5B; --p1-soft:rgba(239,107,91,.12);
+      --p2:#E8A452; --p2-soft:rgba(232,164,82,.12);
+      --p3:#D7C06A; --p3-soft:rgba(215,192,106,.12);
+    }
+  }
+  :root[data-theme="dark"]{
+    --bg:#0C1016; --panel:#141B26; --raised:#1A2331; --line:#24303F; --line-strong:#33415A;
+    --text:#E9EDF3; --muted:#96A4B6; --faint:#6B7A8C;
+    --accent:#5CC9B8; --accent-soft:rgba(92,201,184,.12);
+    --p1:#EF6B5B; --p1-soft:rgba(239,107,91,.12);
+    --p2:#E8A452; --p2-soft:rgba(232,164,82,.12);
+    --p3:#D7C06A; --p3-soft:rgba(215,192,106,.12);
+  }
+  *{box-sizing:border-box}
+  html{scroll-behavior:smooth}
+  body{
+    margin:0; background:var(--bg); color:var(--text);
+    font-family:var(--sans); font-size:15px; line-height:1.72;
+    -webkit-font-smoothing:antialiased; text-rendering:optimizeLegibility;
+  }
+  ::selection{background:var(--accent-soft)}
+  .wrap{max-width:1020px; margin:0 auto; padding:56px 28px 96px}
+  code,.mono,.loc,.tag,.eyebrow{font-family:var(--mono); font-variant-numeric:tabular-nums}
+
+  /* ── masthead ── */
+  .masthead{border-bottom:1px solid var(--line); padding-bottom:36px; margin-bottom:44px}
+  .eyebrow{
+    font-size:11.5px; letter-spacing:.22em; text-transform:uppercase;
+    color:var(--accent); font-weight:600; margin:0 0 18px;
+  }
+  h1{
+    font-size:clamp(28px,4.6vw,40px); line-height:1.15; margin:0 0 18px;
+    font-weight:750; letter-spacing:-.01em; text-wrap:balance;
+  }
+  .sub{color:var(--muted); font-size:15.5px; max-width:64ch; margin:0 0 28px}
+  .meta{display:flex; flex-wrap:wrap; gap:8px 22px; color:var(--faint); font-size:12.5px}
+  .meta b{color:var(--text); font-weight:600}
+  .meta .mono{font-size:12px}
+
+  /* ── verdict band ── */
+  .verdict{display:grid; grid-template-columns:repeat(4,1fr); gap:14px; margin-bottom:56px}
+  .stat{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px}
+  .stat .n{font-family:var(--mono); font-size:30px; font-weight:700; line-height:1; letter-spacing:-.02em}
+  .stat .l{color:var(--muted); font-size:12.5px; margin-top:8px; line-height:1.5}
+  .n.p1{color:var(--p1)} .n.p2{color:var(--p2)} .n.p3{color:var(--p3)} .n.ok{color:var(--accent)}
+  .sevbar{grid-column:1/-1; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:16px 20px}
+  .sevbar .row{display:flex; height:9px; border-radius:6px; overflow:hidden; margin-bottom:12px; background:var(--raised)}
+  .sevbar .row i{display:block; height:100%}
+  .sevbar .key{display:flex; gap:20px; font-size:12.5px; color:var(--muted)}
+  .sevbar .key .dot{display:inline-block; width:9px; height:9px; border-radius:2px; margin-right:7px; vertical-align:1px}
+
+  /* ── section heads ── */
+  section{margin-bottom:64px}
+  .secno{
+    font-family:var(--mono); font-size:12px; letter-spacing:.18em; color:var(--accent);
+    margin:0 0 10px; font-weight:600;
+  }
+  h2{font-size:23px; font-weight:700; letter-spacing:-.01em; margin:0 0 8px; text-wrap:balance}
+  .secsub{color:var(--muted); font-size:14px; margin:0 0 26px; max-width:72ch}
+
+  /* ── terminal / pre ── */
+  .term{
+    background:#0A0E14; border:1px solid #26313F; border-radius:12px; overflow:hidden;
+  }
+  .term .bar{display:flex; align-items:center; gap:8px; padding:10px 16px; background:#0E141C; border-bottom:1px solid #1C2633}
+  .term .bar i{width:10px; height:10px; border-radius:50%; display:block}
+  .term .bar i:nth-child(1){background:#F06A5A} .term .bar i:nth-child(2){background:#E8A452} .term .bar i:nth-child(3){background:#5CC9B8}
+  .term .bar span{margin-left:8px; font-family:var(--mono); font-size:11.5px; color:#5E6F84; letter-spacing:.06em}
+  .term pre{
+    margin:0; padding:22px 24px; overflow-x:auto; font-family:var(--mono);
+    font-size:12.5px; line-height:1.62; color:#C6D2E0; white-space:pre;
+  }
+  .term pre .k{color:#5CC9B8} .term pre .c{color:#5E7C93} .term pre .b{color:#E9EDF3; font-weight:600}
+
+  /* ── ordered chain ── */
+  .chain{list-style:none; margin:0; padding:0; counter-reset:ch}
+  .chain li{
+    counter-increment:ch; position:relative; padding:0 0 0 52px; margin-bottom:16px;
+  }
+  .chain li::before{
+    content:counter(ch,decimal-leading-zero);
+    position:absolute; left:0; top:1px; width:34px; height:34px; border-radius:9px;
+    background:var(--accent-soft); color:var(--accent); font-family:var(--mono);
+    font-size:12.5px; font-weight:700; display:flex; align-items:center; justify-content:center;
+    border:1px solid color-mix(in srgb,var(--accent) 30%,transparent);
+  }
+  .chain li:not(:last-child)::after{
+    content:""; position:absolute; left:16.5px; top:44px; bottom:-18px; width:1px; background:var(--line-strong);
+  }
+  .chain li b{font-weight:650}
+  .chain li .c{color:var(--muted)}
+
+  /* ── design points ── */
+  .points{display:grid; grid-template-columns:repeat(2,1fr); gap:14px}
+  .point{background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 20px}
+  .point .t{font-weight:650; margin-bottom:6px; display:flex; gap:9px; align-items:baseline}
+  .point .t .tag{font-size:10.5px; color:var(--accent); letter-spacing:.06em; font-weight:600}
+  .point p{margin:0; color:var(--muted); font-size:13.5px; line-height:1.65}
+
+  /* ── finding cards ── */
+  .sevhead{display:flex; align-items:center; gap:14px; margin:0 0 6px}
+  .sevhead .pill{font-family:var(--mono); font-size:12.5px; font-weight:700; padding:5px 13px; border-radius:999px; letter-spacing:.04em}
+  .sevhead .pill.p1{background:var(--p1-soft); color:var(--p1)} .sevhead .pill.p1{--pill-c:var(--p1)}
+  .sevhead .pill.p2{background:var(--p2-soft); color:var(--p2)}
+  .sevhead .pill.p3{background:var(--p3-soft); color:var(--p3)}
+  .sevhead .desc{color:var(--muted); font-size:13px}
+  .fgroup{display:flex; flex-direction:column; gap:10px; margin-bottom:34px}
+  .finding{position:relative; background:var(--panel); border:1px solid var(--line); border-radius:12px; padding:18px 22px 18px 26px; overflow:hidden}
+  .finding::before{content:""; position:absolute; left:0; top:0; bottom:0; width:4px}
+  .finding.f-p1::before{background:var(--p1)} .finding.f-p2::before{background:var(--p2)} .finding.f-p3::before{background:var(--p3)}
+  .finding .h{display:flex; flex-wrap:wrap; align-items:baseline; gap:10px 14px; margin-bottom:8px}
+  .finding .id{font-family:var(--mono); font-size:12.5px; font-weight:700; color:var(--text)}
+  .finding .loc{font-size:11.5px; color:var(--faint); background:var(--raised); border:1px solid var(--line); border-radius:6px; padding:2px 8px}
+  .finding .ver{font-family:var(--mono); font-size:10.5px; color:var(--accent); letter-spacing:.04em; font-weight:600; margin-left:auto}
+  .finding .ver.mine{color:var(--muted)}
+  .finding p{margin:0; font-size:14px; line-height:1.7; color:var(--text)}
+  .finding p .em{color:var(--text); font-weight:600}
+  .finding p .m{color:var(--muted)}
+
+  /* refuted card */
+  .finding.refuted{opacity:.72}
+  .finding.refuted::before{background:var(--faint)}
+  .finding.refuted .ver{color:var(--faint)}
+  .finding.refuted p{color:var(--muted)}
+
+  /* ── root causes ── */
+  .cause{display:flex; gap:16px; padding:16px 0; border-bottom:1px solid var(--line)}
+  .cause:last-child{border-bottom:none}
+  .cause .tag{font-family:var(--mono); font-size:12px; font-weight:700; color:var(--accent); padding-top:3px; flex-shrink:0}
+  .cause b{font-weight:650}
+  .cause p{margin:2px 0 0; color:var(--muted); font-size:13.5px; line-height:1.68}
+
+  /* ── fix table ── */
+  .tbl{width:100%; border-collapse:collapse; font-size:13.5px}
+  .tbl th{text-align:left; font-size:11.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--faint); font-weight:600; padding:10px 14px; border-bottom:1px solid var(--line-strong)}
+  .tbl td{padding:13px 14px; border-bottom:1px solid var(--line); vertical-align:top; line-height:1.6}
+  .tbl tr:last-child td{border-bottom:none}
+  .tbl .pri{font-family:var(--mono); font-weight:700; font-size:12.5px; white-space:nowrap}
+  .pri.p0{color:var(--p1)} .pri.p1{color:var(--p2)} .pri.p2{color:var(--p3)}
+  .tbl .loc{font-size:11.5px; white-space:nowrap}
+  .tbl td.w{min-width:340px}
+
+  /* ── test gaps ── */
+  .gaps{display:grid; grid-template-columns:repeat(2,1fr); gap:10px}
+  .gap{display:flex; gap:10px; align-items:flex-start; background:var(--panel); border:1px solid var(--line); border-radius:10px; padding:13px 16px; font-size:13.5px; color:var(--muted)}
+  .gap .x{font-family:var(--mono); color:var(--p1); font-weight:700; flex-shrink:0}
+  .gap .ok .x{color:var(--accent)}
+  .gap b{color:var(--text); font-weight:600}
+
+  /* ── footer ── */
+  footer{margin-top:72px; padding-top:28px; border-top:1px solid var(--line); color:var(--faint); font-size:12.5px; line-height:1.8}
+  footer b{color:var(--muted); font-weight:600}
+
+  @media (max-width:760px){
+    .wrap{padding:40px 18px 80px}
+    .verdict{grid-template-columns:repeat(2,1fr)}
+    .points{grid-template-columns:1fr}
+    .gaps{grid-template-columns:1fr}
+    h1{font-size:28px}
+  }
+  @media (prefers-reduced-motion:reduce){
+    *{transition:none!important; animation:none!important}
+  }
+</style>
+
+<header class="masthead">
+  <p class="eyebrow">Hommey · Intent-Recognition Framework · Audit</p>
+  <h1>意图识别框架评估报告</h1>
+  <p class="sub">对整个意图识别管线做逐行审读 + 多智能体对抗验证：三层识别（guard → 快路由 → LLM）→ 多意图 DAG 编排 → 答案组合与接地校验。本报告给出完整工作流，以及按严重度排序的已确认缺陷与修复优先级。</p>
+  <div class="meta">
+    <span>方法 <b>ultracode 多智能体审计</b></span>
+    <span>智能体 <b class="mono">32</b></span>
+    <span>subagent tokens <b class="mono">≈200 万</b></span>
+    <span>失败 <b class="mono">0</b></span>
+    <span>基线测试 <b class="mono">120 passed · 1 skipped</b></span>
+  </div>
+</header>
+
+<div class="verdict">
+  <div class="stat">
+    <div class="n ok">23</div>
+    <div class="l">对抗验证 <b>CONFIRMED</b>（含 chitchat 重复确认，去重后 22 个独立发现）</div>
+  </div>
+  <div class="stat">
+    <div class="n ok">+5</div>
+    <div class="l">本人逐行审读补充（工作流未覆盖：ELE 吞没、mcp-tool 开关、文件后端损坏等）</div>
+  </div>
+  <div class="stat">
+    <div class="n ok">=23</div>
+    <div class="l">报告独立缺陷（已去重合并同类项），全部 22 个工作流发现被采纳</div>
+  </div>
+  <div class="stat">
+    <div class="n p3">1</div>
+    <div class="l">经对抗验证<b>被推翻</b>（state_store 文件后端锁竞态 → 生产不可达）</div>
+  </div>
+  <div class="sevbar">
+    <div class="row">
+      <i style="width:26.1%; background:var(--p1)"></i>
+      <i style="width:26.1%; background:var(--p2)"></i>
+      <i style="width:47.8%; background:var(--p3)"></i>
+    </div>
+    <div class="key">
+      <span><i class="dot" style="background:var(--p1)"></i>P1 功能错乱 · 6</span>
+      <span><i class="dot" style="background:var(--p2)"></i>P2 错误行为可触发 · 6</span>
+      <span><i class="dot" style="background:var(--p3)"></i>P3 边缘 / 一致性 · 11</span>
+    </div>
+  </div>
+</div>
+
+<section>
+  <p class="secno">01</p>
+  <h2>整体工作流：从请求到回答</h2>
+  <p class="secsub">下图是完整管线（来自路由映射智能体的产物，已与代码逐行核对）。深色块为真正的「识别」环节，其余为识别结果的下游消费。</p>
+  <div class="term">
+    <div class="bar"><i></i><i></i><i></i><span>manager.process_message → pipeline.run</span></div>
+    <pre>用户消息
+  │  POST /api/{user_id}/chat 或 /chat/stream (NDJSON)
+  ▼
+<b class="b">webui_new/manager.py</b> process_message
+  │  1. 归一化输入（_normalize_input；附件走 attachment_service，fail-closed）
+  │  2. 加载当前 Run 状态（state_store.get_active）→ 孤儿 ACTIVE Run 恢复
+  │  3. TurnResolver.resolve(message, active_run) → new_goal / resume / slot
+  │  4. 预识别短路：_is_simple_chitchat（闲聊直接返回，不进 LLM）
+  │  5. 快路由：FastIntentRouter.route（仅无附件且无活动 Run 时）
+  ▼
+<span class="k">┌──────────── 意图识别三层 ─────────────┐</span>
+<span class="k">│ 1.</span> core/intent_guard.py  guard_user_input()<span class="c">  确定性安全网：unclear / chitchat / unsupported 精确短路（keyword 精确匹配，非子串）；否则返回 None → 交给 LLM。</span>
+<span class="k">│ 2.</span> core/intent_router.py FastIntentRouter.route()/detect()<span class="c">  无历史时的廉价快路由：chitchat 精确/关键词匹配；detect() 收集规则候选（policy / weather / search / compliance / memory / preference / trip），逐候选过 passes_confidence_gate；仅当恰好 1 个可调用意图且无复合连接词时 safe_to_short_circuit=True（绕过 LLM）。</span>
+<span class="k">│ 3.</span> agents/intention_agent.py IntentionAgent.reply()<span class="c">  LLM 完整意图分类 + 查询改写 + key_entities；输出经 _apply_routing_guard 合并快路由候选作完整性护栏；_should_call_intent 做调用授权（chitchat 限幅 / information_query 严格门 / 其余需差旅上下文 + 置信度门）。</span>
+<span class="k">└──────────────────────────────────────┘</span>
+  ▼  intention_data { intents[], key_entities, rewritten_query }
+<b class="b">MultiIntentPipeline.run()</b>
+  │  1. decompose   TaskDecomposer  LLM 语义任务分解（仅 JSON，无 agent）
+  │  2. validate    TaskValidator   意图级授权、按意图去重、scope 检查、side-effect 声明、依赖无环
+  │  3. compile     TaskGraphBuilder 展开执行模板、standalone 替换、拓扑分批（Kahn）
+  │  4. execute     TaskExecutor   并发执行拓扑批、中断轮询、pause 冻结、abort 传播
+  │  5. compose     AnswerComposer LLM 答案编辑 + AnswerDocumentValidator 接地校验 → FallbackComposer 兜底
+  ▼
+<b class="b">AnswerDocument</b>（结构化答案卡片）→ manager 渲染 / 流式 NDJSON 返回
+
+持久化：OrchestrationStateStore（PG JSONB 或文件回退）
+  Run / Turn / Goal / Node 全量快照；每次生命周期边界 read-modify-write；
+  request_id 幂等去重；30 天保留（WAITING / INTERRUPTED）· 90 天（COMPLETED）</pre>
+  </div>
+</section>
+
+<section>
+  <p class="secno">02</p>
+  <h2>管线内部精确变换链</h2>
+  <p class="secsub">每个环节的职责与代码一一对应 —— 评估工作流时逐环节核过，以下顺序即真实执行顺序。</p>
+  <ol class="chain">
+    <li><b>归一化</b> — <span class="c">_normalize_input 去空白，产出 agent_query（喂模型）/ display_message（展示）；附件 fail-closed。</span></li>
+    <li><b>恢复孤儿 Run</b> — <span class="c">get_active 发现 ACTIVE 但 current_request_id ≠ 本次 request_id → recover_orphaned_active_run 标 INTERRUPTED 转可恢复（持 per-user 锁）。</span></li>
+    <li><b>回合分类</b> — <span class="c">TurnResolver.resolve：显式「继续」→ resume；WAITING_USER 下按 new-goal 标记 / 未激活意图 / 槽位更新三态分类；INTERRUPTED 下按同意图 / 任务修订 / 新目标分类。</span></li>
+    <li><b>意图识别</b> — <span class="c">非 resume：guard →（无历史）快路由 → LLM 分类 → _apply_routing_guard 合并快路由候选 + _should_call_intent 重算授权 → 选 primary。</span></li>
+    <li><b>进入编排的闸门</b> — <span class="c">supports_task_pipeline：恰有一个可调用意图且全部可调用意图都是 skill-backed → 才进编排；否则走澄清 / chitchat 分支。</span></li>
+    <li><b>分解</b> — <span class="c">TaskDecomposer.decompose → LLM 语义任务字典；除 ExecutionLimitExceeded 外的失败 → 正则 fallback（每意图一任务）。</span></li>
+    <li><b>校验</b> — <span class="c">TaskValidator.validate → pydantic 强类型、按意图去重、越权 / scope / 自依赖 / 环 / 遗漏全拒；ValueError → pipeline 用 fallback 重试一次，二次失败才向上抛。</span></li>
+    <li><b>编译</b> — <span class="c">TaskGraphBuilder.compile → 每 IntentTask 展开为多步 ExecutionTask（{intent}-{agent_name}，goal_id = IntentTask.task_id），依赖边 + Kahn 拓扑分批。</span></li>
+    <li><b>持久化</b> — <span class="c">state_store.create_run / add_goals → 全量快照 + graph_hash；追加 goal 时 _namespace_new_goals 重命名保 Goal 身份。</span></li>
+    <li><b>执行</b> — <span class="c">TaskExecutor.execute → 每批并发 _run_one（含中断轮询 + result_rules + abort 传播 + pause 冻结）。</span></li>
+    <li><b>组合</b> — <span class="c">AnswerComposer.compose → LLM 组装 + AnswerDocumentValidator 接地 → 失败 FallbackComposer。</span></li>
+    <li><b>记忆回写</b> — <span class="c">MemoryHookExecutor.apply → 仅 status=success 触发的声明式 memory_hooks（per-hook try/except 吞错）。</span></li>
+    <li><b>终态</b> — <span class="c">lifecycle.mark_completed / mark_waiting / mark_interrupted → Run 终态 + 保留期。</span></li>
+    <li><b>恢复</b> — <span class="c">resume 路径：start_turn（focused WAITING goal 或全部 INTERRUPTED goal）→ 从快照重建任务 → 合并已提交节点结果回 entities → 重编译并要求 graph_hash 一致（否则 RuntimeError）→ 重执行。</span></li>
+  </ol>
+</section>
+
+<section>
+  <p class="secno">03</p>
+  <h2>关键设计点</h2>
+  <p class="secsub">以下设计决定都是刻意为之且经核实成立 —— 评估「bug 从哪来」必须先知道「本意是什么」。</p>
+  <div class="points">
+    <div class="point">
+      <div class="t"><span class="tag">DESIGN</span>意图 ↔ Skill 1:1 单一目录</div>
+      <p>core/intent_catalog.py 从 .agents/skills/*/hommey.yaml 在 import 时构建 SKILL_INTENTS，15+ 个派生 helper（执行步骤、answer spec、置信度门、memory hooks、pause spec…）全部声明式派生，无 Python 侧硬编码。</p>
+    </div>
+    <div class="point">
+      <div class="t"><span class="tag">DESIGN</span>授权边界分层</div>
+      <p>guard（确定性）→ 快路由（廉价、仅授权不建计划）→ LLM（完整分类）→ _should_call_intent（可调用性授权）→ TaskValidator（意图级授权，LLM 永远不能命名可执行体）。</p>
+    </div>
+    <div class="point">
+      <div class="t"><span class="tag">DESIGN</span>确定性兜底</div>
+      <p>decomposer 失败 → 正则 fallback；validate 失败 → fallback 重试一次；compose 失败 → FallbackComposer。ExecutionLimitExceeded 一律向上抛（除 composer，见 P2-3）。</p>
+    </div>
+    <div class="point">
+      <div class="t"><span class="tag">DESIGN</span>状态机驱动恢复</div>
+      <p>Run / Turn / Goal / Node 四级；pause（WAITING_USER）+ interrupt + resume 均由 state_store 全量快照驱动；resume 只唤醒 focused goal + 跳过已提交节点。</p>
+    </div>
+    <div class="point">
+      <div class="t"><span class="tag">BOUNDARY</span>非用户入口的边</div>
+      <p>hommey_mcp/ 不是用户查询入口，是 skill agent 的工具提供方；CLI 已不存在（core/onboarding.py、scripts/benchmark.py 留有 vestigial 引用）。</p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="secno">04</p>
+  <h2>已确认 Bug（按严重度排序）</h2>
+  <p class="secsub">图例：<b>CONFIRMED</b> = 对抗验证存活（16 项同时经本人复现 / 逐行核实）；<b>MINE</b> = 工作流未覆盖、本人独立确认。所有描述已压缩为「触发条件 → 后果」。</p>
+
+  <div class="sevhead"><span class="pill p1">P1 · 功能严重错乱</span><span class="desc">6 项</span></div>
+  <div class="fgroup">
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-1</span><span class="loc">core/intent_router.py:101</span><span class="ver">CONFIRMED ×2 · REPRODUCED</span></div>
+      <p><span class="em">闲聊子串误伤真实业务请求。</span> any(keyword in q for CHITCHAT_KEYWORDS) 是裸子串匹配，而 guard 用精确匹配。「你好，帮我查一下杭州的差旅报销标准」→ 路由成 chitchat + safe_to_short_circuit=True，绕过 LLM 与编排，业务部分被吞。</p>
+    </div>
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-2</span><span class="loc">core/orchestration/fallback_composer.py:128</span><span class="ver">CONFIRMED · REPRODUCED</span></div>
+      <p><span class="em">&gt;12 个 section 时兜底组合器崩溃整条管线。</span> AnswerDocument.sections 硬上限 12（answer_document.py:87），而 _trip_sections 每个 daily_plan 一个 section、每 goal 一个 section。13+ goal 或 12+ 天行程 → pydantic ValidationError 且无 try/except → pipeline 崩溃。已用生产数据形状复现。</p>
+    </div>
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-3</span><span class="loc">core/intent_router.py:227</span><span class="ver">CONFIRMED · REPRODUCED</span></div>
+      <p><span class="em">政策问题被误标成行程规划。</span> TRIP_KEYWORDS 含裸「从」，「从北京出差到上海的规定」→ 单 itinerary_planning + short_circuit=True → 触发完整 5 步行程采集，政策问题永不回答（「规定 / 制度」不在 POLICY_KEYWORDS）。</p>
+    </div>
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-4</span><span class="loc">core/orchestration/executor.py:80</span><span class="ver">CONFIRMED · REPRODUCED</span></div>
+      <p><span class="em">abort 传播只处理批内第一个失败。</span> abort-halt 循环遇首个 abort 失败就 break，同批第二个 abort 失败（不同 goal）的下游不标 SKIPPED，带着失败依赖继续执行并以 success 上报。</p>
+    </div>
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-5</span><span class="loc">core/orchestration/lifecycle.py:65</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">mark_waiting 整表覆盖 waits / focused_goal_id，跨 turn 孤儿化已暂停 goal。</span> G1 上一 turn 暂停，后续 turn 追加的 G2 也 pause → G1 的 WaitState 被抹掉但 status 仍 WAITING_USER，状态内部矛盾，resume 只认 waits[0] / focused，G1 永久无法唤醒。</p>
+    </div>
+    <div class="finding f-p1">
+      <div class="h"><span class="id">P1-6</span><span class="loc">core/orchestration/pipeline.py:140</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">兄弟 goal 暂停时，本轮其余 goal 的 memory hooks 被跳过且 resume 永久过滤。</span> if pause_infos: 提前 return，memory_hooks.apply 不执行；resume_run 又用 previous_ids 过滤已提交结果 → 同轮 SUCCEEDED 的偏好 / 行程记忆回写永远丢失。</p>
+    </div>
+  </div>
+
+  <div class="sevhead"><span class="pill p2">P2 · 错误行为可触发</span><span class="desc">6 项</span></div>
+  <div class="fgroup">
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-1</span><span class="loc">core/presentation/answer_validator.py:62-67</span><span class="ver">CONFIRMED · REPRODUCED</span></div>
+      <p><span class="em">数字接地校验是全局语料子串测试，双向都错。</span> (a) 一个 goal 的数字能「背书」另一 goal 章节的伪造 / 错挂数字（:62）；(b) 前缀匹配让 37.5→37、5000.5→5000 通过，精度改动是 prompt 明令禁止（:64）；(c) 反向：合法改写（百分之八十→80%）也被判 unsupported → 整份降级 fallback（:67）。</p>
+    </div>
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-2</span><span class="loc">core/orchestration/turn_resolver.py:36</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">WAITING_USER resume 启发式把新请求吞成槽位答案。</span> _looks_like_slot_update 对「无查询词且 len≤8」无条件 True；含「会议 / 出发 / 日期…」也 True。「顺便帮我订个酒店」「明天会议几点」被当采集槽位值吞掉，永不进入完整意图分类。</p>
+    </div>
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-3</span><span class="loc">core/orchestration/composer.py:72</span><span class="ver">MINE</span></div>
+      <p><span class="em">composer 吞掉 ExecutionLimitExceeded。</span> except Exception 把预算耗尽静默降级 fallback；decomposer / orchestration_agent / manager 都向上抛并显示 public_message，唯独 composer 不一致。</p>
+    </div>
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-4</span><span class="loc">core/skill_definition.py:117</span><span class="ver">MINE</span></div>
+      <p><span class="em">mcp-tool 的 enabled_by_default:false / risk_level:high 未被执行。</span> 该标志全库 0 处读取，mcp_tool 出现在 LLM prompt、是合法可调用 intent，_should_call_intent 只查差旅上下文 + 置信度门 —— high-risk、side-effect_allowed、声明默认禁用的 skill 可被 LLM 直接触发。</p>
+    </div>
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-5</span><span class="loc">core/presentation/answer_validator.py:25</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">coverage 检查被 require_section 门控。</span> event_collection 声明 require_section:false（对 plan-trip 子步骤合理），但作为独立用户意图被授权时结果可被静默省略且无校验失败。</p>
+    </div>
+    <div class="finding f-p2">
+      <div class="h"><span class="id">P2-6</span><span class="loc">core/orchestration/composer.py:47</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">非数字编造事实完全无校验。</span> validator 只查数字 token；酒店名 / 航班 / 交通方式 / 合规结论等非数字编造，只要句子不含（或只含已接地）数字就通过。</p>
+    </div>
+  </div>
+
+  <div class="sevhead"><span class="pill p3">P3 · 边缘 / 一致性</span><span class="desc">11 项</span></div>
+  <div class="fgroup">
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-1</span><span class="loc">core/orchestration/state_store.py:292</span><span class="ver">MINE</span></div>
+      <p><span class="em">_file_get 对损坏 JSON 静默 return None。</span> Run 不可见 → 建新 Run、旧持久化状态孤儿化；recover 也救不回，无日志。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-2</span><span class="loc">core/intent_result.py:53</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">parse_json_object 返回非 dict，违反 -&gt; dict 契约。</span> 对合法非对象 JSON 返回 list / str / number；调用方（composer.py:58 .pop）会崩。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-3</span><span class="loc">core/presentation/answer_validator.py:30</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">只校验 result→section 方向，不校验 section.goal_id 对应已知 task。</span> 编造 goal_id 通过。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-4</span><span class="loc">core/orchestration/composer.py:74</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">fallback 组合的答案完全绕过 validator。</span> coverage + 数字接地契约在兜底路径失效。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-5</span><span class="loc">core/orchestration/composer.py:89-91</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">LLM 返回单个对象 / 非 dict 的 items / days / section 时静默丢弃或 TypeError。</span> :89 迭代 dict 得字符串键全被丢弃；:91 dict(null) 抛 TypeError → 降级 fallback。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-6</span><span class="loc">core/orchestration/memory_hooks.py:53</span><span class="ver">MINE</span></div>
+      <p><span class="em">per-effect except→warning 吞错。</span> 链式风险：update_active_trip 被吞 → 后续 complete_trip no-op。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-7</span><span class="loc">core/orchestration/executor.py:177</span><span class="ver">MINE</span></div>
+      <p><span class="em">{} 运行时与取消不可区分。</span> 边缘误标 TURN_INTERRUPTED。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-8</span><span class="loc">core/orchestration/pipeline.py:236</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">WAITING_USER resume 遇 stale focused / waits 时静默跑空并丢弃输入。</span></p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-9</span><span class="loc">core/orchestration/turn_resolver.py:88</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">itinerary_planning 提示集含「住宿」，与政策域「住宿标准」重叠。</span> 政策问题误路由去 resume 中断的行程。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-10</span><span class="loc">core/orchestration/turn_resolver.py:74</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">_looks_like_slot_update 的 len≤8 兜底把新请求当槽位值。</span> 与 P2-2 同族，独立触发面。</p>
+    </div>
+    <div class="finding f-p3">
+      <div class="h"><span class="id">P3-11</span><span class="loc">core/presentation/answer_validator.py:45</span><span class="ver">CONFIRMED</span></div>
+      <p><span class="em">标题 / summary 含非源数据数字（当前年份、3 个城市等）→ 误判 unsupported → 强制 fallback。</span></p>
+    </div>
+  </div>
+
+  <div class="sevhead"><span class="pill" style="background:var(--raised);color:var(--faint)">REFUTED</span><span class="desc">被推翻的发现 —— 对抗验证的价值</span></div>
+  <div class="fgroup">
+    <div class="finding refuted">
+      <div class="h"><span class="id">R-1</span><span class="loc">core/orchestration/state_store.py:301</span><span class="ver">REFUTED</span></div>
+      <p><span class="m">文件后端 _file_mutate 是受 per-instance RLock 保护的 read-modify-write，中断路径刻意绕过 per-user 锁 —— 代码描述正确，但生产是 PG 后端 + 单 uvicorn worker（docker-compose 显式声明），_file_mutate 在生产永不触发；local dev 文件后端下 get_or_create 缓存单实例，RLock 足够。该缺陷在真实部署不可达 → 不列入缺陷清单。</span></p>
+    </div>
+  </div>
+</section>
+
+<section>
+  <p class="secno">05</p>
+  <h2>共性根因</h2>
+  <p class="secsub">23 项缺陷可以收敛为 5 个模式 —— 修根因比逐条打补丁高效得多。</p>
+  <div class="cause"><span class="tag">R1</span><p><b>快捷路径是主要风险源。</b> P1-1 / P1-3 / P2-2 全部来自「高置信度短路」—— 快路由 / 启发式为了省一次 LLM 调用，把判断权交给脆弱的子串 / 长度规则。设计文档说「只在高置信度、可证明无歧义时短路」，但 CHITCHAT_KEYWORDS 子串匹配和 len≤8 规则明显不满足「可证明无歧义」。</p></div>
+  <div class="cause"><span class="tag">R2</span><p><b>校验器校验方向单一。</b> answer_validator 只查 result→section，不查反向；只查数字，不查非数字；数字又是全语料子串 —— 接地的名义比实际强。</p></div>
+  <div class="cause"><span class="tag">R3</span><p><b>异常吞掉导致静默状态漂移。</b> composer 吞 ExecutionLimitExceeded、memory_hooks 吞写回失败、_file_get 吞损坏 —— 三处都是「宁可静默也不打扰用户」，但都留下不一致状态，且无任何指标 / 日志暴露。</p></div>
+  <div class="cause"><span class="tag">R4</span><p><b>声明式配置与执行脱节。</b> mcp-tool 的 enabled_by_default / risk_level、event_collection 的 require_section 都是「对一种上下文正确、对另一种上下文危险」的配置，而代码没有区分调用上下文。</p></div>
+  <div class="cause"><span class="tag">R5</span><p><b>多 goal 并发与持久化的交互没测到。</b> abort 传播 break、mark_waiting 覆盖、memory hooks 跳过，全部是「同批多 goal」场景 —— 现有测试大多是单 goal。</p></div>
+</section>
+
+<section>
+  <p class="secno">06</p>
+  <h2>建议修复优先级</h2>
+  <p class="secsub">P0 是立刻该修、且改动量小、风险最低的项；P1 影响正确性；P2 建议与下一个功能迭代一起做。</p>
+  <div class="term" style="overflow:auto">
+    <table class="tbl">
+      <tr><th style="width:70px">优先级</th><th>修复</th><th style="width:230px">位置</th></tr>
+      <tr><td class="pri p0">P0</td><td class="w">chitchat 子串改回精确匹配（与 guard 对齐）；或要求同时满足「长度约束 + 无业务关键词」才短路</td><td class="loc">intent_router.py:101</td></tr>
+      <tr><td class="pri p0">P0</td><td class="w">提高 / 移除 sections 上限，或 fallback 按需合并 day section（&gt;12 天行程是真实场景）</td><td class="loc">answer_document.py:87 + fallback_composer</td></tr>
+      <tr><td class="pri p0">P0</td><td class="w">_looks_like_trip_request 去掉裸「从」；TRIP_KEYWORDS 用完整动词短语</td><td class="loc">guard_rules.py:90</td></tr>
+      <tr><td class="pri p0">P0</td><td class="w">abort-halt 循环收集全部批内 abort 失败再统一 skip（去掉 break）</td><td class="loc">executor.py:80</td></tr>
+      <tr><td class="pri p1">P1</td><td class="w">mark_waiting 合并而非覆盖 waits / focused（保留未解决 goal 的 WaitState）</td><td class="loc">lifecycle.py:42-71</td></tr>
+      <tr><td class="pri p1">P1</td><td class="w">pause 返回前先 apply 已成功节点的 memory hooks（或 resume 时不过滤）</td><td class="loc">pipeline.py:140/166/357</td></tr>
+      <tr><td class="pri p1">P1</td><td class="w">在 _should_call_intent / validator 强制 enabled_by_default 与 risk_level 门</td><td class="loc">intent_catalog + intention_agent</td></tr>
+      <tr><td class="pri p1">P1</td><td class="w">数字接地改为逐 section 对照其 goal 的源数据 + 精确值匹配（非子串）；同时放宽对 title / summary 的误杀</td><td class="loc">answer_validator.py</td></tr>
+      <tr><td class="pri p2">P2</td><td class="w">收紧槽位启发式；WAITING_USER 下「新意图 + 非槽位词」优先 new_goal</td><td class="loc">turn_resolver.py</td></tr>
+      <tr><td class="pri p2">P2</td><td class="w">composer 单独 except ExecutionLimitExceeded: raise（与 decomposer 对齐）</td><td class="loc">composer.py:72</td></tr>
+      <tr><td class="pri p2">P2</td><td class="w">增加非数字事实接地（至少对 hotel / transport / verdict 类做源文本倒查）</td><td class="loc">answer_validator.py</td></tr>
+    </table>
+  </div>
+</section>
+
+<section>
+  <p class="secno">07</p>
+  <h2>测试覆盖缺口</h2>
+  <p class="secsub">基线 120 个测试全绿，但都命中「单 goal、构造正确、无对抗」的路径 —— 这就是问题能漏过去的原因。</p>
+  <div class="gaps">
+    <div class="gap"><span class="x">✗</span><span>带寒暄前缀的业务查询（P1-1）</span></div>
+    <div class="gap"><span class="x">✗</span><span>多 goal 同批中两个 abort 失败（P1-4）</span></div>
+    <div class="gap"><span class="x">✗</span><span>&gt;12 天行程 / &gt;12 goal 的组合（P1-2）</span></div>
+    <div class="gap"><span class="x">✗</span><span>跨 turn 双 goal 暂停（P1-5）</span></div>
+    <div class="gap"><span class="x">✗</span><span>数字跨 goal 伪造 / 精度改写的对抗用例（P2-1）</span></div>
+    <div class="gap"><span class="x">✗</span><span>非数字编造事实（P2-6）</span></div>
+    <div class="gap"><span class="x">✗</span><span>声明式安全标志的执行一致性（P2-4）</span></div>
+    <div class="gap ok"><span class="x">✓</span><span>已覆盖：guard 精确匹配、快路由正确性、多意图路由不变量、DAG 编译 / 校验 / 执行、状态持久化、resume</span></div>
+  </div>
+</section>
+
+<footer>
+  <b>方法学</b>　3 个路由映射智能体 + 5 个 bug 猎手 + 24 项发现各配对抗性验证智能体 = 32 个智能体、≈200 万 subagent token、0 失败、17.9 分钟。
+  每项发现由独立验证智能体以「默认要推翻它」的立场复核代码 + 尝试复现，存活者才进入本报告；
+  本人另对全部核心文件逐行审读并独立复现了 P1 四项。
+  <br><b>报告正文</b>　工作流一节来自路由映射智能体产物并经逐行核对；缺陷列表每项均附 file:line 与验证来源，可直接定位修复。</footer>

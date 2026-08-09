@@ -7,29 +7,45 @@ guard 只做"可证明无歧义"的安全网（LLM 主导识别）：垃圾/寒�
 """
 from __future__ import annotations
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 import re
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, Optional, Tuple
 
 from core.guard_rules import (
     BUSINESS_TRAVEL_KEYWORDS,
+    COMPLIANCE_KEYWORDS,
     FORBIDDEN_ACTIONS,
+    GENERIC_POLICY_KEYWORDS,
     GIBBERISH_RE,
+    MEMORY_KEYWORDS,
     OUT_OF_SCOPE_KEYWORDS,
     PERSONAL_TRAVEL_KEYWORDS,
+    POLICY_KEYWORDS,
+    PREFERENCE_KEYWORDS,
+    SEARCH_KEYWORDS,
     TRAVEL_TRANSPORT_KEYWORDS,
+    TRIP_KEYWORDS,
     UNCLEAR_EXACT,
+    WEATHER_KEYWORDS,
 )
 from core.intent_catalog import (
     CHITCHAT_EXACT,
     CHITCHAT_KEYWORDS,
     confidence_threshold_for_intent,
-    self_schedule_for_intent,
 )
 
 
 DEFAULT_CONFIDENCE_THRESHOLD = 0.65
 INFORMATION_QUERY_THRESHOLD = 0.75
+
+# is_pure_chitchat 的残余文本业务标记：剥离寒暄词后若仍含这些词，
+# 说明不是纯闲聊（带业务前缀的问候/感谢应进入意图识别而非被短路）。
+_CHITCHAT_RESIDUAL_BUSINESS_MARKERS: Tuple[str, ...] = (
+    BUSINESS_TRAVEL_KEYWORDS + POLICY_KEYWORDS + GENERIC_POLICY_KEYWORDS
+    + COMPLIANCE_KEYWORDS + WEATHER_KEYWORDS + SEARCH_KEYWORDS
+    + MEMORY_KEYWORDS + PREFERENCE_KEYWORDS + TRIP_KEYWORDS
+    + TRAVEL_TRANSPORT_KEYWORDS + ("规定", "制度", "预订", "订票")
+)
 
 
 @dataclass(frozen=True)
@@ -38,7 +54,6 @@ class GuardResult:
     confidence: float
     reason: str
     should_call_skill: bool
-    agent_schedule: List[Dict[str, Any]] = field(default_factory=list)
     clarification: Optional[str] = None
 
     def to_intention_data(self, user_query: str) -> Dict[str, Any]:
@@ -61,7 +76,6 @@ class GuardResult:
             ],
             "key_entities": {},
             "rewritten_query": normalize_query(user_query),
-            "agent_schedule": self.agent_schedule if self.should_call_skill else [],
             "clarification": self.clarification,
         }
 
@@ -157,9 +171,6 @@ def can_call_information_query(
         confidence=confidence,
         reason="明确的信息查询请求",
         should_call_skill=True,
-        agent_schedule=self_schedule_for_intent(
-            "information_query", "明确的信息查询请求", "完成用户请求"
-        ),
     )
 
 
@@ -216,15 +227,36 @@ def has_travel_information_context(query: str, conversation_context: str = "") -
     return has_business_travel_context(query, conversation_context)
 
 
-def is_limited_chitchat(query: str) -> bool:
-    """Allow social niceties and capability questions, not open-domain chat."""
+def is_pure_chitchat(query: str) -> bool:
+    """Whether a query is pure social chitchat (safe to short-circuit).
+
+    Exact greetings always qualify.  Longer inputs qualify only when every
+    chitchat keyword can be stripped and nothing business-intent-like remains
+    in the residue — so "你好，帮我查一下差旅报销标准" must NOT short-circuit,
+    while "你能做什么" / "介绍一下你自己" still do.
+    """
     q = normalize_query(query)
     q_lower = q.lower()
-    return (
-        q_lower in CHITCHAT_EXACT
-        or q in CHITCHAT_EXACT
-        or any(keyword in q for keyword in CHITCHAT_KEYWORDS)
-    )
+    if not q:
+        return False
+    if q_lower in CHITCHAT_EXACT or q in CHITCHAT_EXACT:
+        return True
+    if not any(keyword in q for keyword in CHITCHAT_KEYWORDS):
+        return False
+    residual = q
+    for keyword in CHITCHAT_KEYWORDS:
+        residual = residual.replace(keyword, "")
+    residual = re.sub(r"[\s，。！？,!?、~～…—·：:;；（）()]+", "", residual)
+    if not residual:
+        return True
+    if len(residual) > 4:
+        return False
+    return not any(keyword in residual for keyword in _CHITCHAT_RESIDUAL_BUSINESS_MARKERS)
+
+
+def is_limited_chitchat(query: str) -> bool:
+    """Allow social niceties and capability questions, not open-domain chat."""
+    return is_pure_chitchat(query)
 
 
 def _unclear(reason: str) -> GuardResult:
@@ -244,9 +276,6 @@ def _chitchat() -> GuardResult:
         confidence=0.99,
         reason="明确的寒暄或社交对话",
         should_call_skill=True,
-        agent_schedule=self_schedule_for_intent(
-            "chitchat", "明确的寒暄或社交对话", "友好的社交回复"
-        ),
     )
 
 

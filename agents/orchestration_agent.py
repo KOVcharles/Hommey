@@ -1,16 +1,12 @@
 """
 OrchestrationAgent 执行层
 调度/暂停/聚合/记忆回写等编排语义已由 DAG 管线（MultiIntentPipeline）接管，
-本类退化为薄壳 + 可复用执行层：
-
-1. ``reply`` 薄壳：非 skill 意图→no_agents；否则按 agent_schedule 分批执行
-2. 执行层（供管线与非管线调用方共用）：``execute_task``/``_execute_agent``/
-   ``_execute_parallel_agents``/``prepare_context``/``_filter_enabled_schedule``/
-   ``_record_skill_runs``
+本类只保留 DAG 管线需要的执行适配职责：准备共享上下文、执行一个已验证的
+任务、登记子智能体以及记录审计结果。它不识别意图，也不创建或维护执行计划。
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
-from typing import Optional, Union, List, Dict, Any
+from typing import Optional, List, Dict, Any
 import json
 import logging
 import asyncio
@@ -19,31 +15,17 @@ import uuid
 
 from core.skill_store import SkillPlatformStore
 from core.execution_budget import (
-    ExecutionBudget,
     ExecutionLimitExceeded,
     consume_agent_call,
-    current_execution_budget,
-    execution_budget_scope,
 )
-from settings import RESILIENCE_CONFIG
 from utils.skill_loader import SkillLoader
 from utils.llm_resilience import is_retriable_error
 
 logger = logging.getLogger(__name__)
 
 
-def message_for_non_skill_intent(intent: str) -> str:
-    """非 skill 意图（unsupported/unclear）缺省澄清文案（clarification 优先）。"""
-    if intent == "unsupported":
-        return (
-            "这个问题不属于公司差旅规划或报销范围，我暂时无法处理。"
-            "我可以帮你查询差旅政策、规划出差路线，或准备报销材料。"
-        )
-    return "我还不太确定这是否与公司差旅有关。请补充出差目的地、日期，或说明要查询的政策和报销问题。"
-
-
 class OrchestrationAgent(AgentBase):
-    """协调器智能体 - 调度和协调多个子智能体"""
+    """DAG 任务执行适配器；执行计划由 ``MultiIntentPipeline`` 维护。"""
 
     def __init__(
         self,
@@ -83,144 +65,6 @@ class OrchestrationAgent(AgentBase):
         if agent_name in self.agent_registry:
             del self.agent_registry[agent_name]
             logger.info(f"Unregistered agent: {agent_name}")
-
-    async def reply(
-        self,
-        x: Optional[Union[Msg, List[Msg]]] = None,
-        *,
-        progress_callback=None,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """Execute with the caller's budget, or create one for non-Web entrypoints."""
-        if current_execution_budget() is not None:
-            return await self._reply_impl(
-                x,
-                progress_callback=progress_callback,
-                request_context=request_context,
-            )
-
-        rc = RESILIENCE_CONFIG
-        budget = ExecutionBudget(
-            max_agent_calls=rc.get("max_agent_calls_per_request", 8),
-            max_external_calls=rc.get("max_external_calls_per_request", 16),
-            max_external_calls_per_type=rc.get("max_external_calls_per_type", 6),
-        )
-        try:
-            with execution_budget_scope(budget):
-                return await asyncio.wait_for(
-                    self._reply_impl(
-                        x,
-                        progress_callback=progress_callback,
-                        request_context=request_context,
-                    ),
-                    timeout=rc.get("request_timeout_sec", 120.0),
-                )
-        finally:
-            logger.info("Orchestration execution budget: %s", budget.snapshot())
-
-    async def reply_with_progress(
-        self,
-        x,
-        progress_callback,
-        *,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """Explicit progress-capable entrypoint used by streaming Web clients."""
-        return await self.reply(
-            x,
-            progress_callback=progress_callback,
-            request_context=request_context,
-        )
-
-    async def _reply_impl(
-        self,
-        x: Optional[Union[Msg, List[Msg]]] = None,
-        *,
-        progress_callback=None,
-        request_context: Optional[Dict[str, Any]] = None,
-    ) -> Msg:
-        """薄壳：非 skill 意图→no_agents；否则按 agent_schedule 分批执行并返回原始结果。
-
-        暂停/续跑/聚合/记忆回写等编排语义已由 DAG 管线（MultiIntentPipeline）
-        接管；本方法只保留执行层，供非管线调用方与测试使用。
-        """
-        if x is None:
-            return Msg(
-                name=self.name,
-                content=json.dumps({"error": "No input provided"}),
-                role="assistant"
-            )
-
-        # 解析输入
-        if isinstance(x, list):
-            intention_output = x[-1].content if x else "{}"
-        else:
-            intention_output = x.content
-
-        # 解析意图识别结果
-        try:
-            intention_data = json.loads(intention_output) if isinstance(intention_output, str) else intention_output
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse intention output: {e}")
-            return Msg(
-                name=self.name,
-                content=json.dumps({"error": "Invalid intention format"}),
-                role="assistant"
-            )
-
-        routing = intention_data.get("routing") or {}
-        if routing.get("should_call_skill") is False:
-            return Msg(
-                name=self.name,
-                content=json.dumps({
-                    "status": "no_agents",
-                    "routing": routing,
-                    "message": intention_data.get("clarification")
-                    or message_for_non_skill_intent(routing.get("intent")),
-                    "results": [],
-                }, ensure_ascii=False),
-                role="assistant",
-            )
-
-        # 获取智能体调度计划
-        agent_schedule = intention_data.get("agent_schedule", [])
-        agent_schedule, disabled_skills = self._filter_enabled_schedule(agent_schedule)
-        if not agent_schedule:
-            return Msg(
-                name=self.name,
-                content=json.dumps({
-                    "status": "no_agents",
-                    "message": (
-                        f"相关能力当前已停用：{', '.join(disabled_skills)}"
-                        if disabled_skills else "没有需要调度的智能体"
-                    )
-                }, ensure_ascii=False),
-                role="assistant"
-            )
-
-        # 按优先级排序并分批执行（同一优先级并行，不同优先级顺序执行）。
-        sorted_schedule = sorted(agent_schedule, key=lambda item: item.get("priority", 999))
-        logger.info(f"Orchestrating {len(sorted_schedule)} agents")
-
-        context = self.prepare_context(intention_data, request_context=request_context)
-
-        results = []
-        priorities = sorted({task.get("priority", 999) for task in sorted_schedule})
-        for priority in priorities:
-            batch = [task for task in sorted_schedule if task.get("priority", 999) == priority]
-            batch_results = await self._execute_parallel_agents(batch, context, results)
-            results.extend(batch_results)
-
-        self._record_skill_runs(intention_data, results)
-
-        return Msg(
-            name=self.name,
-            content=json.dumps({
-                "status": "completed",
-                "results": results,
-            }, ensure_ascii=False),
-            role="assistant"
-        )
 
     def prepare_context(
         self,
@@ -270,19 +114,6 @@ class OrchestrationAgent(AgentBase):
     async def execute_task(self, **kwargs) -> Dict[str, Any]:
         """Public runner used by task-scoped orchestration pipelines."""
         return await self._execute_agent(**kwargs)
-
-    def _filter_enabled_schedule(self, schedule: List[Dict[str, Any]]):
-        enabled = []
-        disabled = []
-        for task in schedule:
-            skill_name = self._agent_skill_map.get(task.get("agent_name"))
-            definition = self.skill_definitions.get(skill_name) if skill_name else None
-            default = definition.enabled_by_default if definition else True
-            if skill_name and not self.skill_store.is_enabled(skill_name, default):
-                disabled.append(skill_name)
-                continue
-            enabled.append(task)
-        return enabled, disabled
 
     def _record_skill_runs(self, intention_data: Dict[str, Any], results: List[Dict]) -> None:
         if not self.skill_store.configured:
@@ -336,103 +167,6 @@ class OrchestrationAgent(AgentBase):
             })
         self._record_skill_runs(intention_data, legacy_results)
 
-    async def _execute_parallel_agents(
-        self,
-        tasks: List[Dict],
-        context: Dict[str, Any],
-        previous_results: List[Dict]
-    ) -> List[Dict]:
-        """
-        并行执行多个智能体
-
-        Args:
-            tasks: 任务列表，每个任务包含 agent_name, priority, reason, expected_output, params（可选，传递给 Agent 的额外参数）
-            context: 上下文信息
-            previous_results: 前序智能体的结果
-
-        Returns:
-            执行结果列表
-        """
-        if not tasks:
-            return []
-
-        # 如果只有一个任务，直接执行
-        if len(tasks) == 1:
-            task = tasks[0]
-            result = await self._execute_agent(
-                agent_name=task.get("agent_name"),
-                context=context,
-                reason=task.get("reason", ""),
-                expected_output=task.get("expected_output", ""),
-                previous_results=previous_results,
-                task_params=task.get("params", {}),
-                max_retries=task.get("max_retries", 0),
-            )
-            return [{
-                "agent_name": task.get("agent_name"),
-                "priority": task.get("priority", 0),
-                "on_failure": task.get("on_failure", "abort"),
-                "result": result
-            }]
-
-        # 多个任务并行执行
-        logger.info(f"Executing {len(tasks)} agents in parallel")
-
-        # 创建并行任务
-        parallel_coroutines = []
-        for task in tasks:
-            agent_name = task.get("agent_name")
-            priority = task.get("priority", 0)
-            reason = task.get("reason", "")
-            expected_output = task.get("expected_output", "")
-            task_params = task.get("params", {})
-
-            logger.info(f"Parallel executing agent: {agent_name} (priority={priority})")
-
-            # 创建协程
-            coroutine = self._execute_agent(
-                agent_name=agent_name,
-                context=context,
-                reason=reason,
-                expected_output=expected_output,
-                previous_results=previous_results,
-                task_params=task_params,
-                max_retries=task.get("max_retries", 0),
-            )
-            parallel_coroutines.append((agent_name, priority, task.get("on_failure", "abort"), coroutine))
-
-        # 使用 asyncio.gather 并行执行
-        execution_results = await asyncio.gather(
-            *[coro for _, _, _, coro in parallel_coroutines],
-            return_exceptions=True
-        )
-
-        # 整理结果
-        results = []
-        for (agent_name, priority, on_failure, _), exec_result in zip(parallel_coroutines, execution_results):
-            if isinstance(exec_result, Exception):
-                logger.error(f"Parallel agent execution failed: {agent_name}, error: {exec_result}")
-                result = {
-                    "status": "error",
-                    "agent_name": agent_name,
-                    "data": {"error": str(exec_result)},
-                    "error_code": "AGENT_EXECUTION_FAILED",
-                    "error_message": "Agent 并行执行失败",
-                    "retryable": is_retriable_error(exec_result),
-                    "attempts": 1,
-                }
-            else:
-                result = exec_result
-
-            results.append({
-                "agent_name": agent_name,
-                "priority": priority,
-                "on_failure": on_failure,
-                "result": result
-            })
-
-        return results
-
     async def _execute_agent(
         self,
         agent_name: str,
@@ -457,6 +191,19 @@ class OrchestrationAgent(AgentBase):
         Returns:
             执行结果
         """
+        # ``task_params.query`` is the final Goal-scope authority. Child agents
+        # historically read different context aliases; leaving the request-wide
+        # query in any of them lets policy/weather bleed into each other.
+        context = dict(context)
+        scoped_query = str((task_params or {}).get("query") or "").strip()
+        if scoped_query:
+            context.setdefault(
+                "request_original_query",
+                context.get("original_query") or context.get("agent_query") or "",
+            )
+            for key in ("original_query", "agent_query", "rewritten_query", "user_query"):
+                context[key] = scoped_query
+
         # 检查智能体是否注册
         if agent_name not in self.agent_registry:
             logger.warning(f"Agent not registered: {agent_name}")

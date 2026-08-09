@@ -36,7 +36,14 @@ class AnswerComposer:
     ) -> AnswerDocument:
         task_list = list(tasks)
         result_list = list(results)
-        if self.model is None:
+        # Trip plans already have a rich, typed itinerary contract. Letting a
+        # second LLM redesign that contract made identical trips alternate
+        # between a two-column grid and a timeline, depending on whether its
+        # JSON happened to validate. Render structured trips deterministically;
+        # the model remains responsible for the itinerary facts, not UI shape.
+        if self.model is None or any(
+            section_kind_for_intent(task.intent) == "trip" for task in task_list
+        ):
             return self.fallback.compose(task_list, result_list)
         try:
             consume_agent_call("AnswerComposer")
@@ -82,6 +89,7 @@ class AnswerComposer:
         sections = []
         for raw_section in normalized.get("sections") or []:
             section = dict(raw_section)
+            section["goal_id"] = section.get("goal_id") or ""
             section["body"] = section.get("body") or ""
             section["items"] = section.get("items") or []
             section["days"] = section.get("days") or []
@@ -116,6 +124,7 @@ class AnswerComposer:
                 facts = data
             compact_results.append({
                 "task_id": result.task_id,
+                "goal_id": result.goal_id,
                 "intent": result.intent,
                 "agent": result.agent_name,
                 "kind": section_kind_for_intent(result.intent),
@@ -134,6 +143,7 @@ class AnswerComposer:
 
 生成一张紧凑的统一答案卡片。要求：
 - 按用户提问顺序组织 section，不提 Agent、RAG、编排或知识库缺少天气。
+- 每个任务 Goal 至少有一个 section，并原样填写该任务的 task_id 到 goal_id；不得把不同 Goal 合并后遗漏。
 - 每个意图的 section.kind 用结果中标注的 kind（policy/weather/memory/preference/trip/notice/general）。
 - 尽量使用 items 和 days，避免大段文字。
 - 失败任务保留对应 section，status=error，并给出一句简短提示。
@@ -147,6 +157,7 @@ JSON结构：
   "summary": "一句综合结论",
   "sections": [
     {{
+      "goal_id": "对应任务的task_id",
       "kind": "policy或weather或memory或preference或trip或notice或general",
       "title": "分区标题",
       "status": "success、partial或error",

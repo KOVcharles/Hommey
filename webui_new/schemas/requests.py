@@ -22,6 +22,11 @@ class SessionRenameRequest(BaseModel):
     title: str
 
 
+class InterruptRequest(BaseModel):
+    client_request_id: str
+    session_id: str | None = None
+
+
 class SkillToggleRequest(BaseModel):
     enabled: bool
 

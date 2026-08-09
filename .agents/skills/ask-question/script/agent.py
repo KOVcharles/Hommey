@@ -81,7 +81,7 @@ class RAGKnowledgeAgent(AgentBase):
         if not user_query:
             return self._msg({"status": "no_knowledge", "query": "", "answer": "请先告诉我你想查询的问题。", "retrieved_documents": []})
 
-        retrieved_docs = self.search_knowledge(user_query)
+        retrieved_docs = self._retrieve_for_question(user_query)
         if not retrieved_docs:
             stats = self.get_stats()
             if stats.get("status") == "success" and int(stats.get("total_documents", 0)) == 0:
@@ -120,6 +120,68 @@ class RAGKnowledgeAgent(AgentBase):
 
     def get_stats(self) -> Dict[str, Any]:
         return self.retriever.stats()
+
+    def _retrieve_for_question(self, user_query: str) -> List[Dict[str, Any]]:
+        """Retrieve policy evidence without carrying conversational filler.
+
+        Broad “差旅标准” questions need evidence from several policy sections;
+        one embedding search tends to return only the document title or generic
+        city guidance. Use a small deterministic multi-query expansion inside
+        the authorized RAG Skill, then deduplicate evidence. This does not add
+        user-facing Goals or let weather/planning text enter retrieval.
+        """
+        base_query = self._normalize_retrieval_query(user_query)
+        queries = [base_query]
+        if any(marker in base_query for marker in ("差旅标准", "出差标准", "费用标准")):
+            location = self._leading_location(base_query)
+            prefix = f"{location} " if location else ""
+            queries.extend([
+                f"{prefix}出差 住宿标准",
+                f"{prefix}出差 交通标准",
+                f"{prefix}出差 餐饮补贴 报销标准",
+            ])
+
+        documents: List[Dict[str, Any]] = []
+        seen = set()
+        for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
+            for document in self.search_knowledge(query, top_k=max(3, self.retriever.top_k)):
+                key = (
+                    str(document.get("id") or ""),
+                    str(document.get("source") or document.get("file") or ""),
+                    str(document.get("content") or ""),
+                )
+                if key in seen:
+                    continue
+                seen.add(key)
+                documents.append(document)
+                if len(documents) >= 10:
+                    return documents
+        return documents
+
+    @staticmethod
+    def _normalize_retrieval_query(query: str) -> str:
+        text = re.sub(
+            r"(?:请|帮我|麻烦)?(?:查询|查一下|查查|看看|了解一下|了解)",
+            " ",
+            query or "",
+        )
+        text = re.sub(r"(?:相关的|适用的|公司的|公司内部的)", " ", text)
+        text = re.sub(r"[=：:；;，,、]", " ", text)
+        return " ".join(text.split())
+
+    @staticmethod
+    def _leading_location(query: str) -> str:
+        text = (query or "").strip()
+        # The validator anchors an isolated policy query with its destination.
+        # Do not keep a city allow-list: Chinese, Latin and other city names
+        # should all follow the same path.
+        match = re.match(r"^([^\s的]{2,64}?)(?:的|出差|差旅|\s)", text)
+        first = match.group(1) if match else (text.split(maxsplit=1)[0] if text else "")
+        if first and len(first) <= 64 and first not in {
+            "查询", "请查询", "国内出差", "公司差旅", "差旅标准", "出差标准",
+        }:
+            return first
+        return ""
 
     def close(self) -> None:
         self.retriever.close()
@@ -162,7 +224,13 @@ class RAGKnowledgeAgent(AgentBase):
                 "适用的住宿、交通、补贴、报销和审批制度。只返回公司制度证据，不提供路线规划。"
             )
         if isinstance(context, dict):
-            query = context.get("agent_query") or context.get("rewritten_query") or context.get("user_query")
+            active_task = context.get("active_task") or {}
+            query = (
+                active_task.get("query")
+                or context.get("agent_query")
+                or context.get("rewritten_query")
+                or context.get("user_query")
+            )
             if query:
                 return str(query).strip()
         return str(data.get("agent_query") or data.get("rewritten_query") or data.get("query") or text).strip()
@@ -190,6 +258,7 @@ class RAGKnowledgeAgent(AgentBase):
 4. 如果知识库只缺少某个固定名称、固定金额或明确口径，但有相关标准/流程/条件，请说“知识库没有明确规定该说法，但相关规定是……”，不要使用“没有找到相关信息，但……”这类矛盾表达。
 5. 不要根据模型自己的常识补充知识库之外的信息。
 6. 回答要面向用户总结：先给结论，再列依据/标准，最后补充限制或例外；不要直接堆叠原文。
+7. 严格校验城市、国家及国内/国际适用范围；不得将其他地区或范围不匹配的标准套用到当前目的地。只有通用规定时才可跨地区引用，无法确定时必须明确说明。
 """
 
         try:

@@ -58,6 +58,12 @@ class SkillScope(BaseModel):
 
     forbidden_terms: List[str] = Field(default_factory=list)
     expansion_terms: List[str] = Field(default_factory=list)
+    # Values already recognized from the request that must survive LLM task
+    # decomposition for this Skill. The validator restores them without
+    # inventing any new facts or intent scope.
+    query_anchor_fields: List[Literal[
+        "origin", "destination", "start_date", "duration", "purpose",
+    ]] = Field(default_factory=list)
 
 
 class AnswerSpec(BaseModel):
@@ -75,8 +81,8 @@ class AnswerSpec(BaseModel):
     primary_agent: Optional[str] = None
 
 
-class CheckpointSpec(BaseModel):
-    """跨轮"收集→暂停→续跑"声明：暂停 skill、判定字段。"""
+class PauseSpec(BaseModel):
+    """节点级等待用户输入声明；它不拥有全局运行状态。"""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -124,7 +130,7 @@ class HommeySkillConfig(BaseModel):
     scope: Optional[SkillScope] = None
     side_effect_allowed: bool = False
     answer: Optional[AnswerSpec] = None
-    checkpoint: Optional[CheckpointSpec] = None
+    pause: Optional[PauseSpec] = None
     memory_hooks: List[MemoryHook] = Field(default_factory=list)
     progress_key: Optional[str] = None
     updates_preferences: bool = False

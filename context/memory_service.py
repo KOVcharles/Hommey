@@ -153,6 +153,8 @@ class MemoryService:
             content_type=metadata.get("content_type", "text"),
             token_count=metadata.get("token_count"),
             attachment_ids=metadata.get("attachment_ids") if role == "user" else None,
+            answer_document=metadata.get("answer_document") if role == "assistant" else None,
+            presentation_document=metadata.get("presentation_document") if role == "assistant" else None,
         )
         if record.inserted:
             try:
