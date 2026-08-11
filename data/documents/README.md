@@ -1,6 +1,7 @@
-# RAG documents
+# 商务差旅 RAG 测试知识库
 
-Put local knowledge-base source files in this directory.
+本目录用于已批准的测试政策文档，并支持 `.txt`、`.md` 和可提取文本的 `.pdf`。
 
-Real company policy documents and private travel knowledge are ignored by Git.
-Keep only sanitized `example_*.txt` files in version control.
+规则层级：法律与安全要求 > 已批准例外 > 核心规则索引 > 国内/国际/报销专项制度 > 操作指南与 FAQ > 城市信息与环保倡议。
+
+同层级冲突时，以生效日期较晚的版本为准；仍无法判断时返回“未知/需人工确认”，不得猜测。

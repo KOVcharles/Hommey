@@ -215,17 +215,46 @@ ATTACHMENT_CONFIG = {
     "max_archive_ratio": _int_env("HOMMEY_ATTACHMENT_MAX_ARCHIVE_RATIO", 100),
     # 原文件的全局保留期；过期附件不能再绑定到新消息。
     "retention_days": _int_env("HOMMEY_ATTACHMENT_RETENTION_DAYS", 30),
-    # 允许的扩展名（小写、不含点）。P0 仅文档类。
+    # 允许的扩展名（小写、不含点）。文档类 + 图片（图片需 VISION_CONFIG.enabled）。
     "allowed_extensions": tuple(
         ext.strip().lower().lstrip(".")
         for ext in os.getenv(
             "HOMMEY_ATTACHMENT_ALLOWED_EXTENSIONS",
-            "txt,md,docx,pdf",
+            "txt,md,docx,pdf,png,jpg,jpeg,webp",
         ).split(",")
         if ext.strip()
     ),
     # 注入 agent_query 的附件文本总字符预算（超出按来源优先级裁剪）。
     "agent_query_char_budget": _int_env("HOMMEY_AGENT_QUERY_CHAR_BUDGET", 12000),
+}
+
+
+VISION_CONFIG = {
+    # 图片理解开关。关闭时图片上传被拒（服务层返回 VISION_DISABLED）。
+    "enabled": _bool_env("HOMMEY_VISION_ENABLED", False),
+    # OpenAI 兼容视觉端点。默认 SiliconFlow；key 复用 SILICONFLOW_API_KEY 或单列。
+    "api_key": _optional_env("HOMMEY_VISION_API_KEY") or _optional_env("SILICONFLOW_API_KEY"),
+    "base_url": os.getenv("HOMMEY_VISION_BASE_URL", "https://api.siliconflow.cn/v1"),
+    "model": os.getenv("HOMMEY_VISION_MODEL", "Qwen/Qwen2.5-VL-72B-Instruct"),
+    "timeout_sec": _float_env("HOMMEY_VISION_TIMEOUT_SEC", 30.0),
+    # 送入视觉模型的图片降采样上限（总像素），同时限帧式限制请求体。
+    "max_pixels": _int_env("HOMMEY_VISION_MAX_PIXELS", 1568 * 1568),
+    "max_size_bytes": _int_env("HOMMEY_VISION_MAX_BYTES", 10 * 1024 * 1024),
+    # 每用户每日视觉调用配额，防止绕过聊天预算刷视觉 API。
+    "daily_limit": _int_env("HOMMEY_VISION_DAILY_LIMIT", 50),
+}
+
+
+ASR_CONFIG = {
+    # 语音转写开关（Mode A：转写为文本后以纯文本发送，不落附件表）。
+    "enabled": _bool_env("HOMMEY_ASR_ENABLED", False),
+    # OpenAI 兼容 /audio/transcriptions 端点。默认 SiliconFlow。
+    "api_key": _optional_env("HOMMEY_ASR_API_KEY") or _optional_env("SILICONFLOW_API_KEY"),
+    "base_url": os.getenv("HOMMEY_ASR_BASE_URL", "https://api.siliconflow.cn/v1"),
+    "model": os.getenv("HOMMEY_ASR_MODEL", "FunAudioLLM/SenseVoiceSmall"),
+    "timeout_sec": _float_env("HOMMEY_ASR_TIMEOUT_SEC", 60.0),
+    "max_size_bytes": _int_env("HOMMEY_ASR_MAX_BYTES", 25 * 1024 * 1024),
+    "daily_limit": _int_env("HOMMEY_ASR_DAILY_LIMIT", 100),
 }
 
 

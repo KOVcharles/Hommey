@@ -44,6 +44,8 @@
     const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
     const knowledgeAdminActions = document.getElementById('knowledgeAdminActions');
     const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
+    const attachmentsLayer = document.getElementById('attachmentsLayer');
+    const attachmentsList = document.getElementById('attachmentsList');
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
     const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
@@ -127,6 +129,12 @@
     let currentRequestId = '';
     let retryRequestPending = false;
     let interruptPending = false;
+
+    // 语音输入（Mode A）：MediaRecorder → 16kHz mono WAV → ASR 转写文本回填。
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceChunks = [];
+    let recordingButton = null;
 
     const rotatingPrompts = [
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
@@ -218,6 +226,14 @@
         document.getElementById('deleteSessionButton').addEventListener('click', confirmDeleteSession);
         document.getElementById('renameForm').addEventListener('submit', renameSelectedSession);
         document.getElementById('confirmAction').addEventListener('click', runConfirmedAction);
+
+        document.querySelectorAll('[data-voice-record]').forEach((button) => {
+            button.addEventListener('click', () => toggleVoiceRecording(button));
+        });
+        document.querySelectorAll('[data-attachment-panel]').forEach((button) => {
+            button.addEventListener('click', openAttachmentPanel);
+        });
+        document.getElementById('attachmentsClose').addEventListener('click', () => closeLayer('attachmentsLayer'));
 
         document.querySelectorAll('[data-close-layer]').forEach((button) => {
             button.addEventListener('click', () => closeLayer(button.dataset.closeLayer));
@@ -1287,10 +1303,156 @@
         attachments.forEach((a) => {
             const card = document.createElement('div');
             card.className = 'attachment-card';
-            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">📎</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
+            const icon = a.kind === 'image' ? '🖼' : '📎';
+            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">${icon}</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
             wrap.appendChild(card);
         });
         stack.appendChild(wrap);
+    }
+
+    // ---- 附件面板：查看 / 下载 / 引用 / 删除 ---------------------------------
+
+    async function openAttachmentPanel() {
+        attachmentsLayer.classList.add('open');
+        attachmentsList.innerHTML = '<div class="empty-state">正在读取附件…</div>';
+        try {
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/attachments?limit=100`);
+            renderAttachmentsList(data.attachments || []);
+        } catch (err) {
+            attachmentsList.innerHTML = '<div class="empty-state">读取附件失败，请重试。</div>';
+            showToast(formatDisplayError(err, '读取附件失败'));
+        }
+    }
+
+    function renderAttachmentsList(attachments) {
+        attachmentsList.replaceChildren();
+        if (!attachments || !attachments.length) {
+            attachmentsList.innerHTML = '<div class="empty-state">还没有上传过附件。</div>';
+            return;
+        }
+        attachments.forEach((att) => attachmentsList.appendChild(createAttachmentRow(att)));
+    }
+
+    function createAttachmentRow(att) {
+        const row = document.createElement('div');
+        row.className = 'attachment-item';
+        row.dataset.id = att.id;
+
+        const icon = document.createElement('span');
+        icon.className = 'attachment-item-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = att.kind === 'image' ? '🖼' : '📄';
+
+        const main = document.createElement('span');
+        main.className = 'attachment-item-main';
+        const name = document.createElement('span');
+        name.className = 'attachment-item-name';
+        name.textContent = att.filename || '未命名附件';
+        name.title = att.filename || '';
+        const meta = document.createElement('span');
+        meta.className = 'attachment-item-meta';
+        meta.textContent = `${attachmentStatusLabel(att)} · ${formatBytes(att.size_bytes)}`;
+        main.append(name, meta);
+
+        const actions = document.createElement('span');
+        actions.className = 'attachment-item-actions';
+
+        const downloadBtn = document.createElement('button');
+        downloadBtn.type = 'button';
+        downloadBtn.className = 'attachment-action';
+        downloadBtn.textContent = '下载';
+        downloadBtn.setAttribute('aria-label', `下载 ${att.filename}`);
+        downloadBtn.addEventListener('click', () => downloadAttachment(att));
+        actions.appendChild(downloadBtn);
+
+        if (att.status === 'ready') {
+            const attachBtn = document.createElement('button');
+            attachBtn.type = 'button';
+            attachBtn.className = 'attachment-action primary';
+            attachBtn.textContent = '引用';
+            attachBtn.setAttribute('aria-label', `引用 ${att.filename} 到新消息`);
+            attachBtn.addEventListener('click', () => reAttachAttachment(att));
+            actions.appendChild(attachBtn);
+        }
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'attachment-action danger';
+        deleteBtn.textContent = '删除';
+        deleteBtn.setAttribute('aria-label', `删除 ${att.filename}`);
+        deleteBtn.addEventListener('click', () => deleteAttachment(att));
+        actions.appendChild(deleteBtn);
+
+        row.append(icon, main, actions);
+        return row;
+    }
+
+    function attachmentStatusLabel(att) {
+        const labels = { ready: '可用', failed: '解析失败', processing: '处理中', expired: '已过期' };
+        return labels[att.status] || att.status || '未知';
+    }
+
+    function formatBytes(bytes) {
+        const n = Number(bytes) || 0;
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function reAttachAttachment(att) {
+        if (att.status !== 'ready') { showToast('该附件暂不可用'); return; }
+        if (pendingAttachments.some((item) => item.id === att.id)) {
+            showToast('该附件已在待发送列表中');
+            return;
+        }
+        pendingAttachments.push({ id: att.id, filename: att.filename, kind: att.kind, status: 'ready' });
+        if (retryRequestPending) {
+            resetRequestId();
+            retryRequestPending = false;
+        }
+        renderPendingAttachments();
+        closeLayer('attachmentsLayer');
+        enterChatView();
+        showToast('已加入待发送附件');
+    }
+
+    async function downloadAttachment(att) {
+        try {
+            const response = await authFetch(
+                `/api/${encodeURIComponent(userId)}/attachments/${encodeURIComponent(att.id)}/content`
+            );
+            if (!response.ok) {
+                let data = null;
+                try { data = await response.json(); } catch (e) { data = null; }
+                throw createApiError(data, '下载失败', response.status);
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = att.filename || 'attachment';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 4000);
+        } catch (err) {
+            showToast(formatDisplayError(err, '下载失败'));
+        }
+    }
+
+    function deleteAttachment(att) {
+        openConfirm(
+            '删除附件？',
+            `「${att.filename}」删除后不可恢复，已关联消息中的该附件也将一并移除。`,
+            async () => {
+                await fetchJson(
+                    `/api/${encodeURIComponent(userId)}/attachments/${encodeURIComponent(att.id)}`,
+                    { method: 'DELETE' }
+                );
+                showToast('附件已删除');
+                await openAttachmentPanel();
+            }
+        );
     }
 
     async function sendMessage(explicitText, options = {}) {
@@ -1704,6 +1866,163 @@
         enterChatView();
         const current = chatInput.value.trim();
         chatInput.value = current ? `${current}，${value}` : value;
+        resizeInput(chatInput);
+        chatInput.focus();
+        chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+    }
+
+    // ---- 语音输入（Mode A）--------------------------------------------------
+
+    const MIC_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
+    const REC_STOP_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+
+    async function toggleVoiceRecording(button) {
+        if (recordingButton) {
+            stopVoiceRecording();
+            return;
+        }
+        if (isProcessing || isOnboarding) {
+            showToast('当前正在处理，请稍后再试');
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast('当前浏览器不支持录音');
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            voiceStream = stream;
+            voiceChunks = [];
+            const recorder = new MediaRecorder(stream);
+            voiceRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data && e.data.size) voiceChunks.push(e.data); };
+            recorder.onstop = () => finishVoiceRecording();
+            recorder.start();
+            recordingButton = button;
+            setRecordingUI(button, true);
+        } catch (err) {
+            showToast('无法使用麦克风，请检查浏览器权限');
+        }
+    }
+
+    function stopVoiceRecording() {
+        const button = recordingButton;
+        if (!button) return;
+        if (voiceRecorder && voiceRecorder.state !== 'inactive') {
+            voiceRecorder.stop(); // onstop → finishVoiceRecording
+        } else {
+            finishVoiceRecording();
+        }
+    }
+
+    function setRecordingUI(button, recording) {
+        if (!button) return;
+        button.classList.toggle('is-recording', recording);
+        button.setAttribute('aria-label', recording ? '停止录音' : '语音输入');
+        button.title = recording ? '停止录音' : '语音输入';
+        button.innerHTML = recording ? REC_STOP_ICON : MIC_ICON;
+    }
+
+    async function finishVoiceRecording() {
+        const button = recordingButton;
+        const recorder = voiceRecorder;
+        recordingButton = null;
+        voiceRecorder = null;
+        if (voiceStream) {
+            voiceStream.getTracks().forEach((track) => track.stop());
+            voiceStream = null;
+        }
+        if (button) setRecordingUI(button, false);
+        const blob = new Blob(voiceChunks, { type: (recorder && recorder.mimeType) || 'audio/webm' });
+        voiceChunks = [];
+        if (!blob.size) {
+            showToast('没有录到声音，请重试');
+            return;
+        }
+        try {
+            const wav = await blobToWav16k(blob);
+            const text = await transcribeAudio(wav);
+            if (text) {
+                backfillComposer(text);
+            } else {
+                showToast('没有识别到语音内容，请再试一次');
+            }
+        } catch (err) {
+            showToast(formatDisplayError(err, '语音识别失败'));
+        }
+    }
+
+    async function transcribeAudio(blob) {
+        const form = new FormData();
+        form.append('file', blob, 'voice.wav');
+        const response = await authFetch(`/api/${encodeURIComponent(userId)}/asr/transcribe`, {
+            method: 'POST',
+            headers: { 'X-Request-ID': ensureRequestId() },
+            body: form,
+        });
+        if (!response.ok) {
+            let data = null;
+            try { data = await response.json(); } catch (e) { data = null; }
+            throw createApiError(data, '语音识别失败', response.status);
+        }
+        const data = await response.json();
+        return String(data.text || '').trim();
+    }
+
+    async function blobToWav16k(blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        try {
+            const decoded = await ctx.decodeAudioData(arrayBuffer);
+            const targetRate = 16000;
+            const length = Math.max(1, Math.ceil(decoded.duration * targetRate));
+            const offline = new OfflineAudioContext(1, length, targetRate);
+            const source = offline.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offline.destination);
+            source.start(0);
+            const rendered = await offline.startRendering();
+            return encodeWav(rendered.getChannelData(0), targetRate);
+        } finally {
+            if (ctx.close) ctx.close();
+        }
+    }
+
+    function encodeWav(samples, sampleRate) {
+        const dataSize = samples.length * 2;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+        const writeString = (offset, text) => {
+            for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+        };
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);            // PCM
+        view.setUint16(22, 1, true);            // mono
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true); // byte rate
+        view.setUint16(32, 2, true);            // block align
+        view.setUint16(34, 16, true);           // bits per sample
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            offset += 2;
+        }
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function backfillComposer(text) {
+        if (!text || isProcessing || isOnboarding) return;
+        enterChatView();
+        const current = chatInput.value.trim();
+        chatInput.value = current ? `${current}，${text}` : text;
         resizeInput(chatInput);
         chatInput.focus();
         chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);

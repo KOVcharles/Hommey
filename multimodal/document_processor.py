@@ -32,6 +32,8 @@ def _decode_text(data: bytes) -> str:
 
 class DocumentProcessor:
     supported_extensions: tuple[str, ...] = ()
+    # 每种处理器的提取结果契约版本；升级解析逻辑时 bump，避免旧 extraction 不兼容。
+    parser_version: str = PARSER_VERSION
 
     def parse(self, data: bytes, filename: str) -> ParseResult:
         raise NotImplementedError

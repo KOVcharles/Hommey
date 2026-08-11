@@ -421,7 +421,10 @@ class MilvusKnowledgeStore:
         vector_docs = self.vector_search(query, self.vector_top_k)
         bm25_docs = self.bm25_search(query, self.bm25_top_k)
         final_k = top_k or self.top_k
-        candidate_k = max(final_k, self.vector_top_k, self.bm25_top_k)
+        # Keep the union large enough for reranking.  Using only the maximum
+        # branch size can discard a keyword-only candidate before the reranker
+        # sees it when vector and BM25 result sets are mostly disjoint.
+        candidate_k = max(final_k, self.vector_top_k + self.bm25_top_k)
         fused_docs = fuse_results(vector_docs, bm25_docs, candidate_k)
         reranked_docs = rerank_results(fused_docs, query)
         filtered_docs = filter_relevant_results(reranked_docs, query)
@@ -499,16 +502,35 @@ def _is_windows_manifest_replace_error(exc: Exception) -> bool:
 
 def rerank_results(docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
     terms = _rerank_terms(query)
+    query_ngrams = _query_ngrams(query)
+    focus_terms = _focus_terms(query)
+    ngram_df = {
+        ngram: sum(1 for doc in docs if ngram in doc.get("content", ""))
+        for ngram in query_ngrams
+    }
     if not terms:
-        return docs
+        terms = []
 
     def score(doc: Dict[str, Any]) -> float:
         content = doc.get("content", "")
         matches = sum(1 for term in terms if term in content)
+        ngram_bonus = sum(
+            0.015 * (1.0 + math.log((len(docs) + 1.0) / (ngram_df[term] + 1.0)))
+            for term in query_ngrams
+            if term in content
+        )
+        focus_matches = sum(1 for term in focus_terms if term in content)
         title = str((doc.get("metadata") or {}).get("title", ""))
         title_matches = sum(1 for term in terms if term in title)
         penalty = _off_topic_penalty(query, content)
-        return float(doc.get("fusion_score", 0.0)) + matches * 0.04 + title_matches * 0.02 - penalty
+        return (
+            float(doc.get("fusion_score", 0.0))
+            + matches * 0.04
+            + title_matches * 0.02
+            + min(ngram_bonus, 0.30)
+            + focus_matches * 0.22
+            - penalty
+        )
 
     for doc in docs:
         doc["rerank_score"] = score(doc)
@@ -542,11 +564,53 @@ def _off_topic_penalty(query: str, content: str) -> float:
 
     meal_terms = ("餐费", "餐饮", "早餐", "午餐", "晚餐", "业务招待", "个人零食", "饮料", "酒水")
     meal_matches = sum(1 for term in meal_terms if term in content)
-    unrelated_terms = ("家属", "升级酒店", "升级机票", "国际出差", "签证", "护照", "里程", "积分")
+    international_query = any(
+        term in query
+        for term in ("国际", "境外", "国外", "港澳", "新加坡", "日本", "韩国", "美国", "加拿大", "英国", "法国", "德国", "澳大利亚", "阿联酋")
+    )
+    unrelated_terms = ["家属", "升级酒店", "升级机票", "签证", "护照", "里程", "积分"]
+    unrelated_terms.append("国内出差" if international_query else "国际出差")
     unrelated_matches = sum(1 for term in unrelated_terms if term in content)
     if meal_matches >= 2:
         return 0.0
     return unrelated_matches * 0.03
+
+
+def _query_ngrams(text: str) -> List[str]:
+    """Return longer Chinese n-grams that reward exact concepts at rerank time."""
+    runs = re.findall(r"[\u4e00-\u9fff]+", (text or "").lower())
+    return list(
+        dict.fromkeys(
+            run[start : start + width]
+            for run in runs
+            for width in (3, 4)
+            for start in range(0, len(run) - width + 1)
+        )
+    )
+
+
+def _focus_terms(text: str) -> List[str]:
+    """Extract the concrete subject after removing generic policy wording."""
+    normalized = (text or "").lower()
+    boilerplate = (
+        "出差期间",
+        "出差途中",
+        "是否可以报销",
+        "可以报销吗",
+        "是否可报销",
+        "能不能报销",
+        "能否报销",
+        "可以报销",
+        "报销吗",
+        "是否",
+        "能否",
+        "可以",
+        "报销",
+        "请问",
+    )
+    for phrase in boilerplate:
+        normalized = normalized.replace(phrase, " ")
+    return [run for run in re.findall(r"[\u4e00-\u9fff]+", normalized) if len(run) >= 3]
 
 
 def _get_embedding_model(model_path: str):
@@ -586,5 +650,16 @@ def _tokenize(text: str) -> List[str]:
     text = (text or "").lower()
     word_tokens = re.findall(r"[a-z0-9_]+", text)
     phrase_tokens = [term.lower() for term in _DOMAIN_TERMS if term.lower() in text]
-    zh_tokens = [char for char in text if "\u4e00" <= char <= "\u9fff"]
-    return word_tokens + phrase_tokens + zh_tokens
+    zh_runs = re.findall(r"[\u4e00-\u9fff]+", text)
+    zh_tokens = [char for run in zh_runs for char in run]
+    # Single-character tokenization has high recall but gives generic questions
+    # such as “某费用可以报销吗” nearly identical BM25 scores.  Short n-grams
+    # preserve exact Chinese concepts (for example “宠物寄养费”) while keeping
+    # the implementation dependency-free.  Never bridge punctuation or lines.
+    zh_ngrams = [
+        run[start : start + width]
+        for run in zh_runs
+        for width in (2, 3, 4)
+        for start in range(0, len(run) - width + 1)
+    ]
+    return word_tokens + phrase_tokens + zh_tokens + zh_ngrams

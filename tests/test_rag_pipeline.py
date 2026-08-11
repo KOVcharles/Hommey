@@ -5,7 +5,7 @@ import pytest
 from rag.chunker import split_text
 from rag.document_loader import load_text_documents
 from rag.embedder import SiliconFlowEmbedder
-from rag.milvus_store import MilvusKnowledgeStore, fuse_results, rerank_results
+from rag.milvus_store import MilvusKnowledgeStore, _tokenize, fuse_results, rerank_results
 from rag.retriever import expand_query
 from rag.schemas import DocumentChunk
 
@@ -20,6 +20,14 @@ def test_load_text_documents_reads_txt_files(tmp_path: Path):
     assert documents[0].title == "Travel Standards"
     assert documents[0].category == "travel_policy"
     assert documents[0].metadata["parent_doc"] == "01_travel_standards.txt"
+
+
+def test_tokenize_keeps_exact_chinese_concepts_as_ngrams():
+    tokens = _tokenize("宠物寄养费，能报销吗？")
+
+    assert "宠物寄养" in tokens
+    assert "寄养费" in tokens
+    assert "费能" not in tokens
 
 
 def test_split_text_keeps_small_paragraphs_together():
@@ -74,6 +82,24 @@ def test_meal_allowance_query_expands_and_reranks_meal_policy():
 
     assert "餐费" in query
     assert results[0]["id"] == 2
+
+
+def test_rerank_rewards_exact_chinese_concept_over_generic_expense_text():
+    docs = [
+        {"id": 1, "content": "出差期间其他合理费用可以凭发票报销", "metadata": {}, "fusion_score": 0.04},
+        {"id": 2, "content": "宠物寄养费是否可报销没有政策授权，需要人工确认", "metadata": {}, "fusion_score": 0.015},
+    ]
+
+    results = rerank_results(docs, "出差期间宠物寄养费可以报销吗")
+
+    assert results[0]["id"] == 2
+
+
+def test_international_meal_query_expands_with_international_context():
+    query = expand_query("去新加坡出差，公司提供午餐时餐补怎么扣")
+
+    assert "国际出差" in query
+    assert "境外" in query
 
 
 def test_siliconflow_embedder_posts_openai_compatible_payload():

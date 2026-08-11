@@ -19,6 +19,8 @@ milvus-lite
 pypdf==6.4.1
 # 聊天附件 DOCX 解析（import 名 docx）
 python-docx>=1.1.0
+# 图片附件：解码校验 + 降采样后送视觉模型（图片理解需 HOMMEY_VISION_ENABLED=true）
+Pillow>=10.0.0
 
 # 可选：仅当 HOMMEY_RAG_EMBEDDING_BACKEND=local 时安装
 # sentence-transformers==5.2.3

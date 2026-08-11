@@ -256,5 +256,5 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260809-readable-v6" in template
+    assert "20260811-multimodal-ui-v1" in template
     assert "20260809-readable-v8" in template

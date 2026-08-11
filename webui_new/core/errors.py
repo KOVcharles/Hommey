@@ -26,7 +26,9 @@ _SECURITY_HEADERS = {
     ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",
-    "Permissions-Policy": "camera=(), microphone=(), geolocation=()",
+    # microphone=(self) 允许同源页面 getUserMedia 录音（语音输入 Mode A）；
+    # 相机与定位保持禁用。
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
 }
 
 

@@ -19,7 +19,11 @@ from webui_new.knowledge_base_service import (
 
 SUPPORTED_DOCUMENT_TYPES = {"txt", "md", "pdf"}
 CATEGORY_LABELS = {
+    "policy_governance": "规则治理",
     "travel_policy": "差旅标准",
+    "international_travel_policy": "国际差旅",
+    "exception_policy": "例外审批",
+    "validation_scenarios": "验证案例",
     "reimbursement_policy": "费用报销",
     "booking_guide": "预订指南",
     "faq": "常见问题",

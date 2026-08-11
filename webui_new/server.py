@@ -29,6 +29,7 @@ from utils.preflight import run_preflight
 from utils.structured_logging import configure_logging
 from webui_new.core.errors import register_error_handlers
 from webui_new.manager import WebHommeyManager
+from webui_new.routes.asr import create_asr_router
 from webui_new.routes.auth import create_auth_router
 from webui_new.routes.attachments import create_attachments_router
 from webui_new.routes.chat import create_chat_router
@@ -86,6 +87,7 @@ app.include_router(create_users_router(manager))
 app.include_router(create_onboarding_router(manager))
 app.include_router(create_chat_router(manager))
 app.include_router(create_attachments_router(attachment_service))
+app.include_router(create_asr_router())
 app.include_router(create_skill_admin_router(skill_platform))
 documents_dir = Path(RAG_CONFIG["documents_dir"])
 if not documents_dir.is_absolute():

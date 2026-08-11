@@ -325,6 +325,9 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     font-weight: 520;
 }
 .composer-spacer { flex: 1; }
+.composer-tool-btn.is-recording { color: var(--danger); background: var(--soft); }
+.composer-tool-btn.is-recording svg { animation: pulse-rec 1.2s ease-in-out infinite; }
+@keyframes pulse-rec { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
 .send-button {
     width: 34px;
     height: 34px;
@@ -816,6 +819,87 @@ html[data-theme="dark"] .msg-avatar.ai {
     letter-spacing: -.03em;
     font-weight: 620;
 }
+.attachments-modal {
+    overflow: hidden;
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    background: var(--panel);
+    box-shadow: var(--shadow-3);
+    width: min(560px, 100%);
+    max-height: min(680px, calc(100vh - 40px));
+    display: flex;
+    flex-direction: column;
+    transform: translateY(12px) scale(.985);
+    transition: transform .32s var(--ease);
+}
+.modal-layer.open .attachments-modal { transform: none; }
+.attachments-list {
+    flex: 1;
+    padding: 10px;
+    overflow-y: auto;
+}
+.attachments-list .empty-state {
+    padding: 42px 12px;
+    text-align: center;
+    color: var(--ink-3);
+    font-size: 13px;
+}
+.attachment-item {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+    padding: 10px 12px;
+    border-radius: 13px;
+    transition: background .18s ease;
+}
+.attachment-item:hover { background: var(--soft); }
+.attachment-item + .attachment-item { margin-top: 2px; }
+.attachment-item-icon {
+    width: 34px;
+    height: 34px;
+    border-radius: 10px;
+    background: var(--soft);
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    flex: none;
+}
+.attachment-item-main {
+    min-width: 0;
+    flex: 1;
+    display: flex;
+    flex-direction: column;
+    gap: 2px;
+}
+.attachment-item-name {
+    font-size: 13px;
+    font-weight: 560;
+    color: var(--ink);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+}
+.attachment-item-meta { color: var(--ink-3); font-size: 11px; }
+.attachment-item-actions {
+    display: flex;
+    gap: 6px;
+    flex: none;
+}
+.attachment-action {
+    height: 30px;
+    padding: 0 12px;
+    border-radius: 9px;
+    border: 1px solid var(--line);
+    color: var(--ink-2);
+    background: transparent;
+    font-size: 12px;
+    font-weight: 540;
+    transition: color .18s ease, background .18s ease, border-color .18s ease;
+}
+.attachment-action:hover { color: var(--ink); background: var(--soft); }
+.attachment-action.primary { color: var(--ink); border-color: var(--line-2); }
+.attachment-action.danger { color: var(--danger); }
+.attachment-action.danger:hover { background: var(--soft); }
 .settings-body { max-height: calc(100vh - 102px); padding: 18px; overflow-y: auto; }
 .settings-section + .settings-section { margin-top: 24px; }
 .settings-label { margin: 0 3px 7px; color: var(--ink-3); font-size: 11px; }

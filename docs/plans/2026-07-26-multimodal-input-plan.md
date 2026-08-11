@@ -283,6 +283,13 @@ multimodal/
 
 接入异步 ASR、录音 UI、PDF 文本提取、扫描 PDF OCR、处理状态展示和超时重试。本阶段引入持久队列与 worker（见 7），承载 ASR/DOC 转换/OCR。验收：上传/录制语音后可得到可编辑转写并参与差旅意图识别；扫描 PDF 的引用可定位到页码。
 
+> 状态（2026-08-11 快照）：已实现图片（P1-A）与语音 Mode A 的同步在请求内处理版本——
+> - **图片**：`ImageProcessor`（Pillow 解码/降采样 → `VisionClient` 调 SiliconFlow Qwen2.5-VL，OpenAI 兼容）一次完成 OCR + 描述 + 差旅结构化字段；提取文本进 `attachment_extractions`，下游 `normalize`/`context_builder` 零改动拼入 `agent_query`。
+> - **语音 Mode A**：前端 MediaRecorder → 16kHz mono WAV → `POST /api/{user_id}/asr/transcribe`（SenseVoiceSmall）→ 转写文本回填输入框，以纯文本发送，不落附件表。
+> - **附件面板**：`GET /api/{user_id}/attachments`（列表）+ `GET .../{id}/content`（下载）+ 删除；前端「我的附件」按钮支持查看/下载/引用到新消息/删除；migration 0017 放开 `conversation_message_attachments(attachment_id)` 的 UNIQUE 约束以支持附件跨消息复用。
+> - **成本护栏**：视觉/ASR 均设每用户每日配额（`multimodal/quota.py` DailyQuota，Redis 优先、进程内兜底），补上外部调用不在聊天预算内的缺口。
+> - 未做（仍属后续）：持久队列/worker、异步转写状态轮询、PDF 扫描 OCR 页码定位、原生多模态 gateway。
+
 ### P2：原生多模态与知识沉淀
 
 实现 `NativeMultimodalGateway`、图片/票据理解和用户确认后的“转入 RAG 知识库”。验收：切换支持视觉的模型仅改配置和网关测试；图片/附件不会绕过权限、配额或提示注入防护。

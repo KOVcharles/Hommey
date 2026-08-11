@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260809-readable-v6">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260811-multimodal-ui-v1">
     <link rel="stylesheet" href="/static/answer-card.css?v=20260809-readable-v8">
     <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260809-intake-v5">
 </head>
@@ -60,10 +60,16 @@
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/><path d="m9 12 2 2 4-4"/></svg>
                             <span>企业差旅</span>
                         </span>
-                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf/图片）">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp">
                         </label>
+                        <button class="icon-button composer-tool-btn" type="button" data-voice-record aria-label="语音输入" title="语音输入">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+                        </button>
+                        <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                        </button>
                         <span class="composer-spacer"></span>
                         <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -91,10 +97,16 @@
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 22s7-4 7-11V5l-7-3-7 3v6c0 7 7 11 7 11Z"/></svg>
                             <span>企业差旅</span>
                         </span>
-                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf）">
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf/图片）">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
-                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf">
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp">
                         </label>
+                        <button class="icon-button composer-tool-btn" type="button" data-voice-record aria-label="语音输入" title="语音输入">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+                        </button>
+                        <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                        </button>
                         <span class="composer-spacer"></span>
                         <button id="sendBtn" class="send-button" type="button" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -338,9 +350,23 @@
         </div>
     </section>
 
+    <section id="attachmentsLayer" class="modal-layer" aria-label="我的附件">
+        <div class="attachments-modal">
+            <header class="modal-head">
+                <h2>我的附件</h2>
+                <button id="attachmentsClose" class="icon-button" type="button" aria-label="关闭">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                </button>
+            </header>
+            <div id="attachmentsList" class="attachments-list" aria-live="polite">
+                <div class="empty-state">正在读取附件。</div>
+            </div>
+        </div>
+    </section>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/answer-card.js?v=20260809-weather-zh-v8"></script>
     <script src="/static/trip-intake-card.js?v=20260809-intake-v5"></script>
-    <script src="/static/app.js?v=20260809-security-ux-v4"></script>
+    <script src="/static/app.js?v=20260811-multimodal-ui-v1"></script>
 </body>
 </html>
