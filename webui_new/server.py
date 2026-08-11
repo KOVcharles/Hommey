@@ -13,6 +13,7 @@ Hommey 商旅助手 - FastAPI Web 服务入口
 import os
 import sys
 from contextlib import asynccontextmanager
+from pathlib import Path
 
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, PlainTextResponse
@@ -22,12 +23,13 @@ from jinja2 import Environment, FileSystemLoader
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from settings import MEMORY_CONFIG, SYSTEM_CONFIG
+from settings import MEMORY_CONFIG, RAG_CONFIG, SYSTEM_CONFIG
 from utils.observability import render_metrics
 from utils.preflight import run_preflight
 from utils.structured_logging import configure_logging
 from webui_new.core.errors import register_error_handlers
 from webui_new.manager import WebHommeyManager
+from webui_new.routes.asr import create_asr_router
 from webui_new.routes.auth import create_auth_router
 from webui_new.routes.attachments import create_attachments_router
 from webui_new.routes.chat import create_chat_router
@@ -36,6 +38,7 @@ from webui_new.routes.pages import create_pages_router
 from webui_new.routes.users import create_users_router
 from webui_new.auth.migrations import apply_all_migrations
 from webui_new.routes.skill_admin import create_skill_admin_router
+from webui_new.routes.knowledge_base import create_knowledge_base_router
 from webui_new.skill_platform import SkillPlatformService
 from context.postgres_pool import close_all_postgres_pools
 
@@ -84,7 +87,15 @@ app.include_router(create_users_router(manager))
 app.include_router(create_onboarding_router(manager))
 app.include_router(create_chat_router(manager))
 app.include_router(create_attachments_router(attachment_service))
+app.include_router(create_asr_router())
 app.include_router(create_skill_admin_router(skill_platform))
+documents_dir = Path(RAG_CONFIG["documents_dir"])
+if not documents_dir.is_absolute():
+    documents_dir = Path(project_root) / documents_dir
+knowledge_base_path = Path(RAG_CONFIG["knowledge_base_path"])
+if not knowledge_base_path.is_absolute():
+    knowledge_base_path = Path(project_root) / knowledge_base_path
+app.include_router(create_knowledge_base_router(documents_dir, knowledge_base_path))
 
 
 @app.get("/healthz")

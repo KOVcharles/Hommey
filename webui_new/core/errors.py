@@ -18,6 +18,25 @@ from utils.observability import COMPONENT_HTTP, record_app_error, record_http_re
 
 logger = logging.getLogger(__name__)
 
+_SECURITY_HEADERS = {
+    "Content-Security-Policy": (
+        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
+        "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; "
+        "frame-ancestors 'none'; form-action 'self'"
+    ),
+    "X-Content-Type-Options": "nosniff",
+    "Referrer-Policy": "strict-origin-when-cross-origin",
+    # microphone=(self) 允许同源页面 getUserMedia 录音（语音输入 Mode A）；
+    # 相机与定位保持禁用。
+    "Permissions-Policy": "camera=(), microphone=(self), geolocation=()",
+}
+
+
+def _apply_security_headers(response):
+    for name, value in _SECURITY_HEADERS.items():
+        response.headers.setdefault(name, value)
+    return response
+
 
 class AppError(Exception):
     """Base application error with public response fields and log metadata."""
@@ -120,7 +139,7 @@ def error_response(
 ) -> JSONResponse:
     """Build the public Phase 2 API error response."""
     rid = request_id(request)
-    return JSONResponse(
+    response = JSONResponse(
         status_code=status_code,
         content={
             "success": False,
@@ -133,6 +152,7 @@ def error_response(
         },
         headers={"X-Request-ID": rid} if rid else None,
     )
+    return _apply_security_headers(response)
 
 
 def app_error_response(request: Request, exc: AppError) -> JSONResponse:
@@ -183,6 +203,7 @@ async def request_context_middleware(request: Request, call_next):
     duration_ms = int((time.perf_counter() - start) * 1000)
     record_http_request(request.url.path, request.method, status_code, duration_ms)
     response.headers["X-Request-ID"] = rid
+    _apply_security_headers(response)
     logger.info(
         "request",
         extra={

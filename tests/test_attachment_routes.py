@@ -42,6 +42,31 @@ class _AttachmentService:
     def delete(self, attachment_id, user_id):
         self.calls.append(("delete", attachment_id, user_id))
 
+    def list(self, user_id, limit=100):
+        self.calls.append(("list", user_id, limit))
+        return [
+            AttachmentDetailResponse(
+                id="att_1",
+                filename="policy.txt",
+                kind="document",
+                status="ready",
+                mime_type="text/plain",
+                size_bytes=5,
+            ),
+            AttachmentDetailResponse(
+                id="att_2",
+                filename="receipt.png",
+                kind="image",
+                status="ready",
+                mime_type="image/png",
+                size_bytes=1024,
+            ),
+        ]
+
+    def get_content(self, attachment_id, user_id):
+        self.calls.append(("get_content", attachment_id, user_id))
+        return "policy.txt", b"hello"
+
 
 @pytest.fixture
 def anyio_backend():
@@ -125,3 +150,28 @@ async def test_upload_stops_reading_above_configured_limit(attachment_client, mo
     assert response.status_code == 400
     assert response.json()["error"]["code"] == "ATTACHMENT_TOO_LARGE"
     assert service.calls == []
+
+
+@pytest.mark.anyio
+async def test_list_attachments_for_attachment_panel(attachment_client):
+    client, service = attachment_client
+    response = await client.get("/api/7/attachments?limit=50")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert len(body["attachments"]) == 2
+    assert body["attachments"][1]["kind"] == "image"
+    assert ("list", "7", 50) in service.calls
+
+
+@pytest.mark.anyio
+async def test_get_attachment_content_downloads_original(attachment_client):
+    client, service = attachment_client
+    response = await client.get("/api/7/attachments/att_1/content")
+
+    assert response.status_code == 200
+    assert response.content == b"hello"
+    assert response.headers["content-disposition"].startswith("attachment;")
+    assert "policy.txt" in response.headers["content-disposition"]
+    assert response.headers["x-content-type-options"] == "nosniff"
+    assert ("get_content", "att_1", "7") in service.calls

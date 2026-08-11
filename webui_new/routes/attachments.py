@@ -5,8 +5,11 @@
 """
 import logging
 
+from urllib.parse import quote
+
 from fastapi import APIRouter, Depends, Request, UploadFile
 from fastapi.params import File
+from fastapi.responses import Response
 
 from settings import ATTACHMENT_CONFIG
 from utils.logging_safety import sanitize_for_log
@@ -62,6 +65,19 @@ def create_attachments_router(attachment_service):
             )
             raise InternalError("ATTACHMENT_UPLOAD_FAILED", "附件上传失败，请稍后重试")
 
+    @router.get("/api/{user_id}/attachments")
+    async def list_attachments(
+        user_id: str,
+        limit: int = 100,
+        current_user: User = Depends(require_path_user),
+    ):
+        """附件面板：该用户全部上传附件，按创建时间倒序。"""
+        return {
+            "attachments": [
+                att.model_dump() for att in attachment_service.list(str(current_user.id), limit=limit)
+            ]
+        }
+
     @router.get("/api/{user_id}/attachments/{attachment_id}")
     async def get_attachment(
         user_id: str,
@@ -70,6 +86,26 @@ def create_attachments_router(attachment_service):
     ):
         # require_path_user 已确认 user_id 与 token 一致；service 再按 id+user_id 查询。
         return attachment_service.get(attachment_id, str(current_user.id)).model_dump()
+
+    @router.get("/api/{user_id}/attachments/{attachment_id}/content")
+    async def get_attachment_content(
+        user_id: str,
+        attachment_id: str,
+        current_user: User = Depends(require_path_user),
+    ):
+        """下载附件原文件（私有存储，仅拥有者可访问）。"""
+        filename, content = attachment_service.get_content(
+            attachment_id, str(current_user.id)
+        )
+        encoded = quote(filename or "attachment")
+        return Response(
+            content=content,
+            media_type="application/octet-stream",
+            headers={
+                "Content-Disposition": f"attachment; filename*=UTF-8''{encoded}",
+                "X-Content-Type-Options": "nosniff",
+            },
+        )
 
     @router.delete("/api/{user_id}/attachments/{attachment_id}")
     async def delete_attachment(

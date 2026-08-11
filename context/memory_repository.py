@@ -436,18 +436,18 @@ class PostgresMemoryRepository:
                 "Attachment is missing, not ready, or owned by another user"
             )
 
+        # 幂等：对已有消息的重试，附件集合必须与本次消息已绑定的集合一致。
+        # （附件可被多条消息复用，故按 message_id 作用域比较，而非全局唯一。）
         cur.execute(
             """
-            SELECT message_id, attachment_id
+            SELECT attachment_id
             FROM conversation_message_attachments
-            WHERE attachment_id = ANY(%s)
+            WHERE message_id = %s AND attachment_id = ANY(%s)
             """,
-            (unique_ids,),
+            (record.message_id, unique_ids),
         )
-        linked_rows = cur.fetchall()
-        if any(row["message_id"] != record.message_id for row in linked_rows):
-            raise AttachmentBindingError("Attachment is already bound to another message")
-        if not record.inserted and {row["attachment_id"] for row in linked_rows} != set(unique_ids):
+        bound_ids = {row["attachment_id"] for row in cur.fetchall()}
+        if not record.inserted and bound_ids != set(unique_ids):
             raise AttachmentBindingError("Idempotent retry changed the attachment set")
 
         # Atomicity boundary: these rows commit or roll back with the user message.

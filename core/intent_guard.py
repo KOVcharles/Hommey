@@ -12,12 +12,14 @@ import re
 from typing import Any, Dict, Optional, Tuple
 
 from core.guard_rules import (
+    AMBIGUOUS_POLICY_KEYWORDS,
     BUSINESS_TRAVEL_KEYWORDS,
     COMPLIANCE_KEYWORDS,
     FORBIDDEN_ACTIONS,
     GENERIC_POLICY_KEYWORDS,
     GIBBERISH_RE,
     MEMORY_KEYWORDS,
+    NON_TRAVEL_POLICY_KEYWORDS,
     OUT_OF_SCOPE_KEYWORDS,
     PERSONAL_TRAVEL_KEYWORDS,
     POLICY_KEYWORDS,
@@ -25,6 +27,7 @@ from core.guard_rules import (
     SEARCH_KEYWORDS,
     TRAVEL_TRANSPORT_KEYWORDS,
     TRIP_KEYWORDS,
+    TRAVEL_SPECIFIC_POLICY_KEYWORDS,
     UNCLEAR_EXACT,
     WEATHER_KEYWORDS,
 )
@@ -225,6 +228,19 @@ def has_explicit_business_context(query: str, conversation_context: str = "") ->
 def has_travel_information_context(query: str, conversation_context: str = "") -> bool:
     """Information tools are available only as support for a travel task."""
     return has_business_travel_context(query, conversation_context)
+
+
+def has_travel_policy_context(query: str, conversation_context: str = "") -> bool:
+    """Require travel evidence beyond generic policy/approval vocabulary."""
+    q = normalize_query(query)
+    if any(keyword in q for keyword in NON_TRAVEL_POLICY_KEYWORDS):
+        return False
+    if any(keyword in q for keyword in TRAVEL_SPECIFIC_POLICY_KEYWORDS):
+        return True
+    residue = q
+    for keyword in (*AMBIGUOUS_POLICY_KEYWORDS, *GENERIC_POLICY_KEYWORDS, "审批"):
+        residue = residue.replace(keyword, " ")
+    return has_business_travel_context(residue, conversation_context)
 
 
 def is_pure_chitchat(query: str) -> bool:

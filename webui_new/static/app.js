@@ -32,6 +32,20 @@
     const toast = document.getElementById('toast');
     const promptRotator = document.getElementById('promptRotator');
     const rotatingQuestion = document.getElementById('rotatingQuestion');
+    const knowledgeWorkspace = document.getElementById('knowledgeWorkspace');
+    const knowledgeList = document.getElementById('knowledgeList');
+    const knowledgeSearch = document.getElementById('knowledgeSearch');
+    const knowledgeEmpty = document.getElementById('knowledgeEmpty');
+    const knowledgeDocument = document.getElementById('knowledgeDocument');
+    const documentBody = document.getElementById('documentBody');
+    const documentToc = document.getElementById('documentToc');
+    const knowledgeFileInput = document.getElementById('knowledgeFileInput');
+    const knowledgeUploadButton = document.getElementById('knowledgeUploadButton');
+    const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
+    const knowledgeAdminActions = document.getElementById('knowledgeAdminActions');
+    const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
+    const attachmentsLayer = document.getElementById('attachmentsLayer');
+    const attachmentsList = document.getElementById('attachmentsList');
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
     const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
@@ -55,6 +69,13 @@
     let lastProcessingStatusAt = 0;
     let contextualPlaceholder = '';
     let scrollIdleTimer;
+    let knowledgeDocuments = [];
+    let activeKnowledgeDocumentId = '';
+    let knowledgeLoaded = false;
+    let knowledgeLoading = false;
+    let knowledgeRefreshTimer;
+    let knowledgeRefreshPollFailures = 0;
+    let isKnowledgeAdmin = false;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -108,6 +129,12 @@
     let currentRequestId = '';
     let retryRequestPending = false;
     let interruptPending = false;
+
+    // 语音输入（Mode A）：MediaRecorder → 16kHz mono WAV → ASR 转写文本回填。
+    let voiceRecorder = null;
+    let voiceStream = null;
+    let voiceChunks = [];
+    let recordingButton = null;
 
     const rotatingPrompts = [
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
@@ -191,6 +218,7 @@
         document.getElementById('homeButton').addEventListener('click', showHome);
         document.getElementById('newChatButton').addEventListener('click', createNewSession);
         document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
+        document.getElementById('knowledgeButton').addEventListener('click', showKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
         document.getElementById('settingsClose').addEventListener('click', closeSettings);
         document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
@@ -198,6 +226,14 @@
         document.getElementById('deleteSessionButton').addEventListener('click', confirmDeleteSession);
         document.getElementById('renameForm').addEventListener('submit', renameSelectedSession);
         document.getElementById('confirmAction').addEventListener('click', runConfirmedAction);
+
+        document.querySelectorAll('[data-voice-record]').forEach((button) => {
+            button.addEventListener('click', () => toggleVoiceRecording(button));
+        });
+        document.querySelectorAll('[data-attachment-panel]').forEach((button) => {
+            button.addEventListener('click', openAttachmentPanel);
+        });
+        document.getElementById('attachmentsClose').addEventListener('click', () => closeLayer('attachmentsLayer'));
 
         document.querySelectorAll('[data-close-layer]').forEach((button) => {
             button.addEventListener('click', () => closeLayer(button.dataset.closeLayer));
@@ -216,6 +252,26 @@
         document.getElementById('motionToggle').addEventListener('click', toggleMotion);
 
         historySearch.addEventListener('input', filterHistory);
+        historySearch.addEventListener('keydown', (event) => {
+            if (event.key !== 'Escape') return;
+            event.preventDefault();
+            setHistorySearchExpanded(false);
+            document.getElementById('searchToggle').focus();
+        });
+        knowledgeSearch.addEventListener('input', renderKnowledgeList);
+        document.getElementById('knowledgeBack').addEventListener('click', closeKnowledgeDocument);
+        knowledgeUploadButton.addEventListener('click', () => {
+            if (!isKnowledgeAdmin || knowledgeUploadButton.disabled) return;
+            knowledgeFileInput.click();
+        });
+        knowledgeFileInput.addEventListener('change', () => {
+            uploadKnowledgeDocuments(knowledgeFileInput.files);
+            knowledgeFileInput.value = '';
+        });
+        knowledgeRefreshButton.addEventListener('click', startKnowledgeRefresh);
+        document.getElementById('knowledgeSyncClose').addEventListener('click', () => {
+            if (knowledgeSyncBar.dataset.status !== 'running') knowledgeSyncBar.hidden = true;
+        });
         promptRotator.addEventListener('click', () => submitPrompt(promptRotator.dataset.prompt));
         promptRotator.addEventListener('mouseenter', stopPromptRotation);
         promptRotator.addEventListener('mouseleave', startPromptRotation);
@@ -230,6 +286,7 @@
                 sessionPopover.hidden = true;
             }
         });
+        document.addEventListener('keydown', handleKnowledgeShortcut);
     }
 
     function markConversationScrolling() {
@@ -325,16 +382,404 @@
     }
 
     function enterChatView() {
-        appShell.dataset.view = 'chat';
+        setMainView('chat');
         closeSidebar();
         requestAnimationFrame(scrollToBottom);
     }
 
     function showHome() {
         if (isOnboarding || isProcessing) return;
-        appShell.dataset.view = 'home';
+        setMainView('home');
         closeSidebar();
         setTimeout(() => homeInput.focus(), 180);
+    }
+
+    function showKnowledge() {
+        if (isOnboarding) {
+            showToast('完成首次设置后即可查阅知识库。');
+            return;
+        }
+        setMainView('knowledge');
+        closeSidebar();
+        loadKnowledgeDocuments();
+        if (isKnowledgeAdmin) loadKnowledgeRefreshStatus();
+        setTimeout(() => knowledgeSearch.focus(), 180);
+    }
+
+    function setMainView(view) {
+        appShell.dataset.view = view;
+        document.getElementById('knowledgeButton').classList.toggle('active', view === 'knowledge');
+        if (view !== 'knowledge') {
+            clearTimeout(knowledgeRefreshTimer);
+            knowledgeRefreshTimer = null;
+            knowledgeRefreshPollFailures = 0;
+        }
+    }
+
+    function handleKnowledgeShortcut(event) {
+        if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
+        if (appShell.dataset.view !== 'knowledge') return;
+        event.preventDefault();
+        knowledgeSearch.focus();
+    }
+
+    async function loadKnowledgeDocuments(force = false) {
+        if ((!force && knowledgeLoaded) || knowledgeLoading) return;
+        knowledgeLoading = true;
+        try {
+            const data = await fetchJson('/api/knowledge/documents');
+            knowledgeDocuments = Array.isArray(data.documents) ? data.documents : [];
+            knowledgeLoaded = true;
+            document.getElementById('knowledgeDocumentCount').textContent = String(data.total ?? knowledgeDocuments.length);
+            renderKnowledgeList();
+        } catch (err) {
+            knowledgeList.innerHTML = '<div class="knowledge-list-state">知识库暂时无法载入。<br>请稍后再试。</div>';
+            document.getElementById('knowledgeResultCount').textContent = '0';
+            showToast(err.message || '知识库载入失败');
+        } finally {
+            knowledgeLoading = false;
+        }
+    }
+
+    async function uploadKnowledgeDocuments(fileList) {
+        if (!isKnowledgeAdmin) {
+            showToast('仅知识库管理员可以上传制度文档。');
+            return;
+        }
+        const files = Array.from(fileList || []);
+        if (!files.length) return;
+        if (files.length > 10) {
+            showToast('每次最多上传 10 份文档。');
+            return;
+        }
+        const unsupported = files.find((file) => !/\.(?:txt|md|pdf)$/i.test(file.name));
+        if (unsupported) {
+            showToast(`${unsupported.name} 不是支持的文档格式。`);
+            return;
+        }
+
+        const formData = new FormData();
+        files.forEach((file) => formData.append('files', file));
+        setKnowledgeAdminBusy(true, '正在上传');
+        try {
+            const data = await fetchJson('/api/knowledge/documents', { method: 'POST', body: formData });
+            knowledgeLoaded = false;
+            await loadKnowledgeDocuments(true);
+            showKnowledgeUploadResult(data.total || files.length);
+            showToast(`已上传 ${data.total || files.length} 份文档`);
+        } catch (err) {
+            showToast(formatDisplayError(err, '文档上传失败'));
+        } finally {
+            setKnowledgeAdminBusy(false);
+        }
+    }
+
+    async function startKnowledgeRefresh() {
+        if (!isKnowledgeAdmin) {
+            showToast('仅知识库管理员可以刷新数据库。');
+            return;
+        }
+        if (knowledgeRefreshButton.classList.contains('busy')) return;
+        setKnowledgeAdminBusy(true);
+        try {
+            const status = await fetchJson('/api/knowledge/refresh', { method: 'POST' });
+            knowledgeRefreshPollFailures = 0;
+            renderKnowledgeRefreshStatus(status);
+            scheduleKnowledgeRefreshPoll();
+        } catch (err) {
+            setKnowledgeAdminBusy(false);
+            showToast(formatDisplayError(err, '无法启动知识库刷新'));
+            if (err.code === 'KNOWLEDGE_REFRESH_RUNNING') loadKnowledgeRefreshStatus();
+        }
+    }
+
+    async function loadKnowledgeRefreshStatus() {
+        if (!isKnowledgeAdmin) return;
+        try {
+            const status = await fetchJson('/api/knowledge/refresh/status');
+            renderKnowledgeRefreshStatus(status);
+            if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+        } catch (err) {
+            // The document library remains usable even if status polling is unavailable.
+        }
+    }
+
+    function scheduleKnowledgeRefreshPoll() {
+        if (!isKnowledgeAdmin || appShell.dataset.view !== 'knowledge') return;
+        clearTimeout(knowledgeRefreshTimer);
+        knowledgeRefreshTimer = setTimeout(async () => {
+            try {
+                const status = await fetchJson('/api/knowledge/refresh/status');
+                knowledgeRefreshPollFailures = 0;
+                renderKnowledgeRefreshStatus(status);
+                if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+                else {
+                    knowledgeLoaded = false;
+                    await loadKnowledgeDocuments(true);
+                }
+            } catch (err) {
+                knowledgeRefreshPollFailures += 1;
+                if (knowledgeRefreshPollFailures >= 6) {
+                    setKnowledgeAdminBusy(false);
+                    showToast('知识库状态暂时无法获取，请稍后重新打开知识库查看。');
+                    return;
+                }
+                clearTimeout(knowledgeRefreshTimer);
+                knowledgeRefreshTimer = setTimeout(
+                    scheduleKnowledgeRefreshPoll,
+                    Math.min(15000, 900 * (2 ** knowledgeRefreshPollFailures)),
+                );
+            }
+        }, 900);
+    }
+
+    function renderKnowledgeRefreshStatus(status) {
+        const state = String(status?.status || 'idle');
+        if (state === 'idle' && !status?.finished_at) {
+            knowledgeSyncBar.hidden = true;
+            setKnowledgeAdminBusy(false);
+            return;
+        }
+
+        const running = state === 'running';
+        const success = state === 'success';
+        const partial = state === 'partial_success';
+        const report = status?.report || {};
+        knowledgeSyncBar.hidden = false;
+        knowledgeSyncBar.dataset.status = running ? 'running' : (success ? 'success' : (partial ? 'error' : state));
+        document.getElementById('knowledgeSyncTitle').textContent = status?.stage || '知识库状态已更新';
+        document.getElementById('knowledgeSyncProgress').style.width = `${Math.max(0, Math.min(100, Number(status?.progress || 0)))}%`;
+
+        let detail = status?.message || '';
+        if (running) detail = `${Number(status?.progress || 0)}% · 文档会在后台完成解析与向量化`;
+        else if (success || partial) {
+            detail = `${report.documents_loaded || 0} 份文档 · ${report.chunks_loaded || 0} 个检索片段${partial ? ` · ${report.errors?.length || 0} 项失败` : ''}`;
+        } else if (!detail && status?.finished_at) {
+            detail = `上次刷新于 ${formatDocumentDate(status.finished_at)}`;
+        }
+        document.getElementById('knowledgeSyncDetail').textContent = detail || '可以继续浏览当前知识库。';
+        setKnowledgeAdminBusy(running);
+    }
+
+    function showKnowledgeUploadResult(count) {
+        knowledgeSyncBar.hidden = false;
+        knowledgeSyncBar.dataset.status = 'pending';
+        document.getElementById('knowledgeSyncTitle').textContent = `已上传 ${count} 份文档，等待入库`;
+        document.getElementById('knowledgeSyncDetail').textContent = '确认文档无误后，点击“刷新数据库”完成向量化。';
+        document.getElementById('knowledgeSyncProgress').style.width = '0%';
+    }
+
+    function setKnowledgeAdminBusy(busy, uploadLabel) {
+        knowledgeRefreshButton.classList.toggle('busy', busy);
+        knowledgeRefreshButton.disabled = busy;
+        knowledgeUploadButton.classList.toggle('busy', busy);
+        knowledgeFileInput.disabled = busy;
+        document.getElementById('knowledgeUploadLabel').textContent = uploadLabel || '上传文档';
+    }
+
+    function renderKnowledgeList() {
+        if (!knowledgeLoaded) return;
+        const query = knowledgeSearch.value.trim().toLocaleLowerCase('zh-CN');
+        const visible = knowledgeDocuments.filter((doc) => {
+            if (!query) return true;
+            return [doc.title, doc.preview, doc.category_label, doc.filename]
+                .some((value) => String(value || '').toLocaleLowerCase('zh-CN').includes(query));
+        });
+
+        document.getElementById('knowledgeResultCount').textContent = String(visible.length);
+        knowledgeList.replaceChildren();
+        if (!visible.length) {
+            const empty = document.createElement('div');
+            empty.className = 'knowledge-list-state';
+            empty.textContent = query ? '没有找到匹配的文档。' : '知识库中还没有可查阅的文档。';
+            knowledgeList.appendChild(empty);
+            return;
+        }
+
+        visible.forEach((doc) => {
+            const card = document.createElement('button');
+            card.type = 'button';
+            card.className = `knowledge-card${doc.id === activeKnowledgeDocumentId ? ' active' : ''}`;
+            card.dataset.documentId = doc.id;
+            card.setAttribute('aria-label', `阅读 ${doc.title}`);
+
+            const top = document.createElement('div');
+            top.className = 'knowledge-card-top';
+            const category = document.createElement('span');
+            category.className = 'knowledge-category';
+            category.textContent = doc.category_label || '差旅资料';
+            const tags = document.createElement('span');
+            tags.className = 'knowledge-card-tags';
+            if (doc.index_status === 'pending') {
+                const indexState = document.createElement('span');
+                indexState.className = 'knowledge-index-state';
+                indexState.textContent = '待入库';
+                tags.appendChild(indexState);
+            }
+            const type = document.createElement('span');
+            type.className = 'knowledge-file-type';
+            type.textContent = doc.file_type || 'TXT';
+            tags.appendChild(type);
+            top.append(category, tags);
+
+            const title = document.createElement('h3');
+            title.textContent = doc.title;
+            const preview = document.createElement('p');
+            preview.textContent = doc.preview || '打开查看文档内容';
+            const meta = document.createElement('div');
+            meta.className = 'knowledge-card-meta';
+            appendMetaParts(meta, [`约 ${doc.read_minutes || 1} 分钟`, formatDocumentSize(doc.size_bytes)]);
+            card.append(top, title, preview, meta);
+            card.addEventListener('click', () => openKnowledgeDocument(doc.id));
+            knowledgeList.appendChild(card);
+        });
+    }
+
+    async function openKnowledgeDocument(documentId) {
+        if (!documentId) return;
+        activeKnowledgeDocumentId = documentId;
+        renderKnowledgeList();
+        knowledgeWorkspace.classList.add('has-document');
+        knowledgeEmpty.hidden = false;
+        knowledgeEmpty.querySelector('h2').textContent = '正在打开文档';
+        knowledgeEmpty.querySelector('p').textContent = '正在整理章节与阅读目录。';
+        knowledgeDocument.hidden = true;
+
+        try {
+            const encodedId = documentId.split('/').map(encodeURIComponent).join('/');
+            const doc = await fetchJson(`/api/knowledge/documents/${encodedId}`);
+            if (activeKnowledgeDocumentId !== documentId) return;
+            renderKnowledgeDocument(doc);
+        } catch (err) {
+            if (activeKnowledgeDocumentId !== documentId) return;
+            knowledgeEmpty.querySelector('h2').textContent = '文档暂时无法打开';
+            knowledgeEmpty.querySelector('p').textContent = err.message || '请返回目录后重试。';
+            showToast(err.message || '文档读取失败');
+        }
+    }
+
+    function closeKnowledgeDocument() {
+        knowledgeWorkspace.classList.remove('has-document');
+        knowledgeSearch.focus();
+    }
+
+    function renderKnowledgeDocument(doc) {
+        document.getElementById('documentCategory').textContent = doc.category_label || '差旅资料';
+        document.getElementById('documentType').textContent = doc.file_type || 'TXT';
+        document.getElementById('documentTitle').textContent = doc.title || doc.filename;
+        const meta = document.getElementById('documentMeta');
+        meta.replaceChildren();
+        const parts = [
+            doc.filename,
+            `约 ${doc.read_minutes || 1} 分钟`,
+            doc.page_count ? `${doc.page_count} 页` : `${Number(doc.character_count || 0).toLocaleString('zh-CN')} 字符`,
+            `更新于 ${formatDocumentDate(doc.updated_at)}`,
+        ];
+        appendMetaParts(meta, parts);
+        buildDocumentBody(doc.content || '', doc.title || '');
+        knowledgeEmpty.hidden = true;
+        knowledgeDocument.hidden = false;
+        knowledgeDocument.closest('.knowledge-reader').scrollTop = 0;
+    }
+
+    function buildDocumentBody(content, title) {
+        documentBody.replaceChildren();
+        documentToc.replaceChildren();
+        const fragment = document.createDocumentFragment();
+        const tocEntries = [];
+        let list = null;
+        let titleSkipped = false;
+
+        const flushList = () => {
+            if (!list) return;
+            fragment.appendChild(list);
+            list = null;
+        };
+
+        String(content).replace(/\r\n?/g, '\n').split('\n').forEach((rawLine) => {
+            const line = rawLine.trim();
+            if (!line) {
+                flushList();
+                return;
+            }
+            const plainLine = line.replace(/^#{1,6}\s*/, '').trim();
+            if (!titleSkipped && normalizeDocumentText(plainLine) === normalizeDocumentText(title)) {
+                titleSkipped = true;
+                return;
+            }
+
+            const markdownHeading = line.match(/^(#{1,6})\s+(.+)$/);
+            const isPrimaryHeading = /^[一二三四五六七八九十百]+、\S+/.test(line);
+            const isSecondaryHeading = /^\d+[.、]\s*\S+/.test(line);
+            if (markdownHeading || isPrimaryHeading || isSecondaryHeading) {
+                flushList();
+                const level = (markdownHeading && markdownHeading[1].length >= 3) || isSecondaryHeading ? 3 : 2;
+                const heading = document.createElement(level === 2 ? 'h2' : 'h3');
+                heading.textContent = markdownHeading ? markdownHeading[2].trim() : line;
+                if (level === 2) {
+                    heading.id = `document-section-${tocEntries.length + 1}`;
+                    tocEntries.push({ id: heading.id, title: heading.textContent });
+                }
+                fragment.appendChild(heading);
+                titleSkipped = true;
+                return;
+            }
+
+            const bullet = line.match(/^(?:[-*•]|[a-zA-Z][)）])\s*(.+)$/);
+            if (bullet) {
+                if (!list) list = document.createElement('ul');
+                const item = document.createElement('li');
+                item.textContent = bullet[1];
+                list.appendChild(item);
+                return;
+            }
+
+            flushList();
+            const paragraph = document.createElement('p');
+            paragraph.textContent = line;
+            if (/^(?:Q\d*|A\d*|情况描述|处理步骤|特别提醒|温馨提示)[：:]/i.test(line)) {
+                paragraph.className = 'document-lead';
+            }
+            fragment.appendChild(paragraph);
+            titleSkipped = true;
+        });
+        flushList();
+        documentBody.appendChild(fragment);
+
+        tocEntries.slice(0, 12).forEach((entry) => {
+            const button = document.createElement('button');
+            button.type = 'button';
+            button.textContent = entry.title;
+            button.addEventListener('click', () => document.getElementById(entry.id)?.scrollIntoView({ behavior: 'smooth' }));
+            documentToc.appendChild(button);
+        });
+        documentToc.hidden = tocEntries.length < 2;
+    }
+
+    function normalizeDocumentText(value) {
+        return String(value || '').replace(/\s+/g, '').replace(/[。；：:]/g, '').toLocaleLowerCase('zh-CN');
+    }
+
+    function appendMetaParts(container, parts) {
+        parts.filter(Boolean).forEach((part, index) => {
+            if (index) container.appendChild(document.createElement('i'));
+            const span = document.createElement('span');
+            span.textContent = part;
+            container.appendChild(span);
+        });
+    }
+
+    function formatDocumentSize(bytes) {
+        const value = Number(bytes || 0);
+        if (value < 1024) return `${value} B`;
+        if (value < 1024 * 1024) return `${Math.max(1, Math.round(value / 1024))} KB`;
+        return `${(value / 1024 / 1024).toFixed(1)} MB`;
+    }
+
+    function formatDocumentDate(value) {
+        const date = new Date(value);
+        if (Number.isNaN(date.getTime())) return '未知日期';
+        return new Intl.DateTimeFormat('zh-CN', { year: 'numeric', month: 'short', day: 'numeric' }).format(date);
     }
 
     function setInputEnabled(enabled) {
@@ -366,6 +811,7 @@
     async function loadUserSummary() {
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/summary`);
+            applyKnowledgePermissions(data.role === 'admin');
             panelName.textContent = data.name_display || userId;
             panelLevel.textContent = data.member_level || '个人账户';
             prefList.replaceChildren();
@@ -385,7 +831,19 @@
                 prefList.appendChild(row);
             });
         } catch (err) {
+            applyKnowledgePermissions(false);
             prefList.replaceChildren(createEmptyState('暂时无法读取偏好。'));
+        }
+    }
+
+    function applyKnowledgePermissions(isAdmin) {
+        isKnowledgeAdmin = !!isAdmin;
+        knowledgeAdminActions.hidden = !isKnowledgeAdmin;
+        if (!isKnowledgeAdmin) {
+            clearTimeout(knowledgeRefreshTimer);
+            knowledgeRefreshTimer = null;
+            knowledgeSyncBar.hidden = true;
+            setKnowledgeAdminBusy(false);
         }
     }
 
@@ -522,9 +980,21 @@
     }
 
     function toggleHistorySearch() {
-        historySearchBox.classList.toggle('visible');
-        if (historySearchBox.classList.contains('visible')) historySearch.focus();
-        else {
+        setHistorySearchExpanded(!historySearchBox.classList.contains('visible'));
+    }
+
+    function setHistorySearchExpanded(expanded) {
+        const toggle = document.getElementById('searchToggle');
+        historySearchBox.classList.toggle('visible', expanded);
+        historySearchBox.setAttribute('aria-hidden', String(!expanded));
+        toggle.setAttribute('aria-expanded', String(expanded));
+        toggle.classList.toggle('active', expanded);
+        historySearch.tabIndex = expanded ? 0 : -1;
+        if (expanded) {
+            setTimeout(() => {
+                if (historySearchBox.classList.contains('visible')) historySearch.focus();
+            }, 140);
+        } else {
             historySearch.value = '';
             filterHistory();
         }
@@ -583,7 +1053,7 @@
             );
             if (selectedSessionId === activeSessionId) {
                 chatMessages.replaceChildren();
-                appShell.dataset.view = 'home';
+                setMainView('home');
             }
             await loadSessions();
             showToast('会话已删除');
@@ -595,7 +1065,7 @@
             await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
             chatMessages.replaceChildren();
             closeSettings();
-            appShell.dataset.view = 'home';
+            setMainView('home');
             await loadSessions();
             showToast('聊天记录已清空');
         });
@@ -766,24 +1236,39 @@
     }
 
     function renderPendingAttachments() {
-        const html = pendingAttachments.map((a) => {
-            const cls = a.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
-            return `<span class="${cls}" data-id="${a.id || ''}" title="${a.filename}">${escapeHtml(a.filename)}${a.status === 'failed' ? '（失败）' : ''}<button class="pending-chip-remove" aria-label="移除">×</button></span>`;
-        }).join('');
-        pendingContainers().forEach((c) => { c.innerHTML = html; c.style.display = html ? '' : 'none'; });
         pendingContainers().forEach((c) => {
-            c.querySelectorAll('.pending-chip-remove').forEach((btn) => {
-                btn.addEventListener('click', (e) => {
-                    const chip = e.target.closest('.pending-chip');
-                    const id = chip && chip.dataset.id;
-                    pendingAttachments = pendingAttachments.filter((a) => a.id !== id && a.tmpId !== chip.dataset.tmpid);
+            c.replaceChildren();
+            pendingAttachments.forEach((attachment) => {
+                const chip = document.createElement('span');
+                chip.className = attachment.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
+                chip.dataset.id = attachment.id || '';
+                chip.dataset.tmpId = attachment.tmpId || '';
+                chip.title = attachment.filename || '';
+                chip.appendChild(document.createTextNode(
+                    `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`
+                ));
+                const remove = document.createElement('button');
+                remove.type = 'button';
+                remove.className = 'pending-chip-remove';
+                remove.setAttribute('aria-label', `移除 ${attachment.filename || '附件'}`);
+                remove.textContent = '×';
+                remove.addEventListener('click', () => {
+                    pendingAttachments = pendingAttachments.filter((item) => {
+                        const sameId = !!chip.dataset.id && (item.id || '') === chip.dataset.id;
+                        const sameTemporaryId = !!chip.dataset.tmpId
+                            && (item.tmpId || '') === chip.dataset.tmpId;
+                        return !(sameId || sameTemporaryId);
+                    });
                     if (retryRequestPending) {
                         resetRequestId();
                         retryRequestPending = false;
                     }
                     renderPendingAttachments();
                 });
+                chip.appendChild(remove);
+                c.appendChild(chip);
             });
+            c.style.display = pendingAttachments.length ? '' : 'none';
         });
     }
 
@@ -818,10 +1303,156 @@
         attachments.forEach((a) => {
             const card = document.createElement('div');
             card.className = 'attachment-card';
-            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">📎</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
+            const icon = a.kind === 'image' ? '🖼' : '📎';
+            card.innerHTML = `<span class="attachment-icon" aria-hidden="true">${icon}</span><span class="attachment-name">${escapeHtml(a.filename)}</span>`;
             wrap.appendChild(card);
         });
         stack.appendChild(wrap);
+    }
+
+    // ---- 附件面板：查看 / 下载 / 引用 / 删除 ---------------------------------
+
+    async function openAttachmentPanel() {
+        attachmentsLayer.classList.add('open');
+        attachmentsList.innerHTML = '<div class="empty-state">正在读取附件…</div>';
+        try {
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/attachments?limit=100`);
+            renderAttachmentsList(data.attachments || []);
+        } catch (err) {
+            attachmentsList.innerHTML = '<div class="empty-state">读取附件失败，请重试。</div>';
+            showToast(formatDisplayError(err, '读取附件失败'));
+        }
+    }
+
+    function renderAttachmentsList(attachments) {
+        attachmentsList.replaceChildren();
+        if (!attachments || !attachments.length) {
+            attachmentsList.innerHTML = '<div class="empty-state">还没有上传过附件。</div>';
+            return;
+        }
+        attachments.forEach((att) => attachmentsList.appendChild(createAttachmentRow(att)));
+    }
+
+    function createAttachmentRow(att) {
+        const row = document.createElement('div');
+        row.className = 'attachment-item';
+        row.dataset.id = att.id;
+
+        const icon = document.createElement('span');
+        icon.className = 'attachment-item-icon';
+        icon.setAttribute('aria-hidden', 'true');
+        icon.textContent = att.kind === 'image' ? '🖼' : '📄';
+
+        const main = document.createElement('span');
+        main.className = 'attachment-item-main';
+        const name = document.createElement('span');
+        name.className = 'attachment-item-name';
+        name.textContent = att.filename || '未命名附件';
+        name.title = att.filename || '';
+        const meta = document.createElement('span');
+        meta.className = 'attachment-item-meta';
+        meta.textContent = `${attachmentStatusLabel(att)} · ${formatBytes(att.size_bytes)}`;
+        main.append(name, meta);
+
+        const actions = document.createElement('span');
+        actions.className = 'attachment-item-actions';
+
+        const downloadBtn = document.createElement('button');
+        downloadBtn.type = 'button';
+        downloadBtn.className = 'attachment-action';
+        downloadBtn.textContent = '下载';
+        downloadBtn.setAttribute('aria-label', `下载 ${att.filename}`);
+        downloadBtn.addEventListener('click', () => downloadAttachment(att));
+        actions.appendChild(downloadBtn);
+
+        if (att.status === 'ready') {
+            const attachBtn = document.createElement('button');
+            attachBtn.type = 'button';
+            attachBtn.className = 'attachment-action primary';
+            attachBtn.textContent = '引用';
+            attachBtn.setAttribute('aria-label', `引用 ${att.filename} 到新消息`);
+            attachBtn.addEventListener('click', () => reAttachAttachment(att));
+            actions.appendChild(attachBtn);
+        }
+
+        const deleteBtn = document.createElement('button');
+        deleteBtn.type = 'button';
+        deleteBtn.className = 'attachment-action danger';
+        deleteBtn.textContent = '删除';
+        deleteBtn.setAttribute('aria-label', `删除 ${att.filename}`);
+        deleteBtn.addEventListener('click', () => deleteAttachment(att));
+        actions.appendChild(deleteBtn);
+
+        row.append(icon, main, actions);
+        return row;
+    }
+
+    function attachmentStatusLabel(att) {
+        const labels = { ready: '可用', failed: '解析失败', processing: '处理中', expired: '已过期' };
+        return labels[att.status] || att.status || '未知';
+    }
+
+    function formatBytes(bytes) {
+        const n = Number(bytes) || 0;
+        if (n < 1024) return `${n} B`;
+        if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`;
+        return `${(n / (1024 * 1024)).toFixed(1)} MB`;
+    }
+
+    function reAttachAttachment(att) {
+        if (att.status !== 'ready') { showToast('该附件暂不可用'); return; }
+        if (pendingAttachments.some((item) => item.id === att.id)) {
+            showToast('该附件已在待发送列表中');
+            return;
+        }
+        pendingAttachments.push({ id: att.id, filename: att.filename, kind: att.kind, status: 'ready' });
+        if (retryRequestPending) {
+            resetRequestId();
+            retryRequestPending = false;
+        }
+        renderPendingAttachments();
+        closeLayer('attachmentsLayer');
+        enterChatView();
+        showToast('已加入待发送附件');
+    }
+
+    async function downloadAttachment(att) {
+        try {
+            const response = await authFetch(
+                `/api/${encodeURIComponent(userId)}/attachments/${encodeURIComponent(att.id)}/content`
+            );
+            if (!response.ok) {
+                let data = null;
+                try { data = await response.json(); } catch (e) { data = null; }
+                throw createApiError(data, '下载失败', response.status);
+            }
+            const blob = await response.blob();
+            const url = URL.createObjectURL(blob);
+            const anchor = document.createElement('a');
+            anchor.href = url;
+            anchor.download = att.filename || 'attachment';
+            document.body.appendChild(anchor);
+            anchor.click();
+            anchor.remove();
+            setTimeout(() => URL.revokeObjectURL(url), 4000);
+        } catch (err) {
+            showToast(formatDisplayError(err, '下载失败'));
+        }
+    }
+
+    function deleteAttachment(att) {
+        openConfirm(
+            '删除附件？',
+            `「${att.filename}」删除后不可恢复，已关联消息中的该附件也将一并移除。`,
+            async () => {
+                await fetchJson(
+                    `/api/${encodeURIComponent(userId)}/attachments/${encodeURIComponent(att.id)}`,
+                    { method: 'DELETE' }
+                );
+                showToast('附件已删除');
+                await openAttachmentPanel();
+            }
+        );
     }
 
     async function sendMessage(explicitText, options = {}) {
@@ -1235,6 +1866,163 @@
         enterChatView();
         const current = chatInput.value.trim();
         chatInput.value = current ? `${current}，${value}` : value;
+        resizeInput(chatInput);
+        chatInput.focus();
+        chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);
+    }
+
+    // ---- 语音输入（Mode A）--------------------------------------------------
+
+    const MIC_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>';
+    const REC_STOP_ICON = '<svg width="18" height="18" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><rect x="6" y="6" width="12" height="12" rx="2.5"/></svg>';
+
+    async function toggleVoiceRecording(button) {
+        if (recordingButton) {
+            stopVoiceRecording();
+            return;
+        }
+        if (isProcessing || isOnboarding) {
+            showToast('当前正在处理，请稍后再试');
+            return;
+        }
+        if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
+            showToast('当前浏览器不支持录音');
+            return;
+        }
+        try {
+            const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+            voiceStream = stream;
+            voiceChunks = [];
+            const recorder = new MediaRecorder(stream);
+            voiceRecorder = recorder;
+            recorder.ondataavailable = (e) => { if (e.data && e.data.size) voiceChunks.push(e.data); };
+            recorder.onstop = () => finishVoiceRecording();
+            recorder.start();
+            recordingButton = button;
+            setRecordingUI(button, true);
+        } catch (err) {
+            showToast('无法使用麦克风，请检查浏览器权限');
+        }
+    }
+
+    function stopVoiceRecording() {
+        const button = recordingButton;
+        if (!button) return;
+        if (voiceRecorder && voiceRecorder.state !== 'inactive') {
+            voiceRecorder.stop(); // onstop → finishVoiceRecording
+        } else {
+            finishVoiceRecording();
+        }
+    }
+
+    function setRecordingUI(button, recording) {
+        if (!button) return;
+        button.classList.toggle('is-recording', recording);
+        button.setAttribute('aria-label', recording ? '停止录音' : '语音输入');
+        button.title = recording ? '停止录音' : '语音输入';
+        button.innerHTML = recording ? REC_STOP_ICON : MIC_ICON;
+    }
+
+    async function finishVoiceRecording() {
+        const button = recordingButton;
+        const recorder = voiceRecorder;
+        recordingButton = null;
+        voiceRecorder = null;
+        if (voiceStream) {
+            voiceStream.getTracks().forEach((track) => track.stop());
+            voiceStream = null;
+        }
+        if (button) setRecordingUI(button, false);
+        const blob = new Blob(voiceChunks, { type: (recorder && recorder.mimeType) || 'audio/webm' });
+        voiceChunks = [];
+        if (!blob.size) {
+            showToast('没有录到声音，请重试');
+            return;
+        }
+        try {
+            const wav = await blobToWav16k(blob);
+            const text = await transcribeAudio(wav);
+            if (text) {
+                backfillComposer(text);
+            } else {
+                showToast('没有识别到语音内容，请再试一次');
+            }
+        } catch (err) {
+            showToast(formatDisplayError(err, '语音识别失败'));
+        }
+    }
+
+    async function transcribeAudio(blob) {
+        const form = new FormData();
+        form.append('file', blob, 'voice.wav');
+        const response = await authFetch(`/api/${encodeURIComponent(userId)}/asr/transcribe`, {
+            method: 'POST',
+            headers: { 'X-Request-ID': ensureRequestId() },
+            body: form,
+        });
+        if (!response.ok) {
+            let data = null;
+            try { data = await response.json(); } catch (e) { data = null; }
+            throw createApiError(data, '语音识别失败', response.status);
+        }
+        const data = await response.json();
+        return String(data.text || '').trim();
+    }
+
+    async function blobToWav16k(blob) {
+        const arrayBuffer = await blob.arrayBuffer();
+        const AudioCtx = window.AudioContext || window.webkitAudioContext;
+        const ctx = new AudioCtx();
+        try {
+            const decoded = await ctx.decodeAudioData(arrayBuffer);
+            const targetRate = 16000;
+            const length = Math.max(1, Math.ceil(decoded.duration * targetRate));
+            const offline = new OfflineAudioContext(1, length, targetRate);
+            const source = offline.createBufferSource();
+            source.buffer = decoded;
+            source.connect(offline.destination);
+            source.start(0);
+            const rendered = await offline.startRendering();
+            return encodeWav(rendered.getChannelData(0), targetRate);
+        } finally {
+            if (ctx.close) ctx.close();
+        }
+    }
+
+    function encodeWav(samples, sampleRate) {
+        const dataSize = samples.length * 2;
+        const buffer = new ArrayBuffer(44 + dataSize);
+        const view = new DataView(buffer);
+        const writeString = (offset, text) => {
+            for (let i = 0; i < text.length; i++) view.setUint8(offset + i, text.charCodeAt(i));
+        };
+        writeString(0, 'RIFF');
+        view.setUint32(4, 36 + dataSize, true);
+        writeString(8, 'WAVE');
+        writeString(12, 'fmt ');
+        view.setUint32(16, 16, true);
+        view.setUint16(20, 1, true);            // PCM
+        view.setUint16(22, 1, true);            // mono
+        view.setUint32(24, sampleRate, true);
+        view.setUint32(28, sampleRate * 2, true); // byte rate
+        view.setUint16(32, 2, true);            // block align
+        view.setUint16(34, 16, true);           // bits per sample
+        writeString(36, 'data');
+        view.setUint32(40, dataSize, true);
+        let offset = 44;
+        for (let i = 0; i < samples.length; i++) {
+            const s = Math.max(-1, Math.min(1, samples[i]));
+            view.setInt16(offset, s < 0 ? s * 0x8000 : s * 0x7fff, true);
+            offset += 2;
+        }
+        return new Blob([buffer], { type: 'audio/wav' });
+    }
+
+    function backfillComposer(text) {
+        if (!text || isProcessing || isOnboarding) return;
+        enterChatView();
+        const current = chatInput.value.trim();
+        chatInput.value = current ? `${current}，${text}` : text;
         resizeInput(chatInput);
         chatInput.focus();
         chatInput.setSelectionRange(chatInput.value.length, chatInput.value.length);

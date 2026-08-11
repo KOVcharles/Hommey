@@ -13,6 +13,7 @@ from core.intent_guard import (
     can_call_information_query,
     guard_user_input,
     has_business_travel_context,
+    has_travel_policy_context,
     is_pure_chitchat,
     passes_confidence_gate,
 )
@@ -137,10 +138,10 @@ class FastIntentRouter:
 
         candidates: List[IntentCandidate] = []
 
-        has_policy = any(keyword in q for keyword in POLICY_KEYWORDS) or (
-            any(keyword in q for keyword in GENERIC_POLICY_KEYWORDS)
-            and has_business_travel_context(q)
-        )
+        has_policy = (
+            any(keyword in q for keyword in POLICY_KEYWORDS)
+            or any(keyword in q for keyword in GENERIC_POLICY_KEYWORDS)
+        ) and has_travel_policy_context(q)
         has_weather = any(keyword in q for keyword in WEATHER_KEYWORDS)
         has_search = any(keyword in q for keyword in SEARCH_KEYWORDS)
         has_compliance = any(keyword in q for keyword in COMPLIANCE_KEYWORDS)

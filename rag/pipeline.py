@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import logging
 from pathlib import Path
-from typing import Any, Dict, List, Optional
+from typing import Any, Callable, Dict, List, Optional
 
 from .chunker import TextChunker
 from .config import RAGPipelineConfig
@@ -49,13 +49,20 @@ class RAGPipeline:
         )
         self.retriever = retriever or VectorStoreRetriever(self.vector_store)
 
-    def ingest(self, path: str | Path, rebuild: bool = False) -> IngestionReport:
+    def ingest(
+        self,
+        path: str | Path,
+        rebuild: bool = False,
+        progress_callback: Callable[[str, int], None] | None = None,
+    ) -> IngestionReport:
         source_path = str(path)
         logger.info("Starting RAG ingestion: path=%s rebuild=%s", source_path, rebuild)
-        if rebuild:
-            self.vector_store.rebuild()
+        if progress_callback:
+            progress_callback("正在读取知识库源文件", 14)
 
         raw_documents = self.loader.load(path)
+        if progress_callback:
+            progress_callback("正在解析文档内容", 28)
         if Path(path).is_file() and raw_documents:
             file_type = raw_documents[0].file_type.lower()
             if file_type not in self.parser_registry.parsers:
@@ -85,6 +92,8 @@ class RAGPipeline:
                     continue
                 parsed_documents.append(document)
 
+        if progress_callback:
+            progress_callback("正在规范化文档结构", 46)
         normalized = self.normalizer.normalize(parsed_documents)
         chunks: List[DocumentChunk] = []
         for document in normalized:
@@ -100,16 +109,38 @@ class RAGPipeline:
                     }
                 )
 
-        add_result: Dict[str, Any] = {"added_count": 0, "total_count": self.vector_store.stats().get("total_documents", 0)}
-        if chunks:
+        if progress_callback:
+            progress_callback("正在切分检索片段", 62)
+        add_result: Dict[str, Any] = {
+            "added_count": 0,
+            "total_count": self.vector_store.stats().get("total_documents", 0),
+        }
+        if rebuild and not raw_documents:
+            errors.append({"source_path": source_path, "error": "没有找到可入库的知识库文档"})
+        elif rebuild and not chunks and not errors:
+            errors.append({"source_path": source_path, "error": "文档没有生成任何可检索片段"})
+
+        # A full refresh is all-or-nothing.  Parsing/chunking failures leave the
+        # live collection untouched rather than publishing a partial policy set.
+        should_write = bool(chunks) and (not rebuild or not errors)
+        if should_write:
             try:
-                add_result = self.vector_store.add_chunks(chunks)
+                if progress_callback:
+                    progress_callback("正在生成向量并写入数据库", 72)
+                add_result = (
+                    self.vector_store.replace_chunks(chunks)
+                    if rebuild else self.vector_store.add_chunks(chunks)
+                )
             except Exception as exc:
                 logger.exception("Failed to write RAG chunks to vector store")
                 errors.append({"source_path": source_path, "error": str(exc)})
+        if progress_callback:
+            progress_callback("正在核对入库结果", 94)
 
         status = "success" if not errors else "partial_success"
-        if not chunks and errors:
+        if rebuild and errors:
+            status = "error"
+        elif not chunks and errors:
             status = "error"
         report = IngestionReport(
             status=status,

@@ -113,6 +113,24 @@ class KnowledgeRetriever:
 def expand_query(query: str) -> str:
     """Add a few domain synonyms without introducing a query-rewrite LLM call."""
     text = query.strip()
+    international_hints = (
+        "国际",
+        "境外",
+        "国外",
+        "港澳",
+        "新加坡",
+        "日本",
+        "韩国",
+        "美国",
+        "加拿大",
+        "英国",
+        "法国",
+        "德国",
+        "澳大利亚",
+        "阿联酋",
+    )
+    if any(word in text for word in international_hints):
+        text = f"{text} 国际出差 境外"
     if any(word in text for word in ("餐补", "餐费", "用餐", "饭补", "吃饭")):
         text = f"{text} 餐费 用餐 早餐 午餐 晚餐 报销 个人零食 酒水"
     return text

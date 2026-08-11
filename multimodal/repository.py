@@ -103,6 +103,23 @@ class AttachmentRepository:
         by_id = {row["id"]: _attachment_from_row(row) for row in rows}
         return [by_id[attachment_id] for attachment_id in attachment_ids if attachment_id in by_id]
 
+    def list_by_user(self, user_id: str, limit: int = 100) -> list[Attachment]:
+        """按创建时间倒序返回该用户的附件（附件面板用）。"""
+        with self.pool.connection() as conn:
+            with conn.cursor() as cur:
+                cur.execute(
+                    f"""
+                    SELECT {self._COLUMNS}
+                    FROM attachments
+                    WHERE user_id = %s
+                    ORDER BY created_at DESC
+                    LIMIT %s
+                    """,
+                    (user_id, max(int(limit), 1)),
+                )
+                rows = cur.fetchall()
+        return [_attachment_from_row(row) for row in rows]
+
     def update_status(
         self,
         attachment_id: str,

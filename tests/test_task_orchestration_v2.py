@@ -462,8 +462,12 @@ def test_result_rules_convert_query_failure_to_error():
     assert "外部服务超时" in output.answer_document.sections[0].body
 
 
-def test_llm_composer_returns_grounded_card_and_system_owned_sources():
+def test_structured_results_bypass_second_llm_and_keep_system_owned_sources():
+    called = False
+
     async def model(_messages):
+        nonlocal called
+        called = True
         return {
             "content": json.dumps({
                 "version": "1.0",
@@ -511,7 +515,8 @@ def test_llm_composer_returns_grounded_card_and_system_owned_sources():
 
     document = asyncio.run(AnswerComposer(model).compose(QUERY, tasks, results))
 
-    assert document.sections[0].items[0].value == "不超过400元/晚"
+    assert called is False
+    assert document.sections[0].body == "南京住宿标准不超过400元/晚。"
     assert document.sections[1].days[0].precipitation == ""
     assert [source.title for source in document.sources] == ["差旅规定", "Open-Meteo"]
     assert "查看" not in document.plain_text

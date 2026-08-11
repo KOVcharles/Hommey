@@ -69,7 +69,7 @@ async def require_path_user(
 
 
 async def require_admin(current_user: User = Depends(get_current_user)) -> User:
-    """Allow Skill platform APIs only for authenticated administrators."""
+    """Allow privileged management APIs only for authenticated administrators."""
     if current_user.role != "admin":
-        raise BusinessError("FORBIDDEN", "仅管理员可以访问 Skill 管理平台", status_code=403)
+        raise BusinessError("FORBIDDEN", "仅管理员可以使用此管理功能", status_code=403)
     return current_user

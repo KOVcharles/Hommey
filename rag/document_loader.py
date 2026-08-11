@@ -8,7 +8,11 @@ from .schemas import SourceDocument
 
 
 DEFAULT_CATEGORY_MAPPING = {
+    "policy_authority": "policy_governance",
     "travel_standards": "travel_policy",
+    "international_travel": "international_travel_policy",
+    "exception_approval": "exception_policy",
+    "rag_validation": "validation_scenarios",
     "reimbursement_policy": "reimbursement_policy",
     "booking_guide": "booking_guide",
     "faq": "faq",
@@ -61,4 +65,3 @@ def iter_chunks(documents: Iterable[SourceDocument], max_chars: int = 600, overl
 
     for document in documents:
         yield from chunk_document(document, max_chars=max_chars, overlap=overlap)
-

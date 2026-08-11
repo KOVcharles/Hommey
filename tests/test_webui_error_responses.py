@@ -75,6 +75,10 @@ def test_webui_routes_are_registered():
     assert "/api/{user_id}/sessions/{session_id}/activate" in paths
     assert "/api/{user_id}/history" in paths
     assert "/api/{user_id}/trip/active" in paths
+    assert "/api/knowledge/documents" in paths
+    assert "/api/knowledge/documents/{document_id:path}" in paths
+    assert "/api/knowledge/refresh" in paths
+    assert "/api/knowledge/refresh/status" in paths
     assert "/admin/skills" in paths
     assert "/api/admin/skills" in paths
     assert "/api/admin/skills/{skill_name}" in paths

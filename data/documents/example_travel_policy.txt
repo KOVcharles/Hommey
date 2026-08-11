@@ -1,7 +1,8 @@
-# Example travel policy
+# 知识库测试数据说明
 
-This is sanitized sample content for local RAG testing.
+文档编号：RAG-NOTE-2026-01
+文档属性：非政策说明，不得作为费用、审批或报销结论的依据。
 
-- Domestic meal allowance example: follow the policy configured by your company.
-- Hotel standard example: choose a compliant hotel tier for the destination city.
-- Reimbursement example: keep invoices and submit them through the internal platform.
+- 本知识库内容为本地功能测试数据。
+- 测试回答必须引用具体的规范性制度或专项制度。
+- 若只能检索到本说明，应返回“证据不足”，不得自行推断政策。

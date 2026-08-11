@@ -25,6 +25,15 @@ class VectorStore(ABC):
     def rebuild(self) -> None:
         raise NotImplementedError
 
+    def replace_chunks(self, chunks: List[DocumentChunk]) -> Dict[str, Any]:
+        """Replace all rows while preserving the previous store on failure.
+
+        Concrete production stores should override this with a transactional or
+        blue/green implementation.  The default deliberately refuses to fake
+        atomicity with ``rebuild()`` followed by ``add_chunks()``.
+        """
+        raise NotImplementedError("atomic replacement is not supported by this vector store")
+
     def close(self) -> None:
         return None
 
@@ -74,6 +83,9 @@ class MilvusVectorStore(VectorStore):
     def rebuild(self) -> None:
         self.store.rebuild_collection()
 
+    def replace_chunks(self, chunks: List[DocumentChunk]) -> Dict[str, Any]:
+        return self.store.replace_chunks_atomically(chunks)
+
     def close(self) -> None:
         self.store.close()
 
@@ -116,6 +128,15 @@ class InMemoryVectorStore(VectorStore):
 
     def rebuild(self) -> None:
         self.rows.clear()
+
+    def replace_chunks(self, chunks: List[DocumentChunk]) -> Dict[str, Any]:
+        replacement = list(chunks)
+        self.rows = replacement
+        return {
+            "status": "success",
+            "added_count": len(replacement),
+            "total_count": len(replacement),
+        }
 
 
 def _result_from_dict(item: Dict[str, Any]) -> RetrievalResult:

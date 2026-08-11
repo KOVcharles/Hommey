@@ -1,10 +1,13 @@
 from pathlib import Path
 
+import pytest
+
 from rag.chunker import split_text
 from rag.document_loader import load_text_documents
 from rag.embedder import SiliconFlowEmbedder
-from rag.milvus_store import MilvusKnowledgeStore, fuse_results, rerank_results
+from rag.milvus_store import MilvusKnowledgeStore, _tokenize, fuse_results, rerank_results
 from rag.retriever import expand_query
+from rag.schemas import DocumentChunk
 
 
 def test_load_text_documents_reads_txt_files(tmp_path: Path):
@@ -17,6 +20,14 @@ def test_load_text_documents_reads_txt_files(tmp_path: Path):
     assert documents[0].title == "Travel Standards"
     assert documents[0].category == "travel_policy"
     assert documents[0].metadata["parent_doc"] == "01_travel_standards.txt"
+
+
+def test_tokenize_keeps_exact_chinese_concepts_as_ngrams():
+    tokens = _tokenize("宠物寄养费，能报销吗？")
+
+    assert "宠物寄养" in tokens
+    assert "寄养费" in tokens
+    assert "费能" not in tokens
 
 
 def test_split_text_keeps_small_paragraphs_together():
@@ -73,6 +84,24 @@ def test_meal_allowance_query_expands_and_reranks_meal_policy():
     assert results[0]["id"] == 2
 
 
+def test_rerank_rewards_exact_chinese_concept_over_generic_expense_text():
+    docs = [
+        {"id": 1, "content": "出差期间其他合理费用可以凭发票报销", "metadata": {}, "fusion_score": 0.04},
+        {"id": 2, "content": "宠物寄养费是否可报销没有政策授权，需要人工确认", "metadata": {}, "fusion_score": 0.015},
+    ]
+
+    results = rerank_results(docs, "出差期间宠物寄养费可以报销吗")
+
+    assert results[0]["id"] == 2
+
+
+def test_international_meal_query_expands_with_international_context():
+    query = expand_query("去新加坡出差，公司提供午餐时餐补怎么扣")
+
+    assert "国际出差" in query
+    assert "境外" in query
+
+
 def test_siliconflow_embedder_posts_openai_compatible_payload():
     class FakeResponse:
         def raise_for_status(self):
@@ -116,6 +145,83 @@ def test_siliconflow_embedder_posts_openai_compatible_payload():
         "encoding_format": "float",
     }
     assert session.calls[0]["timeout"] == 12
+
+
+class _FakeEmbedder:
+    def embed_texts(self, texts):
+        return [[float(index), 0.5] for index, _text in enumerate(texts, start=1)]
+
+
+class _FakeMilvusClient:
+    def __init__(self, *, fail_promotion=False):
+        self.collections = {"knowledge": [{"id": 1, "content": "old"}]}
+        self.fail_promotion = fail_promotion
+
+    def create_collection(self, collection_name, **_kwargs):
+        self.collections[collection_name] = []
+
+    def insert(self, collection_name, data):
+        self.collections[collection_name].extend(data)
+
+    def get_collection_stats(self, collection_name):
+        return {"row_count": len(self.collections[collection_name])}
+
+    def has_collection(self, collection_name):
+        return collection_name in self.collections
+
+    def rename_collection(self, old_name, new_name):
+        if self.fail_promotion and "__staging_" in old_name and new_name == "knowledge":
+            self.fail_promotion = False
+            raise RuntimeError("promotion failed")
+        self.collections[new_name] = self.collections.pop(old_name)
+
+    def drop_collection(self, collection_name):
+        self.collections.pop(collection_name)
+
+    def load_collection(self, _collection_name):
+        return None
+
+
+def _atomic_store(client):
+    store = object.__new__(MilvusKnowledgeStore)
+    store.client = client
+    store.collection_name = "knowledge"
+    store.embedding_dim = 2
+    store.embedding_model = _FakeEmbedder()
+    return store
+
+
+def _chunk(content):
+    return DocumentChunk(
+        content=content,
+        source_path=f"/{content}.txt",
+        filename=f"{content}.txt",
+        file_type="txt",
+        page_number=None,
+        chunk_index=1,
+        content_type="text",
+        hash=content,
+    )
+
+
+def test_atomic_milvus_refresh_promotes_complete_staging_collection():
+    client = _FakeMilvusClient()
+
+    result = _atomic_store(client).replace_chunks_atomically([_chunk("new-1"), _chunk("new-2")])
+
+    assert result["total_count"] == 2
+    assert [row["content"] for row in client.collections["knowledge"]] == ["new-1", "new-2"]
+    assert set(client.collections) == {"knowledge"}
+
+
+def test_atomic_milvus_refresh_restores_live_collection_when_promotion_fails():
+    client = _FakeMilvusClient(fail_promotion=True)
+
+    with pytest.raises(RuntimeError, match="promotion failed"):
+        _atomic_store(client).replace_chunks_atomically([_chunk("new")])
+
+    assert client.collections["knowledge"] == [{"id": 1, "content": "old"}]
+    assert set(client.collections) == {"knowledge"}
 
 
 def test_rebuild_collection_recovers_from_windows_manifest_replace_error(tmp_path: Path):

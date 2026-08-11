@@ -14,14 +14,23 @@ from webui_new.core.errors import BusinessError
 
 _PDF_MAGIC = b"%PDF-"
 _ZIP_MAGIC = b"PK\x03\x04"
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+_JPEG_MAGIC = b"\xff\xd8\xff"
+_IMAGE_EXTS = ("png", "jpg", "jpeg", "webp")
 
 _MIME_BY_EXT = {
     "txt": "text/plain",
     "md": "text/markdown",
     "pdf": "application/pdf",
     "docx": "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+    "png": "image/png",
+    "jpg": "image/jpeg",
+    "jpeg": "image/jpeg",
+    "webp": "image/webp",
 }
-_KIND_BY_EXT = {ext: "document" for ext in _MIME_BY_EXT}
+# 图片走视觉模型转文本，与文档附件区分 kind，便于面板分类与配额记账。
+_KIND_BY_EXT = {ext: "document" for ext in ("txt", "md", "pdf", "docx")}
+_KIND_BY_EXT.update({ext: "image" for ext in _IMAGE_EXTS})
 
 
 def detect_kind(filename: str, data: bytes) -> tuple[str, str, str]:
@@ -50,6 +59,12 @@ def detect_kind(filename: str, data: bytes) -> tuple[str, str, str]:
         _validate_docx_archive(data)
     if ext in ("txt", "md") and not _looks_like_text(data):
         raise BusinessError("UNSUPPORTED_FILE_TYPE", "文件内容包含非法二进制字符", status_code=400)
+    if ext == "png" and not data.startswith(_PNG_MAGIC):
+        raise BusinessError("UNSUPPORTED_FILE_TYPE", "文件内容与 PNG 格式不符", status_code=400)
+    if ext in ("jpg", "jpeg") and not data.startswith(_JPEG_MAGIC):
+        raise BusinessError("UNSUPPORTED_FILE_TYPE", "文件内容与 JPEG 格式不符", status_code=400)
+    if ext == "webp" and not _looks_like_webp(data):
+        raise BusinessError("UNSUPPORTED_FILE_TYPE", "文件内容与 WEBP 格式不符", status_code=400)
 
     return ext, _KIND_BY_EXT[ext], _MIME_BY_EXT[ext]
 
@@ -99,6 +114,11 @@ def _looks_like_text(data: bytes) -> bool:
         return False
     nontext = sum(1 for b in sample if (b < 9 or 13 < b < 32))
     return nontext / len(sample) < 0.30
+
+
+def _looks_like_webp(data: bytes) -> bool:
+    """WebP 是 RIFF 容器：'RIFF' + 4 字节长度 + 'WEBP'。"""
+    return len(data) >= 12 and data.startswith(b"RIFF") and data[8:12] == b"WEBP"
 
 
 def validate_size(size_bytes: int) -> None:

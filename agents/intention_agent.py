@@ -33,6 +33,7 @@ from core.intent_guard import (
     can_call_information_query,
     guard_user_input,
     has_business_travel_context,
+    has_travel_policy_context,
     is_limited_chitchat,
     passes_confidence_gate,
 )
@@ -396,6 +397,17 @@ class IntentionAgent(AgentBase):
         if intent_type == "information_query":
             info_guard = can_call_information_query(user_query, confidence, conversation_context)
             return info_guard.intent == "information_query" and info_guard.should_call_skill
+        # Preference and personal travel-memory skills are intrinsically
+        # user-scoped and safe to authorize from a high-confidence semantic
+        # classification.  Requiring an extra “出差” keyword here incorrectly
+        # rejected natural inputs such as “我喜欢靠窗” and “我以前去过北京吗”.
+        if intent_type in {"preference", "memory_query"}:
+            return passes_confidence_gate(intent_type, confidence)
+        if intent_type == "rag_knowledge":
+            return (
+                has_travel_policy_context(user_query, conversation_context)
+                and passes_confidence_gate(intent_type, confidence)
+            )
         # 其余 skill 意图：缺少公司差旅上下文时不调用（规则只做安全网，判定仍由 LLM 给出）。
         if not has_business_travel_context(user_query, conversation_context):
             return False

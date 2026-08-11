@@ -7,12 +7,15 @@ import pytest
 from multimodal import validation
 from multimodal.document_processor import (
     DocxProcessor,
+    DocumentProcessor,
+    ParseResult,
     PdfProcessor,
     TxtProcessor,
 )
 from multimodal.processors import ProcessorRegistry
-from multimodal.service import AttachmentService
+from multimodal.service import AttachmentService, get_vision_quota
 from multimodal.storage import LocalAttachmentStore
+from settings import VISION_CONFIG
 from webui_new.core.errors import BusinessError
 
 
@@ -222,3 +225,95 @@ def test_upload_removes_private_object_when_metadata_create_fails(tmp_path):
         service.upload(user_id="u1", filename="policy.txt", content=b"hello")
 
     assert not [path for path in tmp_path.rglob("*") if path.is_file()]
+
+
+# ── 图片模态：视觉识别路径 ────────────────────────────────────────
+
+_PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
+
+
+class _FakeImageProcessor(DocumentProcessor):
+    """打桩的视觉处理器：不真的调用外部模型。"""
+
+    supported_extensions = ("png", "jpg", "jpeg", "webp")
+    parser_version = "image-p0-test"
+
+    def __init__(self, result: ParseResult | None = None, error: Exception | None = None):
+        self.result = result or ParseResult(content_text="发票金额 520 元", structured={"amount": "520"})
+        self.error = error
+
+    def parse(self, data: bytes, filename: str) -> ParseResult:
+        if self.error:
+            raise self.error
+        return self.result
+
+
+class _QuotaStub:
+    def __init__(self, allowed: bool = True):
+        self.allowed = allowed
+        self.calls = []
+
+    def consume(self, user_id: str) -> bool:
+        self.calls.append(user_id)
+        return self.allowed
+
+
+def _image_service(tmp_path, processor, repository):
+    registry = ProcessorRegistry(processors=[processor])
+    return AttachmentService(
+        store=LocalAttachmentStore(str(tmp_path)),
+        repository=repository,
+        processors=registry,
+    )
+
+
+def test_image_upload_rejected_when_vision_disabled(tmp_path, monkeypatch):
+    monkeypatch.setitem(VISION_CONFIG, "enabled", False)  # 不依赖运行环境变量
+    service = _image_service(tmp_path, _FakeImageProcessor(), _UploadRepository())
+
+    with pytest.raises(BusinessError) as exc:
+        service.upload(user_id="u1", filename="receipt.png", content=_PNG_MAGIC + b"data")
+
+    assert exc.value.code == "VISION_DISABLED"
+
+
+def test_image_upload_runs_vision_parser_and_consumes_quota(tmp_path, monkeypatch):
+    monkeypatch.setitem(VISION_CONFIG, "enabled", True)
+    quota = _QuotaStub(allowed=True)
+    monkeypatch.setattr("multimodal.service.get_vision_quota", lambda: quota)
+    repository = _UploadRepository()
+    processor = _FakeImageProcessor()
+    service = _image_service(tmp_path, processor, repository)
+
+    result = service.upload(user_id="u1", filename="receipt.png", content=_PNG_MAGIC + b"data")
+
+    assert result.status == "ready"
+    assert result.kind == "image"
+    assert quota.calls == ["u1"]
+    assert repository.extraction.content_text == "发票金额 520 元"
+    assert repository.extraction.parser_version == "image-p0-test"
+
+
+def test_image_upload_exceeds_daily_quota(tmp_path, monkeypatch):
+    monkeypatch.setitem(VISION_CONFIG, "enabled", True)
+    monkeypatch.setattr("multimodal.service.get_vision_quota", lambda: _QuotaStub(allowed=False))
+    service = _image_service(tmp_path, _FakeImageProcessor(), _UploadRepository())
+
+    with pytest.raises(BusinessError) as exc:
+        service.upload(user_id="u1", filename="receipt.png", content=_PNG_MAGIC + b"data")
+
+    assert exc.value.code == "VISION_QUOTA_EXCEEDED"
+
+
+def test_image_parse_failure_maps_to_vision_error_code(tmp_path, monkeypatch):
+    # 真实 ImageProcessor 会把 VisionError 归一化为单参数 RuntimeError(code)，
+    # 这里复现该形态（str(exc) == code），验证 service._parse_error_code 映射。
+    monkeypatch.setitem(VISION_CONFIG, "enabled", True)
+    monkeypatch.setattr("multimodal.service.get_vision_quota", lambda: _QuotaStub(allowed=True))
+    processor = _FakeImageProcessor(error=RuntimeError("VISION_FAILED"))
+    service = _image_service(tmp_path, processor, _UploadRepository())
+
+    result = service.upload(user_id="u1", filename="receipt.png", content=_PNG_MAGIC + b"data")
+
+    assert result.status == "failed"
+    assert result.error_code == "VISION_FAILED"

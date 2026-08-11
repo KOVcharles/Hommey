@@ -1,9 +1,15 @@
 import asyncio
 import json
 
+import pytest
+
 from agents.intention_agent import IntentionAgent
 from agentscope.message import Msg
-from core.intent_guard import can_call_information_query, guard_user_input
+from core.intent_guard import (
+    can_call_information_query,
+    guard_user_input,
+    has_travel_policy_context,
+)
 from core.intent_router import FastIntentRouter
 
 
@@ -251,6 +257,32 @@ def test_generic_company_standard_does_not_enter_travel_rag_fast_path():
     route = FastIntentRouter.route("公司的年假标准是什么")
 
     assert route is None
+
+
+@pytest.mark.parametrize(
+    "query",
+    ("采购审批流程是什么", "医疗费报销流程是什么", "政府补贴标准是多少"),
+)
+def test_non_travel_policy_language_does_not_enter_travel_rag(query):
+    assert FastIntentRouter.route(query) is None
+
+
+def test_explicit_non_travel_policy_does_not_inherit_previous_trip_context():
+    assert has_travel_policy_context(
+        "另外医疗费报销流程是什么",
+        "用户: 我下周去南京出差",
+    ) is False
+
+
+@pytest.mark.parametrize(
+    ("query", "expected"),
+    (("我喜欢靠窗座位", "preference"), ("我以前去过北京吗", "memory_query")),
+)
+def test_user_scoped_preference_and_memory_do_not_require_repeated_trip_keyword(query, expected):
+    route = FastIntentRouter.route(query)
+
+    assert route is not None
+    assert route.intent_types == (expected,)
 
 
 def test_compliance_request_routes_through_trip_context_rag_and_compliance():
