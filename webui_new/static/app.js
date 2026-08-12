@@ -1433,7 +1433,8 @@
         }
         renderPendingAttachments();
         closeLayer('attachmentsLayer');
-        enterChatView();
+        const activeComposer = appShell.dataset.view === 'chat' ? chatInput : homeInput;
+        requestAnimationFrame(() => activeComposer.focus());
         showToast('已加入待发送附件');
     }
 
