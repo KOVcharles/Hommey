@@ -256,5 +256,20 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260811-multimodal-ui-v1" in template
+    assert "20260811-brand-safe-viewbox-v2" in template
     assert "20260809-readable-v8" in template
+
+
+def test_hommey_mark_has_enough_top_viewbox_padding():
+    root = Path(__file__).resolve().parents[1]
+    expected_viewbox = 'viewBox="0 -4 120 64"'
+
+    for relative_path in (
+        "webui_new/static/brand/hommey-mark.svg",
+        "webui_new/static/brand/hommey-mark-dark.svg",
+        "webui_new/templates/chat.html",
+        "webui_new/templates/login.html",
+        "webui_new/templates/admin_skills.html",
+    ):
+        content = (root / relative_path).read_text(encoding="utf-8")
+        assert expected_viewbox in content

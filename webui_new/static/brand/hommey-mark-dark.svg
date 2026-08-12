@@ -1,4 +1,4 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 64" role="img" aria-labelledby="title desc">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 -4 120 64" role="img" aria-labelledby="title desc">
   <title id="title">Hommey 路线标志</title>
   <desc id="desc">两个节点由一条柔和上扬的路线连接</desc>
   <path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12" fill="none" stroke="#f7f3eb" stroke-width="6" stroke-linecap="round" stroke-linejoin="round"/>

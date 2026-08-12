@@ -446,17 +446,17 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     right: calc(100% + 8px);
     width: 34px;
     height: 25px;
-    background: center / 32px auto no-repeat url('/static/brand/hommey-mark.svg');
+    background: center / 32px auto no-repeat url('/static/brand/hommey-mark.svg?v=20260811-safe-viewbox-v2');
 }
 .msg-avatar.ai img { display: none; }
 .msg-avatar.ai::before { content: none; }
 .message-row.ai:has(.answer-card) .msg-avatar.ai { display: none; }
 html[data-theme="dark"] .msg-avatar.ai {
-    background-image: url('/static/brand/hommey-mark-dark.svg');
+    background-image: url('/static/brand/hommey-mark-dark.svg?v=20260811-safe-viewbox-v2');
 }
 @media (prefers-color-scheme: dark) {
     html:not([data-theme]) .msg-avatar.ai {
-        background-image: url('/static/brand/hommey-mark-dark.svg');
+        background-image: url('/static/brand/hommey-mark-dark.svg?v=20260811-safe-viewbox-v2');
     }
 }
 .msg-stack { min-width: 0; }
