@@ -1263,20 +1263,32 @@ html[data-motion="off"] *::after {
     color: var(--ink-2);
     font-size: 12px;
     line-height: 1.4;
+    white-space: nowrap;
 }
-.pending-chip > span,
-.pending-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-chip-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .pending-chip.failed { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
 .pending-chip-remove {
     flex: 0 0 auto;
-    width: 18px; height: 18px;
-    border: 0; background: transparent;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    background: color-mix(in srgb, currentColor 7%, transparent);
     border-radius: 50%;
-    color: var(--ink-3);
+    color: currentColor;
     cursor: pointer;
-    font-size: 14px; line-height: 1;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    line-height: 1;
+    opacity: .7;
 }
-.pending-chip-remove:hover { background: var(--soft-hover); color: var(--ink); }
+.pending-chip-remove:hover { background: color-mix(in srgb, currentColor 14%, transparent); opacity: 1; }
 
 .attach-button { cursor: pointer; }
 .attach-button input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }

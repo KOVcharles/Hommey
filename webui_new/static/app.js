@@ -1244,13 +1244,15 @@
                 chip.dataset.id = attachment.id || '';
                 chip.dataset.tmpId = attachment.tmpId || '';
                 chip.title = attachment.filename || '';
-                chip.appendChild(document.createTextNode(
-                    `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`
-                ));
+                const label = document.createElement('span');
+                label.className = 'pending-chip-label';
+                label.textContent = `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`;
+                chip.appendChild(label);
                 const remove = document.createElement('button');
                 remove.type = 'button';
                 remove.className = 'pending-chip-remove';
                 remove.setAttribute('aria-label', `移除 ${attachment.filename || '附件'}`);
+                remove.title = '移除附件';
                 remove.textContent = '×';
                 remove.addEventListener('click', () => {
                     pendingAttachments = pendingAttachments.filter((item) => {
