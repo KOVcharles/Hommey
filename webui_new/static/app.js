@@ -44,6 +44,8 @@
     const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
     const knowledgeAdminActions = document.getElementById('knowledgeAdminActions');
     const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
+    const knowledgeExitButton = document.getElementById('knowledgeExitButton');
+    const knowledgeExitLabel = document.getElementById('knowledgeExitLabel');
     const attachmentsLayer = document.getElementById('attachmentsLayer');
     const attachmentsList = document.getElementById('attachmentsList');
 
@@ -76,6 +78,7 @@
     let knowledgeRefreshTimer;
     let knowledgeRefreshPollFailures = 0;
     let isKnowledgeAdmin = false;
+    let knowledgeReturnView = 'home';
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -219,6 +222,7 @@
         document.getElementById('newChatButton').addEventListener('click', createNewSession);
         document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
         document.getElementById('knowledgeButton').addEventListener('click', showKnowledge);
+        knowledgeExitButton.addEventListener('click', returnFromKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
         document.getElementById('settingsClose').addEventListener('click', closeSettings);
         document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
@@ -400,11 +404,26 @@
             showToast('完成首次设置后即可查阅知识库。');
             return;
         }
+        const currentView = appShell.dataset.view;
+        if (currentView === 'home' || currentView === 'chat') {
+            knowledgeReturnView = currentView;
+        }
+        const returnLabel = knowledgeReturnView === 'chat' ? '返回对话' : '返回首页';
+        knowledgeExitLabel.textContent = returnLabel;
+        knowledgeExitButton.setAttribute('aria-label', returnLabel);
         setMainView('knowledge');
         closeSidebar();
         loadKnowledgeDocuments();
         if (isKnowledgeAdmin) loadKnowledgeRefreshStatus();
         setTimeout(() => knowledgeSearch.focus(), 180);
+    }
+
+    function returnFromKnowledge() {
+        if (appShell.dataset.view !== 'knowledge') return;
+        const targetView = knowledgeReturnView === 'chat' ? 'chat' : 'home';
+        setMainView(targetView);
+        const targetInput = targetView === 'chat' ? chatInput : homeInput;
+        setTimeout(() => targetInput.focus(), 180);
     }
 
     function setMainView(view) {
@@ -418,6 +437,11 @@
     }
 
     function handleKnowledgeShortcut(event) {
+        if (event.key === 'Escape' && appShell.dataset.view === 'knowledge') {
+            event.preventDefault();
+            returnFromKnowledge();
+            return;
+        }
         if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
         if (appShell.dataset.view !== 'knowledge') return;
         event.preventDefault();
