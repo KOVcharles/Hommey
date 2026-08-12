@@ -1693,13 +1693,14 @@
         if (role === 'ai') collapseTripIntakeCards();
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
-        const bubble = document.createElement('div');
-        bubble.className = `msg-bubble ${role}`;
-        if (text) {
-            if (role === 'user') renderUserMessageInto(bubble, text);
-            else renderMessageInto(bubble, text);
+        const visibleText = role === 'user' ? userMessageText(text, attachments) : String(text || '');
+        if (visibleText) {
+            const bubble = document.createElement('div');
+            bubble.className = `msg-bubble ${role}`;
+            if (role === 'user') renderUserMessageInto(bubble, visibleText);
+            else renderMessageInto(bubble, visibleText);
+            stack.appendChild(bubble);
         }
-        stack.appendChild(bubble);
         if (role === 'user' && attachments && attachments.length) {
             renderAttachmentCards(stack, attachments);
         }
@@ -1707,6 +1708,19 @@
         chatMessages.appendChild(row);
         scrollToBottom();
         return row;
+    }
+
+    function userMessageText(text, attachments) {
+        const value = String(text || '').trim();
+        if (!value || !attachments || !attachments.length) return value;
+        const manifestStart = value.lastIndexOf('（附件：');
+        if (manifestStart < 0 || !value.endsWith('）')) return value;
+        const manifest = value.slice(manifestStart);
+        const names = attachments
+            .map((attachment) => String(attachment.filename || '').trim())
+            .filter(Boolean);
+        if (!names.length || !names.some((name) => manifest.includes(name))) return value;
+        return value.slice(0, manifestStart).trim();
     }
 
     function addAnswerMessage(documentData, timestamp) {
