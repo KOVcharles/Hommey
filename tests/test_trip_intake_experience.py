@@ -86,6 +86,28 @@ def test_trip_intake_document_is_structured_and_has_plain_text_fallback():
     assert "已完成 2/5 项" in document.plain_text
 
 
+def test_trip_location_suggestion_requires_confirmation_and_is_not_collected():
+    document = build_trip_intake_document({
+        **BASE_TRIP,
+        "origin": None,
+        "suggested_fields": {
+            "origin": {
+                "value": "北京",
+                "source": "preference",
+                "reason": "根据你保存的常用出发地",
+            },
+        },
+    })
+
+    origin = next(field for field in document.missing_required if field.key == "origin")
+    assert origin.suggested_value == "北京"
+    assert origin.suggestion_source == "preference"
+    assert "origin" not in {field.key for field in document.collected}
+    assert document.route.origin == ""
+    assert document.progress.completed == 1
+    assert "候选：北京" in document.plain_text
+
+
 def test_legacy_plain_text_intake_recovers_as_typed_card():
     text = """\
 行程框架已保存
@@ -226,15 +248,17 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     assert "innerHTML" not in card
     assert "提交补充信息" in card
     assert "buildReply" in card
+    assert "field.suggested_value" in card
+    assert "确认 ${field.suggested_value}" in card
     assert "hommey:submit-message" in card
     assert "hommey:fill-composer" not in card
     template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
-    assert template.count("20260809-intake-v5") == 2
-    assert "20260811-multimodal-ui-v1" in template
+    assert template.count("20260812-intake-memory-v6") == 2
+    assert "20260812-knowledge-return-v6" in template
     assert 'id="knowledgeAdminActions"' in template
     assert 'aria-label="知识库管理" hidden' in template
     assert "knowledgeUploadButton" in template
     assert "applyKnowledgePermissions" in app
     assert "c.replaceChildren()" in app
-    assert "chip.title = attachment.filename" in app
+    assert "name.title = att.filename" in app
     assert "title=\"${attachment.name}" not in app

@@ -113,6 +113,21 @@
         if (Array.isArray(field.examples) && field.examples.length) {
             content.appendChild(element('span', 'trip-intake-field-examples', `例如：${field.examples.join('、')}`));
         }
+        if (field.suggested_value) {
+            const suggestion = element('div', 'trip-intake-suggestion');
+            suggestion.appendChild(element(
+                'span',
+                'trip-intake-field-help',
+                `${field.suggestion_reason || '根据已有信息'}，请确认`,
+            ));
+            suggestion.appendChild(optionAction(
+                `确认 ${field.suggested_value}`,
+                field.key,
+                field.suggested_value,
+                state,
+            ));
+            content.appendChild(suggestion);
+        }
         if (Array.isArray(field.options) && field.options.length) {
             const options = element('div', 'trip-intake-options');
             field.options.forEach((option) => options.appendChild(optionAction(option, field.key, option, state)));

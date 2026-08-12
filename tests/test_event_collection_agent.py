@@ -111,5 +111,92 @@ def test_event_collection_rejects_locations_not_grounded_in_the_current_task():
 
     assert result["origin"] is None
     assert result["destination"] is None
+    assert result["suggested_fields"]["origin"] == {
+        "value": "北京",
+        "source": "preference",
+        "reason": "根据你保存的常用出发地",
+    }
     assert "summary" not in result
     assert result["missing_required"][:2] == ["origin", "destination"]
+
+
+def test_event_collection_preserves_confirmed_active_fields_when_model_omits_them():
+    script_path = Path(".agents/skills/event-collection/script/agent.py")
+    spec = importlib.util.spec_from_file_location("event_collection_merge_test", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def model(_messages):
+        return {"content": json.dumps({
+            "origin": None,
+            "destination": None,
+            "start_date": "2026-08-12",
+            "end_date": None,
+            "duration_days": 2,
+            "return_location": None,
+            "trip_purpose": "客户会议",
+            "work_location": None,
+            "work_schedule": None,
+        }, ensure_ascii=False)}
+
+    agent = module.EventCollectionAgent(model=model)
+    request = Msg(
+        name="orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {
+                "rewritten_query": "8月12日出发，出差2天，参加客户会议",
+                "active_trip": {"origin": "北京", "destination": "南京"},
+                "recent_dialogue": [],
+            }
+        }, ensure_ascii=False),
+    )
+
+    result = json.loads(asyncio.run(agent.reply(request)).content)
+
+    assert result["origin"] == "北京"
+    assert result["destination"] == "南京"
+    assert result["planning_ready"] is True
+    assert result["missing_required"] == []
+
+
+def test_explicit_history_reference_produces_candidates_not_confirmed_facts():
+    script_path = Path(".agents/skills/event-collection/script/agent.py")
+    spec = importlib.util.spec_from_file_location("event_collection_history_test", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def model(_messages):
+        return {"content": json.dumps({
+            "origin": None, "destination": None, "start_date": None,
+            "end_date": None, "duration_days": None, "return_location": None,
+            "trip_purpose": None, "work_location": None, "work_schedule": None,
+        }, ensure_ascii=False)}
+
+    class LongTerm:
+        @staticmethod
+        def get_trip_history(limit=None):
+            assert limit == 1
+            return [{"origin": "北京", "destination": "南京"}]
+
+    agent = module.EventCollectionAgent(model=model)
+    agent.memory_manager = type("Memory", (), {"long_term": LongTerm()})()
+    request = Msg(
+        name="orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {
+                "rewritten_query": "按上次行程再安排一次",
+                "active_trip": {},
+                "recent_dialogue": [],
+            }
+        }, ensure_ascii=False),
+    )
+
+    result = json.loads(asyncio.run(agent.reply(request)).content)
+
+    assert result["origin"] is None
+    assert result["destination"] is None
+    assert result["suggested_fields"]["origin"]["value"] == "北京"
+    assert result["suggested_fields"]["destination"]["value"] == "南京"
+    assert result["planning_ready"] is False

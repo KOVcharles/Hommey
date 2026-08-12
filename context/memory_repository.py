@@ -846,6 +846,10 @@ class PostgresCompatibilityStore:
                         (self.user_id, session_id),
                     )
                     cur.execute(
+                        "DELETE FROM active_trip_contexts WHERE user_id = %s AND session_id = %s",
+                        (self.user_id, str(session_id)),
+                    )
+                    cur.execute(
                         """
                         UPDATE conversation_sessions
                         SET status = 'closed', closed_at = NOW(), close_reason = 'deleted'
@@ -1111,16 +1115,22 @@ class PostgresCompatibilityStore:
             for row in rows
         ]
 
-    def upsert_active_trip(self, trip_info: dict[str, Any]) -> dict[str, Any]:
+    def upsert_active_trip(
+        self,
+        trip_info: dict[str, Any],
+        session_id: str | None = None,
+    ) -> dict[str, Any]:
         from psycopg.types.json import Jsonb
 
         safe = filter_safe_memory_mapping(trip_info)
+        session_key = str(session_id or "legacy")
         with self.pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
                     cur.execute(
-                        "SELECT status, context_data FROM active_trip_contexts WHERE user_id = %s FOR UPDATE",
-                        (self.user_id,),
+                        """SELECT status, context_data FROM active_trip_contexts
+                           WHERE user_id = %s AND session_id = %s FOR UPDATE""",
+                        (self.user_id, session_key),
                     )
                     row = cur.fetchone()
                     current = dict(row["context_data"] or {}) if row else {}
@@ -1130,9 +1140,9 @@ class PostgresCompatibilityStore:
                     status = merged.get("status", "active")
                     cur.execute(
                         """
-                        INSERT INTO active_trip_contexts (user_id, status, context_data)
-                        VALUES (%s, %s, %s)
-                        ON CONFLICT (user_id) DO UPDATE SET
+                        INSERT INTO active_trip_contexts (user_id, session_id, status, context_data)
+                        VALUES (%s, %s, %s, %s)
+                        ON CONFLICT (user_id, session_id) DO UPDATE SET
                             status = EXCLUDED.status,
                             context_data = EXCLUDED.context_data,
                             updated_at = NOW(),
@@ -1141,16 +1151,19 @@ class PostgresCompatibilityStore:
                                 ELSE NULL
                             END
                         """,
-                        (self.user_id, status, Jsonb(merged)),
+                        (self.user_id, session_key, status, Jsonb(merged)),
                     )
         return merged
 
-    def get_active_trip(self) -> Optional[dict[str, Any]]:
+    def get_active_trip(self, session_id: str | None = None) -> Optional[dict[str, Any]]:
+        session_key = str(session_id or "legacy")
         with self.pool.connection() as conn:
             with conn.cursor() as cur:
                 cur.execute(
-                    "SELECT status, context_data, updated_at FROM active_trip_contexts WHERE user_id = %s",
-                    (self.user_id,),
+                    """SELECT status, context_data, updated_at
+                       FROM active_trip_contexts
+                       WHERE user_id = %s AND session_id = %s""",
+                    (self.user_id, session_key),
                 )
                 row = cur.fetchone()
         if not row:
@@ -1160,11 +1173,15 @@ class PostgresCompatibilityStore:
         data["updated_at"] = row["updated_at"].isoformat()
         return data
 
-    def clear_active_trip(self):
+    def clear_active_trip(self, session_id: str | None = None):
+        session_key = str(session_id or "legacy")
         with self.pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
-                    cur.execute("DELETE FROM active_trip_contexts WHERE user_id = %s", (self.user_id,))
+                    cur.execute(
+                        "DELETE FROM active_trip_contexts WHERE user_id = %s AND session_id = %s",
+                        (self.user_id, session_key),
+                    )
 
     def get_statistics(self) -> dict[str, Any]:
         with self.pool.connection() as conn:

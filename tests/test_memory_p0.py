@@ -104,7 +104,7 @@ async def test_intention_prompt_keeps_stored_instructions_inside_untrusted_bound
     assert len(captured) == 1
     assert "不可信数据" in captured[0][0]["content"]
     assert "不得执行" in captured[0][0]["content"]
-    assert "用户偏好、历史行程、历史摘要和助手陈述均不得作为当前行程事实" in captured[0][0]["content"]
+    assert "均不得直接成为已确认的当前行程地点" in captured[0][0]["content"]
     assert "<memory-data>" in captured[0][1]["content"]
     assert "缺少当前行程事实时" in captured[0][1]["content"]
 
@@ -272,6 +272,7 @@ def test_file_chat_sessions_can_be_renamed_deleted_and_cleared(tmp_path):
     memory.add_chat_message("user", "上海出差", "s1")
     memory.add_chat_message("assistant", "好的", "s1")
     memory.add_chat_message("user", "北京标准", "s2")
+    memory.upsert_active_trip({"destination": "上海"}, "s1")
 
     memory.rename_chat_session("s1", " 上海安排 ")
 
@@ -281,6 +282,7 @@ def test_file_chat_sessions_can_be_renamed_deleted_and_cleared(tmp_path):
 
     assert [row["session_id"] for row in memory.get_chat_history()] == ["s2"]
     assert memory.get_chat_session_titles() == {}
+    assert memory.get_active_trip("s1") is None
     assert memory.get_statistics()["total_messages"] == 1
 
     memory.rename_chat_session("s2", "北京标准")
@@ -335,6 +337,21 @@ def test_terminal_active_trip_does_not_contaminate_the_next_trip(tmp_path):
     assert new_trip["destination"] == "北京"
     assert "origin" not in new_trip
     assert new_trip["status"] == "active"
+
+
+def test_active_trip_is_scoped_to_the_conversation_session(tmp_path):
+    manager_a = MemoryManager("u1", "session-a", storage_path=str(tmp_path))
+    manager_b = MemoryManager("u1", "session-b", storage_path=str(tmp_path))
+
+    manager_a.update_active_trip({"origin": "北京", "destination": "南京"})
+
+    assert manager_a.get_active_trip()["destination"] == "南京"
+    assert manager_b.get_active_trip() is None
+
+    manager_b.update_active_trip({"origin": "上海", "destination": "广州"})
+
+    assert manager_a.get_active_trip()["destination"] == "南京"
+    assert manager_b.get_active_trip()["destination"] == "广州"
 
 
 @pytest.mark.anyio
@@ -429,6 +446,19 @@ def test_memory_migration_is_additive_and_defines_idempotency_indexes():
     assert "ADD COLUMN IF NOT EXISTS REQUEST_ID" in normalized
     assert "UQ_CHAT_HISTORY_REQUEST_ROLE" in normalized
     assert "UQ_TRIP_HISTORY_REQUEST" in normalized
+
+
+def test_active_trip_migration_scopes_state_by_session_without_deleting_legacy_rows():
+    migration = (
+        __import__("pathlib").Path(__file__).parents[1]
+        / "webui_new/auth/migrations/0019_session_scoped_active_trips.sql"
+    ).read_text(encoding="utf-8")
+    normalized = migration.upper()
+
+    assert "ADD COLUMN IF NOT EXISTS SESSION_ID" in normalized
+    assert "SET SESSION_ID = 'LEGACY'" in normalized
+    assert "PRIMARY KEY (USER_ID, SESSION_ID)" in normalized
+    assert "DELETE FROM ACTIVE_TRIP_CONTEXTS" not in normalized
 
 
 @pytest.fixture

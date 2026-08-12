@@ -81,6 +81,24 @@ def test_event_collection_hook_updates_active_trip():
     assert manager.long_term.active_trip["destination"] == "上海"
 
 
+def test_event_collection_hook_persists_all_confirmed_fields_but_not_candidates():
+    manager = _FakeMemoryManager()
+    executor = MemoryHookExecutor(manager)
+    asyncio.run(executor.apply([
+        _result("event_collection", "event_collection", {
+            "trip_purpose": "客户会议",
+            "suggested_fields": {
+                "origin": {"value": "北京", "source": "preference"},
+            },
+            "missing_required": ["origin", "destination"],
+            "planning_ready": False,
+        }),
+    ]))
+
+    assert manager.active_updates == [{"trip_purpose": "客户会议"}]
+    assert "suggested_fields" not in manager.long_term.active_trip
+
+
 def test_preference_hook_saves_replace_and_append():
     manager = _FakeMemoryManager()
     executor = MemoryHookExecutor(manager)
