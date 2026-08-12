@@ -276,24 +276,6 @@ class IntentionAgent(AgentBase):
                 deduped[intent_type] = item
         intents = [deduped[intent_type] for intent_type in intent_order]
 
-        # High-confidence deterministic candidates are a completeness guard,
-        # not an execution plan.  The LLM may select only the workflow's main
-        # intent and omit explicit clauses such as “查天气/看差旅标准”; preserving
-        # those clauses as semantic intents is required so Composer cannot hide
-        # their results as workflow intermediates.
-        known_types = {item.get("type") for item in intents}
-        for candidate in FastIntentRouter.detect(user_query):
-            if candidate.type in known_types:
-                continue
-            intents.append({
-                "type": candidate.type,
-                "confidence": candidate.confidence,
-                "description": candidate.reason,
-                "reason": candidate.reason,
-                "should_call_skill": False,
-            })
-            known_types.add(candidate.type)
-
         callable_intents = []
         for item in intents:
             intent_type = item.get("type") or "unclear"

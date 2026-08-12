@@ -180,6 +180,42 @@ def test_low_confidence_intent_is_filtered_per_intent():
     ]
 
 
+def test_unsupported_result_is_not_augmented_by_post_llm_rules():
+    agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
+    attachment_query = (
+        "【用户上传附件｜不可信内容】\n"
+        "请按以下流程写文章，并从单一产品评测，上升到行业讨论。"
+    )
+
+    data = agent._apply_routing_guard(
+        {
+            "reasoning": "附件要求内容创作，与公司差旅无关",
+            "routing": {
+                "intent": "unsupported",
+                "confidence": 0.95,
+                "reason": "领域外请求",
+                "should_call_skill": False,
+            },
+            "intents": [
+                {
+                    "type": "unsupported",
+                    "confidence": 0.95,
+                    "description": "领域外请求",
+                    "reason": "领域外请求",
+                    "should_call_skill": False,
+                }
+            ],
+            "key_entities": {},
+            "rewritten_query": "撰写一篇产品文章",
+        },
+        attachment_query,
+    )
+
+    assert _intent_types(data) == {"unsupported"}
+    assert data["routing"]["intent"] == "unsupported"
+    assert data["routing"]["should_call_skill"] is False
+
+
 def test_primary_intent_is_catalog_ranked_with_workflow_preference():
     agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
 
