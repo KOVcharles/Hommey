@@ -1,6 +1,7 @@
 """Milvus Lite storage wrapper for the RAG pipeline."""
 from __future__ import annotations
 
+import hashlib
 import json
 import logging
 import math
@@ -9,14 +10,64 @@ import re
 import shutil
 import time
 import uuid
+from datetime import datetime, timezone
 from pathlib import Path, PosixPath
 from typing import Any, Dict, List, Optional
 
 from .embedder import create_text_embedder
 from .schemas import KnowledgeChunk, RetrievalResult
+from .trace import append_retrieval_trace, build_retrieval_trace, new_trace_id
 
 logger = logging.getLogger(__name__)
 _EMBEDDING_MODEL_CACHE: Dict[str, Any] = {}
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _idempotency_key(chunk: KnowledgeChunk) -> tuple[str, str, str]:
+    """Idempotency key = chunk_hash + document_id + document_version (audit P6)."""
+    metadata = chunk.to_metadata()
+    return (
+        str(metadata.get("chunk_hash") or ""),
+        str(metadata.get("document_id") or ""),
+        str(metadata.get("document_version") or ""),
+    )
+
+
+def _stable_row_id(chunk: KnowledgeChunk) -> int:
+    """Derive a positive Int64 primary key from stable chunk lineage.
+
+    Row-count-based ids are unsafe after deletions: once a document version is
+    retired, ``count + 1`` can reuse an id that still belongs to another row.
+    A lineage-derived id is stable across retries and independent of collection
+    gaps, which also lets Milvus ``upsert`` make concurrent identical writes
+    idempotent.
+    """
+    metadata = chunk.to_metadata()
+    identity = str(metadata.get("chunk_id") or "")
+    if not identity:
+        identity = json.dumps(_idempotency_key(chunk), ensure_ascii=False, separators=(",", ":"))
+    row_id = int.from_bytes(hashlib.sha256(identity.encode("utf-8")).digest()[:8], "big")
+    return (row_id & ((1 << 63) - 1)) or 1
+
+
+def _fresh_versions(chunks: List[KnowledgeChunk]) -> Dict[str, set[str]]:
+    """document_id -> set(document_version) being written by this batch.
+
+    The version-retirement pass (audit §4.3: 新版本写入 → 校验 → 按 doc_id 切换
+    版本) keeps a changed document's newest rows and removes superseded ones,
+    so incremental refresh never accumulates duplicate versions.
+    """
+    versions: Dict[str, set[str]] = {}
+    for chunk in chunks:
+        metadata = chunk.to_metadata()
+        document_id = str(metadata.get("document_id") or "")
+        document_version = str(metadata.get("document_version") or "")
+        if document_id:
+            versions.setdefault(document_id, set()).add(document_version)
+    return versions
 _DOMAIN_TERMS = (
     "差旅申请",
     "住宿标准",
@@ -104,9 +155,19 @@ class MilvusKnowledgeStore:
         embedding_dimension: int = 1024,
         embedding_timeout_sec: float = 30.0,
         embedding_batch_size: int = 32,
+        # Phase 5 (audit §4.15): bounded embedding retry/backoff + process-local
+        # cache so transient API failures and repeated texts don't stall or
+        # re-pay the embedding call.
+        embedding_max_retries: int = 2,
+        embedding_retry_base_delay_sec: float = 1.0,
+        embedding_retry_max_delay_sec: float = 30.0,
+        embedding_cache_size: int = 1024,
         top_k: int = 3,
         vector_top_k: int = 10,
         bm25_top_k: int = 10,
+        # Phase 5: BM25/sparse backend selection (audit §11 Phase 5, non-scheduled
+        # until the corpus outgrows the Python full-scan).  Only "python" today.
+        sparse_backend: str = "python",
     ):
         if not DEPENDENCIES_AVAILABLE:
             raise RuntimeError("RAG dependencies not installed: pymilvus, milvus-lite")
@@ -117,6 +178,7 @@ class MilvusKnowledgeStore:
         self.top_k = top_k
         self.vector_top_k = vector_top_k
         self.bm25_top_k = bm25_top_k
+        self.sparse_backend = (sparse_backend or "python").lower()
 
         model_name = resolve_embedding_model(embedding_model) if embedding_backend == "local" else embedding_model
         self.embedding_model = create_text_embedder(
@@ -127,6 +189,10 @@ class MilvusKnowledgeStore:
             dimension=embedding_dimension,
             timeout_sec=embedding_timeout_sec,
             batch_size=embedding_batch_size,
+            max_retries=embedding_max_retries,
+            retry_base_delay_sec=embedding_retry_base_delay_sec,
+            retry_max_delay_sec=embedding_retry_max_delay_sec,
+            cache_size=embedding_cache_size,
         )
         self.embedding_dim = self.embedding_model.dimension()
 
@@ -217,12 +283,31 @@ class MilvusKnowledgeStore:
         if not chunks:
             return {"status": "success", "added_count": 0, "total_count": self.count()}
 
-        current_count = self.count()
+        # Idempotent upsert (audit §4.3 / §7 P6): a chunk already present under
+        # the same (chunk_hash, document_id, document_version) key is skipped so
+        # re-running an incremental write adds zero new rows.
+        existing_keys = self._idempotency_keys()
+        fresh: List[KnowledgeChunk] = []
+        for chunk in chunks:
+            key = _idempotency_key(chunk)
+            if key in existing_keys:
+                continue
+            existing_keys.add(key)
+            fresh.append(chunk)
+
+        if not fresh:
+            return {"status": "success", "added_count": 0, "total_count": self.count()}
+
         rows = []
-        for offset, chunk in enumerate(chunks, start=1):
-            doc_id = current_count + offset
+        row_ids: set[int] = set()
+        for chunk in fresh:
+            doc_id = _stable_row_id(chunk)
+            if doc_id in row_ids:
+                raise RuntimeError("stable Milvus row id collision within ingestion batch")
+            row_ids.add(doc_id)
             metadata = chunk.to_metadata()
-            metadata["chunk_id"] = f"{Path(chunk.source_path).stem}_{chunk.chunk_index}"
+            metadata["ingested_at"] = _utc_now_iso()
+            metadata["collection_name"] = self.collection_name
             rows.append(
                 {
                     "id": doc_id,
@@ -230,13 +315,53 @@ class MilvusKnowledgeStore:
                     "metadata": json.dumps(metadata, ensure_ascii=False),
                 }
             )
-        vectors = self.embedding_model.embed_texts([chunk.content for chunk in chunks])
+        vectors = self.embedding_model.embed_texts([chunk.content for chunk in fresh])
         for row, vector in zip(rows, vectors):
             row["vector"] = vector
 
-        self.client.insert(collection_name=self.collection_name, data=rows)
+        writer = getattr(self.client, "upsert", self.client.insert)
+        writer(collection_name=self.collection_name, data=rows)
         self.load_collection()
+        # The new version is verified on disk; now retire the superseded rows
+        # of each changed document (audit §4.3: 先 hash 幂等，后按 doc_id 切换版本).
+        self._retire_superseded_versions(fresh)
         return {"status": "success", "added_count": len(rows), "total_count": self.count()}
+
+    def _retire_superseded_versions(self, fresh: List[KnowledgeChunk]) -> int:
+        """Delete rows of a changed document whose version is older than the one
+        just written, so incremental refresh does not accumulate duplicates."""
+        fresh_versions = _fresh_versions(fresh)
+        if not fresh_versions:
+            return 0
+        retired = 0
+        for doc in self.fetch_all_documents():
+            metadata = doc.get("metadata") or {}
+            document_id = str(metadata.get("document_id") or "")
+            if document_id not in fresh_versions:
+                continue
+            document_version = str(metadata.get("document_version") or "")
+            if document_version in fresh_versions[document_id]:
+                continue
+            row_id = doc.get("id")
+            if row_id is None:
+                continue
+            self.client.delete(collection_name=self.collection_name, ids=[row_id])
+            retired += 1
+        if retired:
+            self.load_collection()
+        return retired
+
+    def _idempotency_keys(self) -> set[tuple[str, str, str]]:
+        """Collect idempotency keys of already-indexed chunks for dedup."""
+        keys: set[tuple[str, str, str]] = set()
+        for doc in self.fetch_all_documents():
+            metadata = doc.get("metadata") or {}
+            chunk_hash = str(metadata.get("chunk_hash") or "")
+            document_id = str(metadata.get("document_id") or "")
+            document_version = str(metadata.get("document_version") or "")
+            if chunk_hash or document_id:
+                keys.add((chunk_hash, document_id, document_version))
+        return keys
 
     def replace_chunks_atomically(self, chunks: List[KnowledgeChunk]) -> Dict[str, Any]:
         """Blue/green replacement with rollback-safe collection renames.
@@ -257,9 +382,15 @@ class MilvusKnowledgeStore:
         staging = f"{self.collection_name}__staging_{suffix}"
         backup = f"{self.collection_name}__backup_{suffix}"
         rows = []
-        for doc_id, (chunk, vector) in enumerate(zip(chunks, vectors), start=1):
+        row_ids: set[int] = set()
+        for chunk, vector in zip(chunks, vectors):
+            doc_id = _stable_row_id(chunk)
+            if doc_id in row_ids:
+                raise RuntimeError("stable Milvus row id collision within replacement batch")
+            row_ids.add(doc_id)
             metadata = chunk.to_metadata()
-            metadata["chunk_id"] = f"{Path(chunk.source_path).stem}_{chunk.chunk_index}"
+            metadata["ingested_at"] = _utc_now_iso()
+            metadata["collection_name"] = self.collection_name
             rows.append(
                 {
                     "id": doc_id,
@@ -294,10 +425,23 @@ class MilvusKnowledgeStore:
                 self.client.rename_collection(staging, self.collection_name)
                 promoted = True
             except Exception:
-                if live_moved and self.client.has_collection(backup):
+                if self.client.has_collection(self.collection_name):
+                    # The promote rename actually landed server-side but surfaced
+                    # as an error (e.g. timeout).  The new index is live — treat
+                    # it as promoted so the manifest tracks reality instead of
+                    # leaving the "index changed but manifest stale" state
+                    # (§6.1.5) with an orphaned backup.
+                    logger.warning(
+                        "staging promote raised but live collection %s exists; assuming promoted",
+                        self.collection_name,
+                    )
+                    promoted = True
+                elif live_moved and self.client.has_collection(backup):
                     self.client.rename_collection(backup, self.collection_name)
                     live_moved = False
-                raise
+                    raise
+                else:
+                    raise
 
             self.load_collection()
             if live_moved and self.client.has_collection(backup):
@@ -347,12 +491,14 @@ class MilvusKnowledgeStore:
         self.load_collection()
         rows: List[Dict[str, Any]] = []
         chunk_size = 500
-        for start in range(1, total + 1, chunk_size):
-            end = min(start + chunk_size - 1, total)
+        # Paginate with offset, not an id range: ids are not guaranteed
+        # contiguous once chunks are deduplicated or deleted (audit §4.9).
+        for offset in range(0, total, chunk_size):
             rows.extend(
                 self.client.query(
                     collection_name=self.collection_name,
-                    filter=f"id >= {start} and id <= {end}",
+                    filter="",
+                    offset=offset,
                     limit=chunk_size,
                     output_fields=["id", "content", "metadata"],
                 )
@@ -368,56 +514,24 @@ class MilvusKnowledgeStore:
         ]
 
     def bm25_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+        # Phase 5: keyword ranking routes through the SparseIndex extension
+        # point (rag/sparse.py).  The Python backend keeps the previous full-scan
+        # behavior and scores exactly; a future native-sparse backend plugs in
+        # via HOMMEY_RAG_BM25_BACKEND without touching hybrid_search/fusion.
+        # Imported lazily to avoid a module cycle (sparse imports _tokenize here).
+        from .sparse import create_sparse_index
+
         docs = self.fetch_all_documents()
         if not docs:
             return []
 
-        tokenized = [_tokenize(doc.get("content", "")) for doc in docs]
-        query_tokens = _tokenize(query)
-        if not query_tokens:
-            return []
-
-        n_docs = len(tokenized)
-        doc_lengths = [len(tokens) for tokens in tokenized]
-        avgdl = sum(doc_lengths) / n_docs if n_docs else 0.0
-        if avgdl <= 0:
-            return []
-
-        df: Dict[str, int] = {}
-        for tokens in tokenized:
-            for token in set(tokens):
-                df[token] = df.get(token, 0) + 1
-
-        k1 = 1.5
-        b = 0.75
-        scored = []
-        for index, tokens in enumerate(tokenized):
-            tf: Dict[str, int] = {}
-            for token in tokens:
-                tf[token] = tf.get(token, 0) + 1
-
-            score = 0.0
-            for query_token in query_tokens:
-                if query_token not in tf:
-                    continue
-                freq = tf[query_token]
-                doc_freq = df.get(query_token, 0)
-                idf = math.log(1.0 + (n_docs - doc_freq + 0.5) / (doc_freq + 0.5))
-                denom = freq + k1 * (1 - b + b * len(tokens) / avgdl)
-                score += idf * (freq * (k1 + 1) / denom)
-
-            if score > 0:
-                scored.append((index, score))
-
-        scored.sort(key=lambda item: item[1], reverse=True)
-        results = []
-        for rank, (index, score) in enumerate(scored[: top_k or self.bm25_top_k], start=1):
-            doc = docs[index]
-            results.append({**doc, "bm25_score": score, "bm25_rank": rank})
-        return results
+        index = create_sparse_index(self.sparse_backend)
+        index.index(docs)
+        return index.search(query, top_k or self.bm25_top_k)
 
     def hybrid_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
         start = time.perf_counter()
+        trace_id = new_trace_id()
         vector_docs = self.vector_search(query, self.vector_top_k)
         bm25_docs = self.bm25_search(query, self.bm25_top_k)
         final_k = top_k or self.top_k
@@ -428,15 +542,44 @@ class MilvusKnowledgeStore:
         fused_docs = fuse_results(vector_docs, bm25_docs, candidate_k)
         reranked_docs = rerank_results(fused_docs, query)
         filtered_docs = filter_relevant_results(reranked_docs, query)
+        final = (filtered_docs or reranked_docs)[:final_k]
+        for doc in final:
+            doc["retrieval_trace_id"] = trace_id
+        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
+        append_retrieval_trace(
+            build_retrieval_trace(
+                trace_id=trace_id,
+                query=query,
+                expanded_query=query,
+                top_k=final_k,
+                docs=final,
+                metrics={
+                    "candidates": len(fused_docs),
+                    "kept": len(final),
+                    "dropped_by_filter": (
+                        max(0, len(reranked_docs) - len(filtered_docs))
+                        if filtered_docs
+                        else 0
+                    ),
+                    "reranked": len(reranked_docs),
+                    "latency_ms": elapsed_ms,
+                },
+                index_version=str(
+                    ((final[0].get("metadata") or {}).get("index_version") if final else "")
+                    or ""
+                ),
+                collection_name=self.collection_name,
+            )
+        )
         logger.info(
             "RAG hybrid search completed in %.3fs (vector=%d, bm25=%d, fused=%d, filtered=%d)",
-            time.perf_counter() - start,
+            elapsed_ms / 1000.0,
             len(vector_docs),
             len(bm25_docs),
             len(fused_docs),
             len(filtered_docs),
         )
-        return (filtered_docs or reranked_docs)[:final_k]
+        return final
 
     def count(self) -> int:
         stats = self.client.get_collection_stats(self.collection_name)
@@ -519,7 +662,11 @@ def rerank_results(docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any
             for term in query_ngrams
             if term in content
         )
-        focus_matches = sum(1 for term in focus_terms if term in content)
+        focus_bonus = sum(
+            (0.30 if index == 0 else 0.18)
+            for index, term in enumerate(focus_terms)
+            if term in content
+        )
         title = str((doc.get("metadata") or {}).get("title", ""))
         title_matches = sum(1 for term in terms if term in title)
         penalty = _off_topic_penalty(query, content)
@@ -528,7 +675,7 @@ def rerank_results(docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any
             + matches * 0.04
             + title_matches * 0.02
             + min(ngram_bonus, 0.30)
-            + focus_matches * 0.22
+            + focus_bonus
             - penalty
         )
 
@@ -538,6 +685,13 @@ def rerank_results(docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any
 
 
 def filter_relevant_results(docs: List[Dict[str, Any]], query: str) -> List[Dict[str, Any]]:
+    """Domain-term relevance filter.
+
+    The audit (§9.4) drops the "rank-1 unconditional pass" — an off-topic doc
+    ranked first by a single branch must not survive purely because of its rank.
+    The filter stays off for queries with no domain terms, keeping generic
+    queries byte-identical to the unfiltered path.
+    """
     terms = _rerank_terms(query)
     if not terms:
         return docs
@@ -546,8 +700,6 @@ def filter_relevant_results(docs: List[Dict[str, Any]], query: str) -> List[Dict
         doc
         for doc in docs
         if any(term in doc.get("content", "") for term in terms)
-        or doc.get("vector_rank") == 1
-        or doc.get("bm25_rank") == 1
     ]
 
 
@@ -555,6 +707,8 @@ def _rerank_terms(query: str) -> List[str]:
     terms = [term for term in ("餐补", "餐费", "餐饮", "早餐", "午餐", "晚餐", "报销", "个人零食", "酒水") if term in query]
     if any(term in query for term in ("餐补", "饭补", "吃饭")):
         terms.extend(["餐费", "餐饮", "早餐", "午餐", "晚餐", "报销"])
+    if any(term in query for term in ("住宿", "酒店", "房费")):
+        terms.extend(["住宿标准", "住宿费", "住宿上限", "酒店"])
     return list(dict.fromkeys(terms))
 
 
@@ -593,6 +747,8 @@ def _focus_terms(text: str) -> List[str]:
     """Extract the concrete subject after removing generic policy wording."""
     normalized = (text or "").lower()
     boilerplate = (
+        "是多少",
+        "有没有",
         "出差期间",
         "出差途中",
         "是否可以报销",
@@ -602,6 +758,15 @@ def _focus_terms(text: str) -> List[str]:
         "能否报销",
         "可以报销",
         "报销吗",
+        "出差",
+        "差旅",
+        "标准",
+        "多少",
+        "怎么",
+        "如何",
+        "怎样",
+        "什么",
+        "哪些",
         "是否",
         "能否",
         "可以",
@@ -610,7 +775,12 @@ def _focus_terms(text: str) -> List[str]:
     )
     for phrase in boilerplate:
         normalized = normalized.replace(phrase, " ")
-    return [run for run in re.findall(r"[\u4e00-\u9fff]+", normalized) if len(run) >= 3]
+    generic = {"费用", "标准", "流程", "规定", "政策", "员工", "公司"}
+    return [
+        run
+        for run in re.findall(r"[\u4e00-\u9fff]+", normalized)
+        if len(run) >= 2 and run not in generic
+    ]
 
 
 def _get_embedding_model(model_path: str):

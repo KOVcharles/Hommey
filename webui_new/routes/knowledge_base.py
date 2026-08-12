@@ -17,7 +17,8 @@ from webui_new.knowledge_base_service import (
 )
 
 
-SUPPORTED_DOCUMENT_TYPES = {"txt", "md", "pdf"}
+# Phase 2 (audit §11): DOCX/CSV/XLSX are browsable/previewable knowledge sources.
+SUPPORTED_DOCUMENT_TYPES = {"txt", "md", "pdf", "docx", "csv", "xlsx"}
 CATEGORY_LABELS = {
     "policy_governance": "规则治理",
     "travel_policy": "差旅标准",
@@ -89,6 +90,10 @@ class KnowledgeBaseLibrary:
         file_type = path.suffix.lower().lstrip(".")
         if file_type in {"txt", "md"}:
             return path.read_text(encoding="utf-8").strip(), None
+        if file_type in {"docx", "csv", "xlsx"}:
+            # Reuse the RAG structured parsers so the preview and the index
+            # extract text the same way (a single source of truth for §6.1.1).
+            return self._read_structured(path, file_type), None
 
         try:
             from pypdf import PdfReader
@@ -98,6 +103,20 @@ class KnowledgeBaseLibrary:
         reader = PdfReader(str(path))
         pages = [(page.extract_text() or "").strip() for page in reader.pages]
         return "\n\n".join(page for page in pages if page), len(reader.pages)
+
+    @staticmethod
+    def _read_structured(path: Path, file_type: str) -> str:
+        from rag.parser import ParserRegistry
+        from rag.schemas import RawDocument
+
+        document = RawDocument(
+            content=path.read_bytes(),
+            source_path=str(path),
+            filename=path.name,
+            file_type=file_type,
+        )
+        parsed = ParserRegistry().parse(document)
+        return "\n\n".join(page.text for page in parsed if page.text).strip()
 
     def _metadata(self, path: Path, content: str, page_count: int | None) -> dict:
         relative_path = path.relative_to(self.root).as_posix()

@@ -1,20 +1,29 @@
 """Composable RAG ingestion and query pipeline."""
 from __future__ import annotations
 
+import dataclasses
 import logging
+from collections import Counter
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .chunker import TextChunker
+from .chunker import BlockChunker, TextChunker
 from .config import RAGPipelineConfig
 from .loader import DocumentLoader, FileSystemDocumentLoader
 from .normalizer import DocumentNormalizer, TextNormalizer
+from .ocr import PageOcrFallback
 from .parser import ParserRegistry, UnsupportedFileTypeError
 from .retriever import Retriever, VectorStoreRetriever
 from .schemas import DocumentChunk, IngestionReport, ParsedDocument, RetrievalResult
 from .vector_store import MilvusVectorStore, VectorStore
+from .versions import index_version_block
 
 logger = logging.getLogger(__name__)
+
+
+def _utc_now_iso() -> str:
+    return datetime.now(timezone.utc).isoformat()
 
 
 class RAGPipeline:
@@ -24,15 +33,29 @@ class RAGPipeline:
         loader: Optional[DocumentLoader] = None,
         parser_registry: Optional[ParserRegistry] = None,
         normalizer: Optional[DocumentNormalizer] = None,
-        chunker: Optional[TextChunker] = None,
+        chunker: Optional[Any] = None,
         vector_store: Optional[VectorStore] = None,
         retriever: Optional[Retriever] = None,
+        ocr_fallback: Optional[PageOcrFallback] = None,
     ):
         self.config = config or RAGPipelineConfig.from_settings()
         self.loader = loader or FileSystemDocumentLoader(self.config.supported_file_types)
         self.parser_registry = parser_registry or ParserRegistry()
         self.normalizer = normalizer or TextNormalizer()
-        self.chunker = chunker or TextChunker(self.config.chunk_size, self.config.chunk_overlap)
+        # Phase 3: flag-gated OCR fallback for text-less PDF pages.  A caller
+        # may inject a fake vision client (tests); the default builds one from
+        # VISION_CONFIG lazily and only acts when config.ocr_enabled is true.
+        self.ocr_fallback = ocr_fallback or PageOcrFallback(
+            enabled=self.config.ocr_enabled,
+            confidence_threshold=self.config.ocr_confidence_threshold,
+        )
+        # Phase-1 default is the structured block chunker; legacy callers may
+        # still inject the character-window TextChunker.
+        self.chunker = chunker or BlockChunker(
+            min_tokens=self.config.chunk_min_tokens,
+            max_tokens=self.config.chunk_max_tokens,
+            overlap_tokens=self.config.chunk_overlap_tokens,
+        )
         self.vector_store = vector_store or MilvusVectorStore(
             knowledge_base_path=self.config.knowledge_base_path,
             collection_name=self.config.collection_name,
@@ -43,9 +66,14 @@ class RAGPipeline:
             embedding_dimension=self.config.embedding_dimension,
             embedding_batch_size=self.config.embedding_batch_size,
             embedding_timeout_sec=self.config.embedding_timeout_sec,
+            embedding_max_retries=self.config.embedding_max_retries,
+            embedding_retry_base_delay_sec=self.config.embedding_retry_base_delay_sec,
+            embedding_retry_max_delay_sec=self.config.embedding_retry_max_delay_sec,
+            embedding_cache_size=self.config.embedding_cache_size,
             top_k=self.config.top_k,
             vector_top_k=self.config.vector_top_k,
             bm25_top_k=self.config.bm25_top_k,
+            sparse_backend=self.config.bm25_backend,
         )
         self.retriever = retriever or VectorStoreRetriever(self.vector_store)
 
@@ -68,8 +96,14 @@ class RAGPipeline:
             if file_type not in self.parser_registry.parsers:
                 raise UnsupportedFileTypeError(file_type, raw_documents[0].source_path)
 
+        # Freeze the index fingerprint once at pipeline entry (audit §6.1.5).
+        version_block = index_version_block(self.config)
+        index_version = version_block["index"]["version"]
+
         errors: List[Dict[str, Any]] = []
         parsed_documents: List[ParsedDocument] = []
+        page_states: Dict[str, Counter] = {}
+        doc_versions: Dict[str, Dict[str, Any]] = {}
         for raw_document in raw_documents:
             try:
                 parsed = self.parser_registry.parse(raw_document)
@@ -80,7 +114,26 @@ class RAGPipeline:
                 errors.append({"source_path": raw_document.source_path, "error": str(exc)})
                 continue
 
+            # Phase 3: OCR fallback replaces text-less PDF pages before the
+            # empty-page filter below, so a scan only survives if OCR recovers
+            # it (or records why it could not — P8 terminal state).
+            parsed = self.ocr_fallback.apply(parsed)
+
             for document in parsed:
+                document_id = self._document_id_for(document.source_path)
+                document = dataclasses.replace(
+                    document, metadata={**document.metadata, "document_id": document_id}
+                )
+                states = page_states.setdefault(document_id, Counter())
+                states[document.page_terminal_state] += 1
+                doc_versions.setdefault(
+                    document_id,
+                    {
+                        "document_version": document.document_version,
+                        "parser_name": document.parser_name,
+                        "parser_version": document.parser_version,
+                    },
+                )
                 if document.metadata.get("parse_error"):
                     errors.append(
                         {
@@ -90,24 +143,40 @@ class RAGPipeline:
                         }
                     )
                     continue
-                parsed_documents.append(document)
+                # Empty pages (intentionally_skipped / error) are recorded in
+                # page_states but never become chunks (§7 P8).
+                if document.text or document.blocks:
+                    parsed_documents.append(document)
 
         if progress_callback:
             progress_callback("正在规范化文档结构", 46)
         normalized = self.normalizer.normalize(parsed_documents)
-        chunks: List[DocumentChunk] = []
+
+        grouped: Dict[str, List[ParsedDocument]] = {}
         for document in normalized:
+            grouped.setdefault(document.document_id, []).append(document)
+
+        chunks: List[DocumentChunk] = []
+        chunks_by_doc: Counter = Counter()
+        for document_id, pages in grouped.items():
             try:
-                chunks.extend(self.chunker.chunk([document]))
+                doc_chunks = self.chunker.chunk(pages)
             except Exception as exc:
-                logger.exception("Failed to chunk RAG document page: %s", document.source_path)
-                errors.append(
-                    {
-                        "source_path": document.source_path,
-                        "page_number": document.page_number,
-                        "error": str(exc),
-                    }
-                )
+                logger.exception("Failed to chunk RAG document: %s", document_id)
+                errors.append({"source_path": document_id, "error": str(exc)})
+                continue
+            chunks.extend(doc_chunks)
+            chunks_by_doc[document_id] += len(doc_chunks)
+
+        # Stamp the frozen index fingerprint on every chunk before writing.
+        chunks = [
+            dataclasses.replace(
+                chunk,
+                index_version=index_version,
+                schema_version=version_block["schema_version"],
+            )
+            for chunk in chunks
+        ]
 
         if progress_callback:
             progress_callback("正在切分检索片段", 62)
@@ -142,11 +211,19 @@ class RAGPipeline:
             status = "error"
         elif not chunks and errors:
             status = "error"
+
+        documents_report = {}
+        for document_id, version_info in doc_versions.items():
+            documents_report[document_id] = {
+                **version_info,
+                "pages": dict(page_states.get(document_id, {})),
+                "chunk_count": chunks_by_doc.get(document_id, 0),
+            }
         report = IngestionReport(
             status=status,
             source_path=source_path,
             documents_loaded=len(raw_documents),
-            pages_parsed=len(normalized),
+            pages_parsed=sum(sum(states.values()) for states in page_states.values()),
             chunks_loaded=len(chunks),
             added_count=int(add_result.get("added_count", 0) or 0),
             total_count=int(add_result.get("total_count", 0) or 0),
@@ -154,6 +231,14 @@ class RAGPipeline:
             metadata={
                 "knowledge_base_path": self.config.knowledge_base_path,
                 "collection_name": self.config.collection_name,
+                "schema_version": version_block["schema_version"],
+                "index": {
+                    **version_block["index"],
+                    "built_at": _utc_now_iso(),
+                    "trigger": "full_rebuild" if rebuild else "incremental",
+                    "collection_name": self.config.collection_name,
+                },
+                "documents": documents_report,
             },
         )
         logger.info(
@@ -165,6 +250,16 @@ class RAGPipeline:
             len(report.errors),
         )
         return report
+
+    def _document_id_for(self, source_path: str) -> str:
+        """Document identity is the posix path relative to documents_dir, aligned
+        with the ingestion_manifest documents keys (audit §6.1.2).  Files outside
+        documents_dir fall back to their filename."""
+        anchor = Path(self.config.documents_dir).resolve()
+        try:
+            return Path(source_path).resolve().relative_to(anchor).as_posix()
+        except ValueError:
+            return Path(source_path).name
 
     def query(self, question: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
         return self.retriever.retrieve(question, top_k=top_k or self.config.top_k)

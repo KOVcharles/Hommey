@@ -1,0 +1,323 @@
+{
+  "schema_version": "rag.v2.golden.1",
+  "corpus": "data/documents",
+  "created": "2026-08-12",
+  "intent": "Phase 0 基线黄金查询集：覆盖精确问法、口语同义、否定、城市范围、多事实与无答案六类；随真实失败案例扩展到 100+。",
+  "categories": ["exact", "colloquial", "negation", "city_scope", "multi_fact", "no_answer"],
+  "queries": [
+    {
+      "id": "exact-001",
+      "type": "exact",
+      "query": "一线城市住宿标准",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准"],
+      "facts": ["不超过500元/晚", "北京、上海、广州、深圳"],
+      "note": "精确用词命中住宿标准"
+    },
+    {
+      "id": "exact-002",
+      "type": "exact",
+      "query": "高铁二等座标准",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["二、交通标准"],
+      "facts": ["二等座及以下"],
+      "note": "精确用词命中高铁标准"
+    },
+    {
+      "id": "exact-003",
+      "type": "exact",
+      "query": "国际长途航线舱位标准",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["二、交通标准"],
+      "facts": ["高端经济舱"],
+      "note": "精确用词命中飞机标准"
+    },
+    {
+      "id": "exact-004",
+      "type": "exact",
+      "query": "特殊地区住宿标准上浮比例",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准"],
+      "facts": ["上浮20%", "西藏、新疆、青海"],
+      "note": "精确用词命中特殊地区标准"
+    },
+    {
+      "id": "exact-005",
+      "type": "exact",
+      "query": "业务招待费超500元审批",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["四、餐饮标准"],
+      "facts": ["超过500元需要部门主管审批"],
+      "note": "精确用词命中业务招待"
+    },
+    {
+      "id": "exact-006",
+      "type": "exact",
+      "query": "超标30%以上审批权限",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["七、特殊情况处理"],
+      "facts": ["超标30%以上需总监审批"],
+      "note": "精确用词命中超标准情况"
+    },
+    {
+      "id": "exact-007",
+      "type": "exact",
+      "query": "报销申请提交时限",
+      "expected_files": ["02_reimbursement_policy.txt"],
+      "expected_sections": ["一、报销时间要求"],
+      "facts": ["超期不予受理"],
+      "note": "精确用词命中报销时间"
+    },
+    {
+      "id": "exact-008",
+      "type": "exact",
+      "query": "电子发票查验要求",
+      "expected_files": ["02_reimbursement_policy.txt"],
+      "expected_sections": ["七、发票管理"],
+      "facts": ["发票号码验证", "不得重复报销"],
+      "note": "精确用词命中发票管理"
+    },
+    {
+      "id": "exact-009",
+      "type": "exact",
+      "query": "机票预订提前时间",
+      "expected_files": ["03_booking_guide.txt"],
+      "expected_sections": ["一、机票预订"],
+      "facts": [],
+      "note": "精确用词命中机票预订"
+    },
+    {
+      "id": "exact-010",
+      "type": "exact",
+      "query": "出差申请提前提交要求",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["一、差旅申请流程"],
+      "facts": ["出发前至少3个工作日"],
+      "note": "精确用词命中申请流程"
+    },
+    {
+      "id": "colloquial-001",
+      "type": "colloquial",
+      "query": "出差住酒店一晚上最多能报多少钱",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准"],
+      "facts": ["500元", "400元", "300元"],
+      "note": "口语同义：住酒店=住宿标准"
+    },
+    {
+      "id": "colloquial-002",
+      "type": "colloquial",
+      "query": "坐高铁能订什么座位",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["二、交通标准"],
+      "facts": ["二等座"],
+      "note": "口语同义：坐高铁=高铁标准"
+    },
+    {
+      "id": "colloquial-003",
+      "type": "colloquial",
+      "query": "打车报销有什么规定",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["二、交通标准"],
+      "facts": ["机场接送", "业务拜访"],
+      "note": "口语同义：打车=出租车网约车"
+    },
+    {
+      "id": "colloquial-004",
+      "type": "colloquial",
+      "query": "请客户吃饭怎么报销",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["四、餐饮标准"],
+      "facts": ["业务招待", "实报实销"],
+      "note": "口语同义：请客户吃饭=业务招待"
+    },
+    {
+      "id": "colloquial-005",
+      "type": "colloquial",
+      "query": "订机票要注意什么事项",
+      "expected_files": ["03_booking_guide.txt"],
+      "expected_sections": ["一、机票预订"],
+      "facts": [],
+      "note": "口语同义：订机票=机票预订"
+    },
+    {
+      "id": "colloquial-006",
+      "type": "colloquial",
+      "query": "出差期间加班有没有补贴",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["六、差旅补贴"],
+      "facts": ["调休"],
+      "note": "口语同义：加班补贴=差旅补贴"
+    },
+    {
+      "id": "colloquial-007",
+      "type": "colloquial",
+      "query": "航班延误了怎么办",
+      "expected_files": ["05_emergency_procedures.txt"],
+      "expected_sections": ["一、航班相关紧急情况"],
+      "facts": ["改签", "退票"],
+      "note": "口语同义：航班延误=紧急情况"
+    },
+    {
+      "id": "colloquial-008",
+      "type": "colloquial",
+      "query": "出国出差报销流程",
+      "expected_files": ["04_faq.txt", "02_reimbursement_policy.txt"],
+      "expected_sections": ["六、国际出差相关"],
+      "facts": [],
+      "note": "口语同义：出国=国际出差"
+    },
+    {
+      "id": "negation-001",
+      "type": "negation",
+      "query": "机场停车费可以报销吗",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["五、其他费用标准"],
+      "facts": ["机场停车费：不予报销"],
+      "note": "否定问法：应命中'不予报销'规则而非跳过"
+    },
+    {
+      "id": "negation-002",
+      "type": "negation",
+      "query": "个人购物消费能报销吗",
+      "expected_files": ["02_reimbursement_policy.txt"],
+      "expected_sections": ["四、不予报销的情况"],
+      "facts": ["个人消费不予报销"],
+      "note": "否定问法：命中不予报销清单"
+    },
+    {
+      "id": "negation-003",
+      "type": "negation",
+      "query": "出差期间的酒水可以报销吗",
+      "expected_files": ["04_faq.txt", "01_travel_standards.txt"],
+      "expected_sections": ["四、费用报销相关"],
+      "facts": ["非业务招待不予报销"],
+      "note": "否定问法：命中酒水例外规则"
+    },
+    {
+      "id": "negation-004",
+      "type": "negation",
+      "query": "交通违章罚款能报销吗",
+      "expected_files": ["04_faq.txt"],
+      "expected_sections": ["七、其他常见问题"],
+      "facts": ["不予报销"],
+      "note": "否定问法：命中违章罚款规则"
+    },
+    {
+      "id": "negation-005",
+      "type": "negation",
+      "query": "自行升舱的差额公司报销吗",
+      "expected_files": ["04_faq.txt"],
+      "expected_sections": ["二、交通出行相关"],
+      "facts": ["未经批准自行升舱差额不予报销"],
+      "note": "否定问法：命中升舱差额规则"
+    },
+    {
+      "id": "city-001",
+      "type": "city_scope",
+      "query": "成都出差住宿一晚多少钱",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准"],
+      "facts": ["二线城市", "400元"],
+      "note": "城市范围：成都是二线城市"
+    },
+    {
+      "id": "city-002",
+      "type": "city_scope",
+      "query": "深圳出差住宿标准",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准"],
+      "facts": ["一线城市", "500元"],
+      "note": "城市范围：深圳是一线城市"
+    },
+    {
+      "id": "city-003",
+      "type": "city_scope",
+      "query": "杭州出行有什么城市建议",
+      "expected_files": ["07_city_specific_tips.txt"],
+      "expected_sections": ["五、杭州"],
+      "facts": [],
+      "note": "城市范围：杭州城市指南"
+    },
+    {
+      "id": "city-004",
+      "type": "city_scope",
+      "query": "北京出差交通建议",
+      "expected_files": ["07_city_specific_tips.txt"],
+      "expected_sections": ["一、北京"],
+      "facts": [],
+      "note": "城市范围：北京城市指南"
+    },
+    {
+      "id": "city-005",
+      "type": "city_scope",
+      "query": "广州出行的注意事项",
+      "expected_files": ["07_city_specific_tips.txt"],
+      "expected_sections": ["三、广州"],
+      "facts": [],
+      "note": "城市范围：广州城市指南"
+    },
+    {
+      "id": "multi-001",
+      "type": "multi_fact",
+      "query": "上海出差住宿和餐补标准",
+      "expected_files": ["01_travel_standards.txt"],
+      "expected_sections": ["三、住宿标准", "四、餐饮标准"],
+      "facts": ["500元", "100元"],
+      "note": "多事实：住宿+餐饮两类证据"
+    },
+    {
+      "id": "multi-002",
+      "type": "multi_fact",
+      "query": "报销需要提交哪些材料",
+      "expected_files": ["02_reimbursement_policy.txt"],
+      "expected_sections": ["二、报销材料要求"],
+      "facts": ["发票", "行程单"],
+      "note": "多事实：报销材料清单"
+    },
+    {
+      "id": "multi-003",
+      "type": "multi_fact",
+      "query": "国际出差需要办理哪些手续",
+      "expected_files": ["04_faq.txt", "01_travel_standards.txt"],
+      "expected_sections": ["六、国际出差相关", "二、交通标准"],
+      "facts": ["签证", "护照"],
+      "note": "多事实：国际出差手续"
+    },
+    {
+      "id": "noanswer-001",
+      "type": "no_answer",
+      "query": "差旅中可以报销宠物寄养费用吗",
+      "expected_files": [],
+      "note": "语料无宠物寄养政策，应无强相关证据"
+    },
+    {
+      "id": "noanswer-002",
+      "type": "no_answer",
+      "query": "公司有团建旅游补贴政策吗",
+      "expected_files": [],
+      "note": "语料无团建旅游政策"
+    },
+    {
+      "id": "noanswer-003",
+      "type": "no_answer",
+      "query": "出差时酒店泳池使用费能报销吗",
+      "expected_files": [],
+      "note": "语料无泳池使用费政策"
+    },
+    {
+      "id": "noanswer-004",
+      "type": "no_answer",
+      "query": "员工家属随行差旅费用如何报销",
+      "expected_files": [],
+      "note": "语料无家属随行政策"
+    },
+    {
+      "id": "noanswer-005",
+      "type": "no_answer",
+      "query": "出差期间的健身房会员费可以报销吗",
+      "expected_files": [],
+      "note": "语料无健身房会员费政策"
+    }
+  ]
+}

@@ -33,7 +33,7 @@ data/models/
 
 # AgentScope 运行时
 .agentscope/
-.agents/
+# .agents/skills 是应用源码，必须被复制进运行镜像。
 
 # 文档
 docs/

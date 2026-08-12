@@ -19,7 +19,10 @@ def test_load_text_documents_reads_txt_files(tmp_path: Path):
     assert len(documents) == 1
     assert documents[0].title == "Travel Standards"
     assert documents[0].category == "travel_policy"
-    assert documents[0].metadata["parent_doc"] == "01_travel_standards.txt"
+    # Citation identity comes from the filename/canonical fields; the legacy
+    # `parent_doc` metadata key is gone (audit §4.12).
+    assert documents[0].filename == "01_travel_standards.txt"
+    assert documents[0].metadata["document_version"]
 
 
 def test_tokenize_keeps_exact_chinese_concepts_as_ngrams():

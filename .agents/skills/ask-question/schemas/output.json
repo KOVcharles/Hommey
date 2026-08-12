@@ -1,1 +1,32 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"status":{"enum":["success","no_knowledge"]},"answer":{"type":"string"},"sources":{"type":"array","items":{"type":"object"}}},"required":["status","answer"],"additionalProperties":true}
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "properties": {
+    "status": {
+      "enum": ["success", "partial", "no_knowledge", "error", "knowledge_base_empty"]
+    },
+    "answer": {"type": "string"},
+    "sources": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "chunk_id": {"type": ["string", "null"]},
+          "file": {"type": "string"},
+          "page": {"type": ["integer", "null"]},
+          "section": {"type": ["string", "null"]},
+          "excerpt": {"type": "string"},
+          "table": {
+            "type": ["object", "null"],
+            "additionalProperties": true
+          }
+        },
+        "required": ["chunk_id", "file", "page", "section", "excerpt"],
+        "additionalProperties": true
+      }
+    },
+    "retrieval_trace_id": {"type": "string"}
+  },
+  "required": ["status", "answer"],
+  "additionalProperties": true
+}
