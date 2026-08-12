@@ -333,7 +333,8 @@
 
     function submitHomeInput() {
         const text = homeInput.value.trim();
-        if (!text || isProcessing || isOnboarding) return;
+        const hasReadyAttachments = pendingAttachments.some((attachment) => attachment.status === 'ready');
+        if ((!text && !hasReadyAttachments) || isProcessing || isOnboarding) return;
         homeInput.value = '';
         resizeInput(homeInput);
         chatInput.value = text;
@@ -1243,7 +1244,9 @@
                 chip.className = attachment.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
                 chip.dataset.id = attachment.id || '';
                 chip.dataset.tmpId = attachment.tmpId || '';
-                chip.title = attachment.filename || '';
+                chip.title = attachment.errorMessage
+                    ? `${attachment.filename || '未命名附件'}：${attachment.errorMessage}`
+                    : (attachment.filename || '');
                 const label = document.createElement('span');
                 label.className = 'pending-chip-label';
                 label.textContent = `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`;
@@ -1286,12 +1289,28 @@
                 entry.filename = res.filename || file.name;
                 entry.kind = res.kind;
                 entry.status = res.status === 'ready' ? 'ready' : 'failed';
+                if (entry.status === 'failed') {
+                    entry.errorMessage = attachmentFailureMessage(res.error_code);
+                }
             } catch (err) {
                 entry.status = 'failed';
-                showToast(formatDisplayError(err, '附件上传失败'));
+                entry.errorMessage = formatDisplayError(err, '附件上传失败');
+                showToast(entry.errorMessage);
             }
             renderPendingAttachments();
         }
+    }
+
+    function attachmentFailureMessage(errorCode) {
+        const messages = {
+            VISION_DISABLED: '图片识别服务未开启',
+            VISION_KEY_MISSING: '图片识别服务未配置',
+            VISION_QUOTA_EXCEEDED: '今日图片识别次数已达上限',
+            IMAGE_PARSE_FAILED: '图片识别失败',
+            PARSE_FAILED: '附件解析失败',
+            PERSIST_FAILED: '附件处理结果保存失败',
+        };
+        return messages[String(errorCode || '').toUpperCase()] || '附件处理失败';
     }
 
     function escapeHtml(s) {
