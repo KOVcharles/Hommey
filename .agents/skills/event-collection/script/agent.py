@@ -9,7 +9,7 @@
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
 from core.execution_budget import ExecutionLimitExceeded
-from core.trip_intake import evaluate_trip_intake
+from core.trip_intake import evaluate_trip_intake, remove_ungrounded_trip_locations
 from typing import Optional, Union, List
 import json
 import logging
@@ -42,36 +42,27 @@ class EventCollectionAgent(AgentBase):
                 data = json.loads(content)
                 context = data.get("context", {})
                 user_query = context.get("agent_query") or context.get("rewritten_query", "") or str(data)
-                user_preferences = context.get("user_preferences", {})
                 active_trip = context.get("active_trip") or {}
                 recent_dialogue = context.get("recent_dialogue") or []
             except json.JSONDecodeError:
                 user_query = content
-                user_preferences = {}
                 active_trip = {}
                 recent_dialogue = []
         else:
             user_query = str(content)
-            user_preferences = {}
             active_trip = {}
             recent_dialogue = []
 
-        # 构建用户背景信息
+        # 只继承当前任务和当前会话事实。偏好属于推荐依据，不能成为已确认槽位。
         background_info = ""
-        if user_preferences:
-            bg_parts = ["【用户背景信息】（可用于推断缺失信息）"]
-            if user_preferences.get("home_location"):
-                bg_parts.append(f"• 家庭住址: {user_preferences['home_location']}")
-            if user_preferences.get("hotel_brands"):
-                bg_parts.append(f"• 酒店偏好: {', '.join(user_preferences['hotel_brands'])}")
-            if user_preferences.get("airlines"):
-                bg_parts.append(f"• 航空偏好: {', '.join(user_preferences['airlines'])}")
-
-            if len(bg_parts) > 1:
-                background_info = "\n".join(bg_parts) + "\n\n"
+        trusted_location_sources = [user_query]
         if active_trip:
             background_info += "【当前出差任务】（在此基础上增量更新）\n"
             background_info += json.dumps(active_trip, ensure_ascii=False, indent=2) + "\n\n"
+            trusted_location_sources.extend([
+                active_trip.get("origin"),
+                active_trip.get("destination"),
+            ])
         dialogue_lines = []
         for item in recent_dialogue[-8:]:
             if not isinstance(item, dict) or item.get("role") != "user":
@@ -79,6 +70,7 @@ class EventCollectionAgent(AgentBase):
             text = str(item.get("content") or "").strip()
             if text and text != user_query:
                 dialogue_lines.append(f"• {text[:500]}")
+                trusted_location_sources.append(text)
         if dialogue_lines:
             background_info += "【当前会话最近提供的行程信息】（仅用于补齐当前任务）\n"
             background_info += "\n".join(dialogue_lines) + "\n\n"
@@ -116,7 +108,7 @@ class EventCollectionAgent(AgentBase):
 
 【特殊处理】
 - 不把公司差旅行程扩展为景点或私人旅游计划
-- 如果用户没说出发地，但有家庭住址信息，可推断出发地为家庭住址
+- 用户偏好（包括家庭住址、常去城市）不得补全为当前行程事实；用户没有说出发地时保持缺失
 - 当前出差任务已有的字段应保留；用户本轮提供的新信息覆盖旧值
 - 可使用最近对话补齐本轮省略的当前行程事实，但不得把旧的、已完成的其他行程混入当前任务
 - 最近对话、当前任务和本轮输入有冲突时，以本轮明确表达为准；无法判断时保留当前任务并要求确认
@@ -203,7 +195,10 @@ class EventCollectionAgent(AgentBase):
                 "error": str(e)
             }
 
-        # LLM只提取事实；是否可规划、缺失/无效/冲突字段由确定性规则计算。
+        # LLM只提取候选事实；来源校验和是否可规划均由确定性规则计算。
+        rejected_locations = remove_ungrounded_trip_locations(result, trusted_location_sources)
+        if rejected_locations:
+            result.pop("summary", None)
         result.update(evaluate_trip_intake(result))
 
         # 返回JSON字符串格式

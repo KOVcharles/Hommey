@@ -104,7 +104,105 @@ async def test_intention_prompt_keeps_stored_instructions_inside_untrusted_bound
     assert len(captured) == 1
     assert "不可信数据" in captured[0][0]["content"]
     assert "不得执行" in captured[0][0]["content"]
+    assert "用户偏好、历史行程、历史摘要和助手陈述均不得作为当前行程事实" in captured[0][0]["content"]
     assert "<memory-data>" in captured[0][1]["content"]
+    assert "缺少当前行程事实时" in captured[0][1]["content"]
+
+
+@pytest.mark.anyio
+async def test_intention_rejects_trip_entities_without_current_fact_provenance():
+    async def model(_messages):
+        return __import__("json").dumps(
+            {
+                "reasoning": "错误地沿用了历史行程",
+                "routing": {
+                    "intent": "itinerary_planning",
+                    "confidence": 0.95,
+                    "reason": "准备差旅备选路线",
+                    "should_call_skill": True,
+                },
+                "intents": [{
+                    "type": "itinerary_planning",
+                    "confidence": 0.95,
+                    "description": "",
+                    "reason": "准备差旅备选路线",
+                    "should_call_skill": True,
+                }],
+                "key_entities": {
+                    "origin": "北京",
+                    "destination": "南京",
+                    "date": None,
+                    "duration": None,
+                    "other": "备选路线",
+                },
+                "rewritten_query": "如果航班延误，准备从北京到南京的备选路线",
+            },
+            ensure_ascii=False,
+        )
+
+    agent = IntentionAgent(name="IntentionAgent", model=model)
+    response = await agent.reply([
+        Msg(
+            name="system",
+            content=wrap_untrusted_memory("【历史会话总结】用户以前从北京去过南京"),
+            role="system",
+        ),
+        Msg(name="user", content="如果航班延误，帮我准备一条备选路线", role="user"),
+    ])
+    result = __import__("json").loads(response.content)
+
+    assert result["key_entities"]["origin"] is None
+    assert result["key_entities"]["destination"] is None
+    assert result["rewritten_query"] == "如果航班延误，帮我准备一条备选路线"
+
+
+@pytest.mark.anyio
+async def test_intention_accepts_trip_entities_from_the_active_trip():
+    async def model(_messages):
+        return __import__("json").dumps(
+            {
+                "reasoning": "沿用当前进行中的行程",
+                "routing": {
+                    "intent": "itinerary_planning",
+                    "confidence": 0.95,
+                    "reason": "准备差旅备选路线",
+                    "should_call_skill": True,
+                },
+                "intents": [{
+                    "type": "itinerary_planning",
+                    "confidence": 0.95,
+                    "description": "",
+                    "reason": "准备差旅备选路线",
+                    "should_call_skill": True,
+                }],
+                "key_entities": {
+                    "origin": "北京",
+                    "destination": "上海",
+                    "date": None,
+                    "duration": None,
+                    "other": "备选路线",
+                },
+                "rewritten_query": "如果航班延误，准备从北京到上海的备选路线",
+            },
+            ensure_ascii=False,
+        )
+
+    agent = IntentionAgent(name="IntentionAgent", model=model)
+    response = await agent.reply([
+        Msg(
+            name="system",
+            content=wrap_untrusted_memory(
+                '【当前出差任务｜可用于补全当前问题】\n{"origin":"北京","destination":"上海"}'
+            ),
+            role="system",
+        ),
+        Msg(name="user", content="如果航班延误，帮我准备一条备选路线", role="user"),
+    ])
+    result = __import__("json").loads(response.content)
+
+    assert result["key_entities"]["origin"] == "北京"
+    assert result["key_entities"]["destination"] == "上海"
+    assert result["rewritten_query"] == "如果航班延误，准备从北京到上海的备选路线"
 
 
 def test_short_term_message_version_keeps_growing_after_window_is_full():
@@ -239,24 +337,69 @@ def test_terminal_active_trip_does_not_contaminate_the_next_trip(tmp_path):
     assert new_trip["status"] == "active"
 
 
-def test_dynamic_trip_context_prefers_the_most_recent_trip():
+@pytest.mark.anyio
+async def test_generic_intent_context_never_reads_cross_session_memory():
     instance = HommeyWebInstance("u1")
 
-    # 数据加载已切到 async facade（_get_relevant_trip_context 现为 async），
-    # 纯过滤/格式化逻辑抽到 _filter_relevant_trips，直接测纯函数。
-    trips = [
-        {"timestamp": "2025-01-01", "origin": "杭州", "destination": "旧城市"},
-        {"timestamp": "2026-01-01", "origin": "杭州", "destination": "新城市"},
+    class AsyncMemory:
+        @staticmethod
+        async def get_recent_context(n_turns=None):
+            assert n_turns == 5
+            return []
+
+        @staticmethod
+        async def get_active_trip():
+            return None
+
+        @staticmethod
+        async def get_preference():
+            raise AssertionError("preferences must not enter generic intent recognition")
+
+        @staticmethod
+        async def get_trip_history(limit=None):
+            raise AssertionError("trip history must be read only by memory-query")
+
+    class Memory:
+        @staticmethod
+        async def ensure_session_summaries():
+            raise AssertionError("cross-session summaries must not enter generic intent recognition")
+
+    instance.async_memory = AsyncMemory()
+    instance.memory_manager = Memory()
+
+    messages = await instance._build_context("如果航班延误，帮我准备一条备选路线")
+
+    assert [(message.role, message.content) for message in messages] == [
+        ("user", "如果航班延误，帮我准备一条备选路线"),
     ]
 
-    context = instance._filter_relevant_trips(trips, "给我一些建议")
 
-    assert "新城市" in context
-    assert "旧城市" not in context
+@pytest.mark.anyio
+async def test_generic_intent_context_can_inherit_only_active_trip_and_current_session():
+    instance = HommeyWebInstance("u1")
+
+    class AsyncMemory:
+        @staticmethod
+        async def get_recent_context(n_turns=None):
+            return [{"role": "user", "content": "这是公司出差"}]
+
+        @staticmethod
+        async def get_active_trip():
+            return {"origin": "北京", "destination": "上海", "status": "collecting"}
+
+    instance.async_memory = AsyncMemory()
+
+    messages = await instance._build_context("如果航班延误，帮我准备一条备选路线")
+    combined = "\n".join(message.content for message in messages)
+
+    assert "【当前出差任务｜可用于补全当前问题】" in combined
+    assert '"destination": "上海"' in combined
+    assert "这是公司出差" in combined
 
 
 def test_web_session_rotates_after_idle_without_touching_long_term(monkeypatch):
     instance = HommeyWebInstance("u1")
+    instance._total_messages = 8
 
     class Memory:
         session_id = "durable-session-2"
@@ -271,32 +414,7 @@ def test_web_session_rotates_after_idle_without_touching_long_term(monkeypatch):
 
     assert rotated is True
     assert instance.session_id == "durable-session-2"
-    assert instance._summary_cache is None
-
-
-@pytest.mark.anyio
-async def test_empty_summary_is_cached_using_monotonic_message_version(monkeypatch):
-    instance = HommeyWebInstance("u1")
-    calls = 0
-
-    class ShortTerm:
-        @staticmethod
-        def get_statistics():
-            return {"total_messages": 20, "message_version": 25}
-
-    instance.memory_manager = type("Memory", (), {"short_term": ShortTerm()})()
-
-    async def generate():
-        nonlocal calls
-        calls += 1
-        return ""
-
-    monkeypatch.setattr(instance, "_get_long_term_summary", generate)
-
-    assert await instance._get_cached_summary() == ""
-    assert await instance._get_cached_summary() == ""
-    assert calls == 1
-    assert instance._summary_msg_count == 25
+    assert instance._total_messages == 0
 
 
 def test_memory_migration_is_additive_and_defines_idempotency_indexes():
