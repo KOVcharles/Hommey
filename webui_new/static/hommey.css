@@ -1304,7 +1304,7 @@ html[data-motion="off"] *::after {
 
 /* ── RAG 知识库阅读器 ─────────────────────────────────────── */
 .knowledge-view {
-    padding: 64px 22px 16px;
+    padding: 64px 22px clamp(28px, 5vh, 52px);
     overflow: hidden;
     opacity: 0;
     visibility: hidden;
@@ -1324,14 +1324,14 @@ html[data-motion="off"] *::after {
 }
 .knowledge-overview {
     flex: 0 0 auto;
-    padding: 10px 8px 15px;
+    padding: 8px 8px 11px;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
     gap: 24px;
 }
 .knowledge-eyebrow {
-    margin-bottom: 8px;
+    margin-bottom: 6px;
     color: var(--ink-3);
     display: flex;
     align-items: center;
@@ -1355,7 +1355,7 @@ html[data-motion="off"] *::after {
     font-weight: 620;
 }
 .knowledge-overview p {
-    margin: 7px 0 0;
+    margin: 5px 0 0;
     color: var(--ink-2);
     font-size: 13px;
     line-height: 1.55;
@@ -1740,6 +1740,10 @@ html[data-motion="off"] *::after {
 @media (max-width: 900px) {
     .knowledge-workspace { grid-template-columns: minmax(250px, 290px) minmax(0, 1fr); }
     .knowledge-document { width: min(720px, calc(100% - 38px)); }
+}
+
+@media (max-height: 760px) and (min-width: 761px) {
+    .knowledge-view { padding-bottom: 16px; }
 }
 
 @media (max-width: 760px) {
