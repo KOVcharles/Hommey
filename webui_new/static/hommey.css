@@ -218,25 +218,33 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 }
 .route-intro {
     display: block;
-    width: min(500px, 82vw);
-    height: 88px;
-    margin: 0 auto 14px;
+    width: min(600px, 90vw);
+    height: 104px;
+    margin: 0 auto 12px;
     overflow: visible;
 }
-.route-intro path {
+.route-intro .route-track {
     fill: none;
     stroke: color-mix(in srgb, var(--ink-3) 34%, transparent);
     stroke-width: 1.1;
     stroke-linecap: round;
+    user-select: none;
     stroke-dasharray: 4 7;
 }
 .route-intro .route-progress {
-    stroke: var(--route);
-    stroke-width: 1.5;
-    stroke-dasharray: 150 500;
-    animation: route-travel 6.5s ease-in-out infinite;
+    fill: none;
+    stroke: url(#route-progress-gradient);
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    opacity: 0;
+    transition: stroke .3s ease, opacity .3s ease;
 }
-.route-intro circle {
+.route-intro .route-gradient-tail { stop-color: var(--route); stop-opacity: .28; }
+.route-intro .route-gradient-body { stop-color: var(--route); stop-opacity: .82; }
+.route-intro .route-gradient-core { stop-color: #ff8668; stop-opacity: 1; }
+.route-intro .route-gradient-head { stop-color: var(--route); stop-opacity: .48; }
+.route-intro .route-origin,
+.route-intro .route-destination {
     fill: var(--bg);
     stroke: var(--ink-3);
     stroke-width: 1.2;
@@ -246,18 +254,26 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     stroke: color-mix(in srgb, var(--route) 25%, var(--bg));
     stroke-width: 5;
     filter: drop-shadow(0 4px 8px rgba(255, 109, 74, .28));
-    offset-path: path("M20 59 C104 59, 116 17, 208 29 S335 82, 480 27");
-    animation: traveller 6.5s ease-in-out infinite;
+    transition: fill .28s ease, stroke .28s ease, filter .28s ease;
+    opacity: 0;
+    transform-box: fill-box;
+    transform-origin: center;
+    transition: filter .28s ease, transform .28s var(--ease);
 }
-@keyframes route-travel {
-    0%, 9% { stroke-dashoffset: 150; opacity: 0; }
-    20%, 78% { opacity: 1; }
-    92%, 100% { stroke-dashoffset: -500; opacity: 0; }
+.route-intro .route-hit-area {
+    fill: none;
+    stroke: transparent;
+    stroke-width: 22;
+    pointer-events: stroke;
+    cursor: pointer;
 }
-@keyframes traveller {
-    0%, 9% { offset-distance: 0%; opacity: 0; }
-    15%, 86% { opacity: 1; }
-    92%, 100% { offset-distance: 100%; opacity: 0; }
+.route-intro.is-interacting .route-track { stroke: color-mix(in srgb, var(--ink-3) 54%, transparent); }
+.route-intro.is-interacting .traveller { transform: scale(1.3); filter: drop-shadow(0 5px 10px rgba(255, 109, 74, .38)); }
+.route-intro.is-arrived .traveller { transform: scale(1.18); filter: drop-shadow(0 5px 12px rgba(255, 109, 74, .42)); }
+.route-intro.is-arrived .route-destination {
+    fill: color-mix(in srgb, var(--route) 18%, var(--bg));
+    stroke: var(--route);
+    filter: drop-shadow(0 0 5px rgba(255, 109, 74, .32));
 }
 .welcome-title {
     margin: 0;

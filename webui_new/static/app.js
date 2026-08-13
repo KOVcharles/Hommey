@@ -79,6 +79,7 @@
     let knowledgeRefreshPollFailures = 0;
     let isKnowledgeAdmin = false;
     let knowledgeReturnView = 'home';
+    let routeMotionController = null;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -177,7 +178,230 @@
 
     applyStoredAppearance();
     bindEvents();
+    routeMotionController = initializeInteractiveRoute();
     document.addEventListener('DOMContentLoaded', initialize);
+
+    function initializeInteractiveRoute() {
+        const svg = document.querySelector('.route-intro');
+        const path = svg?.querySelector('.route-track');
+        const progressPath = svg?.querySelector('.route-progress');
+        const progressGradient = svg?.querySelector('#route-progress-gradient');
+        const traveller = svg?.querySelector('.traveller');
+        const hitArea = svg?.querySelector('.route-hit-area');
+        if (!svg || !path || !progressPath || !traveller || !hitArea) return null;
+
+        const travelDuration = 5200;
+        const startHoldDuration = 420;
+        const arrivalHoldDuration = 1100;
+        const fadeDuration = 340;
+        const restartPauseDuration = 260;
+        const totalLength = path.getTotalLength();
+        const trailLength = Math.min(150, totalLength * .32);
+        const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
+        const state = {
+            enabled: true,
+            mode: 'auto',
+            progress: 0,
+            targetProgress: 0,
+            opacity: 0,
+            travelStartedAt: performance.now() + startHoldDuration,
+            frame: 0,
+            pausedAt: 0,
+        };
+
+        progressPath.style.strokeDasharray = `${trailLength} ${totalLength + trailLength}`;
+
+        function motionEnabled() {
+            return state.enabled
+                && document.documentElement.dataset.motion !== 'off'
+                && !reducedMotion.matches;
+        }
+
+        function draw() {
+            const distance = Math.max(0, Math.min(totalLength, state.progress * totalLength));
+            const point = path.getPointAtLength(distance);
+            traveller.setAttribute('cx', point.x.toFixed(2));
+            traveller.setAttribute('cy', point.y.toFixed(2));
+            traveller.style.opacity = String(state.opacity);
+            progressPath.style.opacity = String(state.opacity);
+            // The original used two independent animations. Varying the
+            // traveller's position inside the dash restores that layered motion.
+            const travellerAnchor = Math.max(.07, Math.pow(1 - state.progress, 2.2));
+            const segmentStart = distance - trailLength * travellerAnchor;
+            progressPath.style.strokeDashoffset = String(-segmentStart);
+            if (progressGradient) {
+                const startPoint = path.getPointAtLength(Math.max(0, segmentStart));
+                const endPoint = path.getPointAtLength(Math.min(totalLength, segmentStart + trailLength));
+                progressGradient.setAttribute('x1', startPoint.x.toFixed(2));
+                progressGradient.setAttribute('y1', startPoint.y.toFixed(2));
+                progressGradient.setAttribute('x2', endPoint.x.toFixed(2));
+                progressGradient.setAttribute('y2', endPoint.y.toFixed(2));
+            }
+            svg.classList.toggle('is-arrived', state.progress >= .997 && state.opacity > .02);
+        }
+
+        function resetCycle(now) {
+            state.progress = 0;
+            state.opacity = 0;
+            state.travelStartedAt = now + startHoldDuration;
+        }
+
+        function updateAuto(now) {
+            const elapsed = now - state.travelStartedAt;
+            if (elapsed < 0) {
+                state.progress = 0;
+                state.opacity = Math.max(0, 1 + elapsed / fadeDuration);
+                return;
+            }
+            if (elapsed <= travelDuration) {
+                state.progress = elapsed / travelDuration;
+                state.opacity = Math.min(1, elapsed / fadeDuration);
+                return;
+            }
+            const afterArrival = elapsed - travelDuration;
+            state.progress = 1;
+            if (afterArrival <= arrivalHoldDuration) {
+                state.opacity = 1;
+                return;
+            }
+            const fading = afterArrival - arrivalHoldDuration;
+            if (fading <= fadeDuration) {
+                state.opacity = Math.max(0, 1 - fading / fadeDuration);
+                return;
+            }
+            if (fading <= fadeDuration + restartPauseDuration) {
+                state.opacity = 0;
+                return;
+            }
+            resetCycle(now);
+        }
+
+        function tick(now) {
+            if (!motionEnabled() || document.hidden) {
+                state.frame = 0;
+                return;
+            }
+            if (state.mode === 'pointer') {
+                state.progress += (state.targetProgress - state.progress) * .24;
+                if (Math.abs(state.targetProgress - state.progress) < .0005) {
+                    state.progress = state.targetProgress;
+                }
+                state.opacity += (1 - state.opacity) * .28;
+            } else {
+                updateAuto(now);
+            }
+            draw();
+            state.frame = requestAnimationFrame(tick);
+        }
+
+        function ensureRunning() {
+            if (!state.frame && motionEnabled() && !document.hidden) {
+                state.frame = requestAnimationFrame(tick);
+            }
+        }
+
+        function closestProgress(clientX, clientY) {
+            const matrix = svg.getScreenCTM();
+            if (!matrix) return state.progress;
+            const cursor = svg.createSVGPoint();
+            cursor.x = clientX;
+            cursor.y = clientY;
+            const localCursor = cursor.matrixTransform(matrix.inverse());
+            const samples = 56;
+            let bestLength = 0;
+            let bestDistance = Infinity;
+            for (let index = 0; index <= samples; index += 1) {
+                const length = totalLength * index / samples;
+                const point = path.getPointAtLength(length);
+                const distance = (point.x - localCursor.x) ** 2 + (point.y - localCursor.y) ** 2;
+                if (distance < bestDistance) {
+                    bestDistance = distance;
+                    bestLength = length;
+                }
+            }
+            let step = totalLength / samples;
+            for (let index = 0; index < 6; index += 1) {
+                [-step, step].forEach((offset) => {
+                    const length = Math.max(0, Math.min(totalLength, bestLength + offset));
+                    const point = path.getPointAtLength(length);
+                    const distance = (point.x - localCursor.x) ** 2 + (point.y - localCursor.y) ** 2;
+                    if (distance < bestDistance) {
+                        bestDistance = distance;
+                        bestLength = length;
+                    }
+                });
+                step *= .5;
+            }
+            return bestLength / totalLength;
+        }
+
+        function takeControl(event) {
+            if (event.pointerType && event.pointerType !== 'mouse') return;
+            if (!motionEnabled()) return;
+            state.mode = 'pointer';
+            state.targetProgress = closestProgress(event.clientX, event.clientY);
+            svg.classList.add('is-interacting');
+            ensureRunning();
+        }
+
+        function movePointer(event) {
+            if (state.mode !== 'pointer') return;
+            state.targetProgress = closestProgress(event.clientX, event.clientY);
+        }
+
+        function resumeAutoFromCurrent(now = performance.now()) {
+            state.mode = 'auto';
+            state.travelStartedAt = state.progress >= .997
+                ? now - travelDuration
+                : now - state.progress * travelDuration;
+            svg.classList.remove('is-interacting');
+        }
+
+        function releaseControl() {
+            if (state.mode !== 'pointer') return;
+            resumeAutoFromCurrent();
+            ensureRunning();
+        }
+
+        function setEnabled(enabled) {
+            state.enabled = enabled;
+            if (!motionEnabled()) {
+                if (state.frame) cancelAnimationFrame(state.frame);
+                state.frame = 0;
+                state.mode = 'auto';
+                state.progress = .08;
+                state.opacity = 1;
+                svg.classList.remove('is-interacting', 'is-arrived');
+                draw();
+                return;
+            }
+            resetCycle(performance.now());
+            ensureRunning();
+        }
+
+        hitArea.addEventListener('pointerenter', takeControl);
+        hitArea.addEventListener('pointermove', movePointer);
+        hitArea.addEventListener('pointerleave', releaseControl);
+        window.addEventListener('blur', releaseControl);
+        document.addEventListener('visibilitychange', () => {
+            if (document.hidden) {
+                const now = performance.now();
+                if (state.mode === 'pointer') resumeAutoFromCurrent(now);
+                state.pausedAt = now;
+                if (state.frame) cancelAnimationFrame(state.frame);
+                state.frame = 0;
+                return;
+            }
+            if (state.pausedAt && state.mode === 'auto') {
+                state.travelStartedAt += performance.now() - state.pausedAt;
+            }
+            state.pausedAt = 0;
+            ensureRunning();
+        });
+        reducedMotion.addEventListener?.('change', () => setEnabled(state.enabled));
+        setEnabled(true);
+        return { setEnabled };
+    }
 
     function bindEvents() {
         chatInput.addEventListener('input', () => {
@@ -2192,6 +2416,7 @@
             document.documentElement.dataset.motion = 'off';
             stopPromptRotation();
         }
+        routeMotionController?.setEnabled(enabled);
     }
 
     function rotatePrompt() {

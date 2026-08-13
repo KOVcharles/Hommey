@@ -253,8 +253,10 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     assert "hommey:submit-message" in card
     assert "hommey:fill-composer" not in card
     template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
-    assert template.count("20260812-intake-memory-v6") == 2
-    assert "20260812-knowledge-return-v6" in template
+    assert "renderDisclosure" in card
+    assert "trip-intake-disclosure-icon" in card
+    assert template.count("20260813-disclosure-motion-v7") == 2
+    assert template.count("20260813-interactive-route-v4") == 2
     assert 'id="knowledgeAdminActions"' in template
     assert 'aria-label="知识库管理" hidden' in template
     assert "knowledgeUploadButton" in template

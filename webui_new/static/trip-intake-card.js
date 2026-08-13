@@ -93,11 +93,34 @@
         return wrap;
     }
 
+    function renderDisclosure(className, label, body) {
+        const panel = element('div', className);
+        const trigger = element('button', 'trip-intake-disclosure-trigger');
+        trigger.type = 'button';
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.appendChild(element('span', '', label));
+        const icon = element('span', 'trip-intake-disclosure-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        trigger.appendChild(icon);
+        const content = element('div', 'trip-intake-disclosure-content');
+        const inner = element('div', 'trip-intake-disclosure-inner');
+        inner.appendChild(body);
+        content.appendChild(inner);
+        trigger.addEventListener('click', () => {
+            const expanded = panel.classList.toggle('is-expanded');
+            trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+        panel.appendChild(trigger);
+        panel.appendChild(content);
+        return panel;
+    }
+
     function renderPlainText(text) {
-        const details = element('details', 'trip-intake-text-details');
-        details.appendChild(element('summary', '', '查看文字版'));
-        details.appendChild(element('pre', 'trip-intake-plain-text', text));
-        return details;
+        return renderDisclosure(
+            'trip-intake-text-details',
+            '查看文字版',
+            element('pre', 'trip-intake-plain-text', text),
+        );
     }
 
     function renderPrompt(field, index, state) {
@@ -139,8 +162,6 @@
     }
 
     function renderOptional(fields, state) {
-        const details = element('details', 'trip-intake-optional');
-        details.appendChild(element('summary', '', '补充后安排会更准确'));
         const list = element('div', 'trip-intake-optional-list');
         fields.forEach((field) => {
             const row = element('div', 'trip-intake-optional-row');
@@ -151,8 +172,7 @@
             row.appendChild(inlineInput(field, state, true));
             list.appendChild(row);
         });
-        details.appendChild(list);
-        return details;
+        return renderDisclosure('trip-intake-optional', '补充后安排会更准确', list);
     }
 
     function renderConflicts(conflicts, state) {

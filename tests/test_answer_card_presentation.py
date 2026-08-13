@@ -227,6 +227,13 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert ".chat-messages.is-scrolling" in css
     assert "markConversationScrolling" in app
     assert "classList.remove('is-scrolling')" in app
+    assert "initializeInteractiveRoute" in app
+    assert "closestProgress" in app
+    assert "travelDuration = 5200" in app
+    assert "arrivalHoldDuration = 1100" in app
+    assert "Math.min(150, totalLength * .32)" in app
+    assert "Math.pow(1 - state.progress, 2.2)" in app
+    assert "routeMotionController?.setEnabled(enabled)" in app
     assert "查看文字版" in intake
     answer_card = (root / "webui_new/static/answer-card.js").read_text(encoding="utf-8")
     assert "renderPreDeparture" in answer_card
@@ -239,7 +246,13 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "renderNotices" in answer_card
     assert "展开完整内容" in answer_card
     assert "查看行程细节" in answer_card
-    assert "20260813-trip-overview-v1" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert "cleanTimelineDetail" in answer_card
+    assert "answer-section-toggle-icon" in answer_card
+    assert "--answer-body-expanded-height" in answer_card
+    assert "has-collapsible-body" in answer_card
+    assert "answer-details-content" in answer_card
+    assert "answer-details-icon" in answer_card
+    assert "20260813-footer-motion-v4" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -256,8 +269,12 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260813-trip-overview-v1" in template
-    assert template.count("20260813-trip-overview-v1") >= 2
+    assert "20260813-footer-motion-v4" in template
+    assert template.count("20260813-footer-motion-v4") >= 2
+    assert "route-hit-area" in template
+    assert "route-progress-gradient" in template
+    assert template.count("M20 59 C105 59, 150 13, 250 43 S395 27, 480 27") == 3
+    assert "20260813-interactive-route-v4" in template
 
 
 def test_hommey_mark_has_enough_top_viewbox_padding():
