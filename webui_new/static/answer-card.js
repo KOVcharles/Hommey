@@ -434,7 +434,16 @@
         fact.appendChild(routes);
     }
 
-    function renderItems(section, content, isOverview) {
+    function cleanTimelineDetail(value) {
+        const source = String(value || '').trim();
+        if (!source) return '';
+        const parts = source.split(/\s+[·•]\s+/).map((part) => part.trim()).filter(Boolean);
+        if (parts.length > 1) return parts[0];
+        const transportOnly = /^(?:步行|打车|出租车|网约车|地铁|公交|驾车|高铁|火车)(?:\s*[\/、或]\s*(?:步行|打车|出租车|网约车|地铁|公交|驾车|高铁|火车))*$/;
+        return transportOnly.test(source) ? '' : source;
+    }
+
+    function renderItems(section, content, isOverview, isTimeline) {
         if (!Array.isArray(section.items) || !section.items.length) return;
         const grid = element('div', `answer-fact-grid${isOverview ? ' answer-overview-grid' : ''}`);
         section.items.forEach((item) => {
@@ -448,12 +457,19 @@
             } else {
                 fact.appendChild(element('strong', 'answer-fact-value', item.value));
             }
-            if (item.detail) {
-                const detail = element('span', 'answer-fact-detail', item.detail);
+            const detailValue = isTimeline ? cleanTimelineDetail(item.detail) : item.detail;
+            if (detailValue) {
+                const detail = element('span', 'answer-fact-detail', detailValue);
                 if (isOverview && fact.classList.contains('is-transport')) {
                     detail.classList.add('answer-transport-note');
                 }
-                fact.appendChild(detail);
+                if (isTimeline) {
+                    const detailShell = element('div', 'answer-fact-detail-shell');
+                    detailShell.appendChild(detail);
+                    fact.appendChild(detailShell);
+                } else {
+                    fact.appendChild(detail);
+                }
             }
             grid.appendChild(fact);
         });
@@ -514,13 +530,24 @@
     }
 
     function disclosure(block, collapsedLabel, expandedLabel) {
-        const button = element('button', 'answer-section-toggle', collapsedLabel);
+        const button = element('button', 'answer-section-toggle');
+        const label = element('span', 'answer-section-toggle-label', collapsedLabel);
+        const icon = element('span', 'answer-section-toggle-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        button.appendChild(label);
+        button.appendChild(icon);
         button.type = 'button';
         button.setAttribute('aria-expanded', 'false');
         button.addEventListener('click', () => {
+            const body = block.classList.contains('has-collapsible-body')
+                ? block.querySelector('.answer-section-body')
+                : null;
+            if (body) {
+                body.style.setProperty('--answer-body-expanded-height', `${body.scrollHeight}px`);
+            }
             const expanded = block.classList.toggle('is-expanded');
             button.setAttribute('aria-expanded', expanded ? 'true' : 'false');
-            button.textContent = expanded ? expandedLabel : collapsedLabel;
+            label.textContent = expanded ? expandedLabel : collapsedLabel;
         });
         return button;
     }
@@ -541,15 +568,21 @@
         const longBody = String(section.body || '').length > 220;
         const timelineDetails = section.kind === 'trip'
             && /^第\s*\d+\s*天/.test(section.title || '')
-            && (section.items || []).some((item) => item?.detail);
+            && (section.items || []).some((item) => cleanTimelineDetail(item?.detail));
         const overviewDetails = block.classList.contains('is-overview')
             && (section.items || []).some((item) => String(item?.detail || '').length > 100);
         if (longBody || timelineDetails || overviewDetails) block.classList.add('is-collapsible');
+        if (longBody) block.classList.add('has-collapsible-body');
         if (section.body) content.appendChild(renderBody(section.body));
         if (section.kind === 'weather' && Array.isArray(section.days) && section.days.length) {
             renderWeather(section, content);
         } else {
-            renderItems(section, content, block.classList.contains('is-overview'));
+            renderItems(
+                section,
+                content,
+                block.classList.contains('is-overview'),
+                block.classList.contains('is-timeline')
+            );
             renderWeather(section, content);
         }
         if (longBody) {
@@ -576,10 +609,26 @@
     }
 
     function renderDetails(label, body) {
-        const details = element('details', 'answer-details');
-        details.appendChild(element('summary', '', label));
-        details.appendChild(body);
-        return details;
+        const panel = element('div', 'answer-details');
+        const trigger = element('button', 'answer-details-trigger');
+        trigger.type = 'button';
+        trigger.setAttribute('aria-expanded', 'false');
+        trigger.appendChild(element('span', '', label));
+        const icon = element('span', 'answer-details-icon');
+        icon.setAttribute('aria-hidden', 'true');
+        trigger.appendChild(icon);
+
+        const content = element('div', 'answer-details-content');
+        const inner = element('div', 'answer-details-content-inner');
+        inner.appendChild(body);
+        content.appendChild(inner);
+        trigger.addEventListener('click', () => {
+            const expanded = panel.classList.toggle('is-expanded');
+            trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+        });
+        panel.appendChild(trigger);
+        panel.appendChild(content);
+        return panel;
     }
 
     function renderSources(sources) {

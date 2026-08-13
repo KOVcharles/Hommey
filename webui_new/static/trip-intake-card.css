@@ -48,10 +48,6 @@
 .trip-intake-inline-input:focus { border-color: color-mix(in srgb, var(--route) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--route) 8%, transparent); }
 .trip-intake-inline-input::placeholder { color: var(--ink-3); }
 .trip-intake-optional { margin: 0 24px; border-top: 1px solid var(--line); }
-.trip-intake-optional summary { padding: 13px 0; list-style: none; cursor: pointer; color: var(--ink-3); font-size: 9px; display: flex; justify-content: space-between; }
-.trip-intake-optional summary::-webkit-details-marker { display: none; }
-.trip-intake-optional summary::after { content: "+"; font-size: 13px; transition: transform .2s var(--ease); }
-.trip-intake-optional[open] summary::after { transform: rotate(45deg); }
 .trip-intake-optional-list { padding-bottom: 12px; display: grid; gap: 6px; }
 .trip-intake-optional-row { padding: 9px 10px; border: 0; border-radius: 10px; text-align: left; color: var(--ink-2); background: var(--soft); display: grid; grid-template-columns: minmax(0, .7fr) minmax(180px, 1fr); align-items: center; gap: 12px; }
 .trip-intake-optional-row span { font-size: 10px; }
@@ -68,10 +64,49 @@
 .trip-intake-card.is-submitting .trip-intake-field,
 .trip-intake-card.is-submitting .trip-intake-optional { opacity: .62; pointer-events: none; }
 .trip-intake-text-details { margin: 0 24px; border-top: 1px solid var(--line); }
-.trip-intake-text-details summary { padding: 12px 0; list-style: none; cursor: pointer; color: var(--ink-3); font-size: 9px; display: flex; align-items: center; justify-content: space-between; }
-.trip-intake-text-details summary::-webkit-details-marker { display: none; }
-.trip-intake-text-details summary::after { content: "+"; color: var(--ink-2); font-size: 13px; transition: transform .2s var(--ease); }
-.trip-intake-text-details[open] summary::after { transform: rotate(45deg); }
+.trip-intake-disclosure-trigger {
+    width: 100%;
+    min-height: 42px;
+    padding: 11px 0;
+    color: var(--ink-3);
+    background: transparent;
+    font-size: 9px;
+    text-align: left;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: color .2s ease;
+}
+.trip-intake-disclosure-trigger:hover { color: var(--ink-2); }
+.trip-intake-disclosure-icon {
+    width: 7px;
+    height: 7px;
+    margin-right: 2px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-2px) rotate(45deg);
+    transition: transform .4s cubic-bezier(.4, 0, .2, 1);
+}
+.trip-intake-optional.is-expanded .trip-intake-disclosure-icon,
+.trip-intake-text-details.is-expanded .trip-intake-disclosure-icon { transform: translateY(2px) rotate(225deg); }
+.trip-intake-disclosure-content {
+    display: grid;
+    grid-template-rows: 0fr;
+    opacity: 0;
+    transform: translateY(-4px);
+    transition:
+        grid-template-rows .46s cubic-bezier(.4, 0, .2, 1),
+        opacity .24s ease,
+        transform .4s cubic-bezier(.4, 0, .2, 1);
+}
+.trip-intake-disclosure-inner { min-height: 0; overflow: hidden; }
+.trip-intake-optional.is-expanded .trip-intake-disclosure-content,
+.trip-intake-text-details.is-expanded .trip-intake-disclosure-content {
+    grid-template-rows: 1fr;
+    opacity: 1;
+    transform: translateY(0);
+}
 .trip-intake-plain-text { margin: 0 0 13px; color: var(--ink-2); white-space: pre-wrap; font: inherit; font-size: 10px; line-height: 1.7; }
 .trip-intake-card.is-collapsed { border-radius: 14px; box-shadow: none; }
 .trip-intake-card.is-collapsed .trip-intake-header { padding: 12px 14px; }
