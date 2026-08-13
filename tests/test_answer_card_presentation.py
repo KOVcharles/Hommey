@@ -239,7 +239,7 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "renderNotices" in answer_card
     assert "展开完整内容" in answer_card
     assert "查看行程细节" in answer_card
-    assert "20260809-weather-zh-v8" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert "20260813-trip-overview-v1" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -256,8 +256,8 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260812-knowledge-return-v6" in template
-    assert "20260809-readable-v8" in template
+    assert "20260813-trip-overview-v1" in template
+    assert template.count("20260813-trip-overview-v1") >= 2
 
 
 def test_hommey_mark_has_enough_top_viewbox_padding():

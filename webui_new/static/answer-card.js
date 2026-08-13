@@ -352,17 +352,109 @@
         return block;
     }
 
-    function renderItems(section, content) {
+    function overviewFactClass(label) {
+        const value = String(label || '').trim();
+        if (/首选交通|交通建议/.test(value)) return ' is-transport';
+        if (/备选交通/.test(value)) return ' is-alternative';
+        if (/行程时长/.test(value)) return ' is-duration';
+        if (/住宿建议/.test(value)) return ' is-lodging';
+        if (/预算参考/.test(value)) return ' is-budget';
+        return '';
+    }
+
+    function parseTransportLegs(value) {
+        const source = String(value || '').trim();
+        if (!source) return [];
+        return source
+            .split(/(?=(?:去程|返程)\s*[:：])/)
+            .map((part) => part.replace(/^[；;\s]+/, '').trim())
+            .map((part) => {
+                const direction = part.match(/^(去程|返程)\s*[:：]\s*/);
+                if (!direction) return null;
+                const description = part.slice(direction[0].length).replace(/[；;\s]+$/, '').trim();
+                const wrapped = description.match(/^([^（(]+?)\s*[（(]([\s\S]+)[）)]$/);
+                const service = (wrapped?.[1] || '').trim();
+                const details = (wrapped?.[2] || description).trim();
+                const parts = details.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
+                const route = (parts.shift() || '').match(/^(.+?)\s+(\d{1,2}:\d{2})\s*[→–—-]\s*(.+?)\s+(\d{1,2}:\d{2})$/);
+                return {
+                    direction: direction[1],
+                    service,
+                    description,
+                    origin: route?.[1] || '',
+                    departure: route?.[2] || '',
+                    destination: route?.[3] || '',
+                    arrival: route?.[4] || '',
+                    metadata: route ? parts : [],
+                };
+            })
+            .filter(Boolean);
+    }
+
+    function renderTransportValue(item, fact) {
+        const legs = parseTransportLegs(item.value);
+        if (!legs.length) {
+            fact.appendChild(element('strong', 'answer-fact-value', item.value));
+            return;
+        }
+
+        const routes = element('div', 'answer-transport-routes');
+        legs.forEach((leg) => {
+            const card = element('div', 'answer-transport-leg');
+            const head = element('div', 'answer-transport-head');
+            head.appendChild(element('span', `answer-transport-direction is-${leg.direction === '返程' ? 'return' : 'outbound'}`, leg.direction));
+            if (leg.service) head.appendChild(element('strong', 'answer-transport-service', leg.service));
+            card.appendChild(head);
+
+            if (leg.origin && leg.destination) {
+                const route = element('div', 'answer-transport-route');
+                const origin = element('div', 'answer-transport-point');
+                origin.appendChild(element('strong', '', leg.departure));
+                origin.appendChild(element('span', '', leg.origin));
+                route.appendChild(origin);
+                const line = element('span', 'answer-transport-line');
+                line.setAttribute('aria-hidden', 'true');
+                route.appendChild(line);
+                const destination = element('div', 'answer-transport-point is-destination');
+                destination.appendChild(element('strong', '', leg.arrival));
+                destination.appendChild(element('span', '', leg.destination));
+                route.appendChild(destination);
+                card.appendChild(route);
+            } else {
+                card.appendChild(element('p', 'answer-transport-copy', leg.description));
+            }
+
+            if (leg.metadata.length) {
+                const metadata = element('div', 'answer-transport-meta');
+                leg.metadata.forEach((value) => metadata.appendChild(element('span', '', value)));
+                card.appendChild(metadata);
+            }
+            routes.appendChild(card);
+        });
+        fact.appendChild(routes);
+    }
+
+    function renderItems(section, content, isOverview) {
         if (!Array.isArray(section.items) || !section.items.length) return;
-        const grid = element('div', 'answer-fact-grid');
+        const grid = element('div', `answer-fact-grid${isOverview ? ' answer-overview-grid' : ''}`);
         section.items.forEach((item) => {
-            const fact = element('div', 'answer-fact');
+            const fact = element('div', `answer-fact${isOverview ? overviewFactClass(item.label) : ''}`);
             if (String(item.value || '').length + String(item.detail || '').length > 110) {
                 fact.classList.add('is-wide');
             }
             fact.appendChild(element('span', 'answer-fact-label', item.label));
-            fact.appendChild(element('strong', 'answer-fact-value', item.value));
-            if (item.detail) fact.appendChild(element('span', 'answer-fact-detail', item.detail));
+            if (isOverview && fact.classList.contains('is-transport')) {
+                renderTransportValue(item, fact);
+            } else {
+                fact.appendChild(element('strong', 'answer-fact-value', item.value));
+            }
+            if (item.detail) {
+                const detail = element('span', 'answer-fact-detail', item.detail);
+                if (isOverview && fact.classList.contains('is-transport')) {
+                    detail.classList.add('answer-transport-note');
+                }
+                fact.appendChild(detail);
+            }
             grid.appendChild(fact);
         });
         content.appendChild(grid);
@@ -451,15 +543,13 @@
             && /^第\s*\d+\s*天/.test(section.title || '')
             && (section.items || []).some((item) => item?.detail);
         const overviewDetails = block.classList.contains('is-overview')
-            && (section.items || []).some((item) => (
-                String(item?.value || '').length + String(item?.detail || '').length > 90
-            ));
+            && (section.items || []).some((item) => String(item?.detail || '').length > 100);
         if (longBody || timelineDetails || overviewDetails) block.classList.add('is-collapsible');
         if (section.body) content.appendChild(renderBody(section.body));
         if (section.kind === 'weather' && Array.isArray(section.days) && section.days.length) {
             renderWeather(section, content);
         } else {
-            renderItems(section, content);
+            renderItems(section, content, block.classList.contains('is-overview'));
             renderWeather(section, content);
         }
         if (longBody) {
