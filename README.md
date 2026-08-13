@@ -1,10 +1,13 @@
 <p align="center">
-  <img src="webui_new/static/brand/hommey-mark.svg" width="88" alt="Hommey 标志">
+  <img src="webui_new/static/brand/hommey-mark.svg" width="76" alt="Hommey 标志">
 </p>
 
 <h1 align="center">Hommey</h1>
 
-<p align="center">把公司差旅的路线、标准和细节，放进一次对话里理清。</p>
+<p align="center">
+  <strong>出发前，问问 Hommey。</strong><br>
+  <sub>路线、标准和细节，她陪你一次理清。</sub>
+</p>
 
 <p align="center">
   <img src="https://img.shields.io/badge/Python-3.11-3776AB" alt="Python 3.11">
@@ -14,23 +17,58 @@
   <img src="https://img.shields.io/badge/Docker-Compose-2496ED" alt="Docker Compose">
 </p>
 
-Hommey 是一个企业差旅助手。它在同一段对话中收集行程信息、查询公司制度和目的地信息，并生成可以继续追问的行程方案。制度结论保留证据来源，执行到一半的任务也可以中断后继续。
+<p align="center">
+  <a href="#认识-hommey">产品一览</a> ·
+  <a href="#hommey-解决什么问题">核心能力</a> ·
+  <a href="#编排是怎样工作的">系统设计</a> ·
+  <a href="#快速开始">快速开始</a>
+</p>
+
+Hommey 是一位面向企业差旅的 AI 助手。她在同一段对话里理解行程、查找公司制度与目的地信息，再把零散条件整理成可以继续追问、可以实际执行的差旅方案。每一条制度结论都保留证据来源，尚未完成的任务也能在中断后继续。
 
 > Hommey 提供规划与报销准备建议，不代替用户完成预订、付款、审批或报销提交。
 
-![Hommey 对话首页](docs/assets/hommey-chat-overview.png)
+## 认识 Hommey
 
-## 一次完整的差旅对话
+<p align="center">
+  <img src="docs/assets/Homepage.png" width="820" alt="Hommey 对话首页">
+</p>
 
-用户不必先填一张很长的表。只要说出已知信息，Hommey 会保存行程框架，并仅追问完成规划所需的字段。选项可以直接在卡片中完成并提交。
+<p align="center">
+  <sub>一个安静、直接的对话入口。说出目的地，剩下的线索由她接住。</sub>
+</p>
 
-![在卡片中补充行程信息](docs/assets/hommey-trip-intake.png)
+## 她把复杂留在背后
 
-信息齐全后，系统会把路线、每日安排、天气、公司标准和风险提醒整理到同一张答案卡片中。详细内容默认折叠，重新进入会话时仍按原来的卡片结构渲染。
+不需要先读制度，也不需要在多个页面之间拼凑答案。告诉 Hommey 你已经知道的部分，她会补齐必要信息，并把不同来源整理成清楚、可信的结果。
 
-![结构化差旅行程结果](docs/assets/hommey-trip-result.png)
+<table>
+  <tr>
+    <td width="50%" valign="top">
+      <img src="docs/assets/Rag.png" alt="Hommey 查询企业差旅制度">
+      <br><br>
+      <strong>读懂公司的差旅标准</strong><br>
+      <sub>从内部知识库提取适用条款，保留文字版、来源与更新时间，让每个结论都有依据。</sub>
+    </td>
+    <td width="50%" valign="top">
+      <img src="docs/assets/Weather.png" alt="Hommey 查询目的地天气">
+      <br><br>
+      <strong>把外部信息带回当前行程</strong><br>
+      <sub>天气与公共交通独立查询、结构化呈现，不让动态信息混入公司的制度依据。</sub>
+    </td>
+  </tr>
+</table>
 
-## 这个项目解决什么问题
+<p align="center">
+  <img src="docs/assets/Response.png" width="760" alt="Hommey 生成结构化差旅行程方案">
+</p>
+
+<p align="center">
+  <strong>最后，给你一份真正能执行的答案。</strong><br>
+  <sub>交通、住宿、日程与合规提示被放进同一张卡片；细节按需展开，重要信息始终在前。</sub>
+</p>
+
+## Hommey 解决什么问题
 
 | 场景 | Hommey 的处理方式 |
 | --- | --- |
