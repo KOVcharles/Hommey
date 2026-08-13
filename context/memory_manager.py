@@ -147,32 +147,41 @@ class MemoryManager:
                 "preferences": self.long_term.get_preference(),
                 "chat_history": self.long_term.get_chat_history(10),
                 "trip_history": self.long_term.get_trip_history(5),
-                "active_trip": self.long_term.get_active_trip(),
+                "active_trip": self.long_term.get_active_trip(self.session_id),
                 "frequent_destinations": self.long_term.get_frequent_destinations(3),
                 "statistics": self.long_term.get_statistics()
             }
         }
 
     def get_active_trip(self) -> Dict[str, Any] | None:
-        trip = self.long_term.get_active_trip()
+        trip = self.long_term.get_active_trip(self.session_id)
         if not trip or trip.get("status", "active") in {"completed", "cancelled"}:
             return None
         return trip
 
     def update_active_trip(self, trip_info: Dict[str, Any]) -> Dict[str, Any]:
-        return self.long_term.upsert_active_trip(filter_safe_memory_mapping(trip_info))
+        return self.long_term.upsert_active_trip(
+            filter_safe_memory_mapping(trip_info),
+            self.session_id,
+        )
 
     def complete_active_trip(self, reason: str = "planning_completed") -> Dict[str, Any] | None:
         trip = self.get_active_trip()
         if not trip:
             return None
-        return self.long_term.upsert_active_trip({"status": "completed", "completion_reason": reason})
+        return self.long_term.upsert_active_trip(
+            {"status": "completed", "completion_reason": reason},
+            self.session_id,
+        )
 
     def cancel_active_trip(self, reason: str = "user_cancelled") -> Dict[str, Any] | None:
         trip = self.get_active_trip()
         if not trip:
             return None
-        return self.long_term.upsert_active_trip({"status": "cancelled", "completion_reason": reason})
+        return self.long_term.upsert_active_trip(
+            {"status": "cancelled", "completion_reason": reason},
+            self.session_id,
+        )
 
     def get_context_for_agent(self, long_term_summary: str = None) -> str:
         """

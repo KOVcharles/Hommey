@@ -208,6 +208,44 @@ def test_refresh_job_rebuilds_manifest_and_marks_document_indexed(tmp_path):
     assert service.document_index_status("policy.txt", policy) == "indexed"
 
 
+def test_manifest_v2_accepts_flattened_ingestion_report(tmp_path):
+    documents = tmp_path / "documents"
+    knowledge = tmp_path / "knowledge"
+    documents.mkdir()
+    policy = documents / "policy.txt"
+    policy.write_text("差旅制度", encoding="utf-8")
+    service = KnowledgeBaseManagementService(documents, knowledge)
+
+    service._write_manifest(
+        {
+            "status": "success",
+            "schema_version": "rag.v2.metadata.1",
+            "index": {
+                "version": "index-v2",
+                "built_at": "2026-08-12T00:00:00+00:00",
+                "collection_name": "business_travel_knowledge",
+            },
+            "documents": {
+                "policy.txt": {
+                    "document_version": "abc123",
+                    "parser_name": "txt_block",
+                    "parser_version": "txt-block-v1",
+                    "pages": {"native_text": 1},
+                    "chunk_count": 1,
+                }
+            },
+            "errors": [],
+        }
+    )
+
+    manifest = service._read_manifest()
+    assert manifest["schema_version"] == "rag.v2.metadata.1"
+    assert manifest["index"]["version"] == "index-v2"
+    assert manifest["documents"]["policy.txt"]["parser"]["version"] == "txt-block-v1"
+    assert manifest["documents"]["policy.txt"]["pages"] == {"native_text": 1}
+    assert manifest["documents"]["policy.txt"]["chunk_count"] == 1
+
+
 def test_failed_refresh_preserves_previous_manifest(tmp_path):
     documents = tmp_path / "documents"
     knowledge = tmp_path / "knowledge"

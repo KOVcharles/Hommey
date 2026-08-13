@@ -36,6 +36,8 @@
 .trip-intake-field-help { color: var(--ink-2); font-size: 10px; line-height: 1.55; }
 .trip-intake-field-help.is-error { color: var(--danger); }
 .trip-intake-field-examples { color: var(--ink-3); font-size: 9px; }
+.trip-intake-suggestion { width: min(100%, 320px); margin-top: 7px; padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--route) 22%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--route) 5%, var(--panel)); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.trip-intake-suggestion .trip-intake-action { flex: none; border-color: color-mix(in srgb, var(--route) 34%, var(--line)); }
 .trip-intake-options { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
 .trip-intake-action { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2); background: var(--panel); font-size: 9px; transition: border-color .2s var(--ease), transform .2s var(--ease), background .2s var(--ease); }
 .trip-intake-action:hover { border-color: color-mix(in srgb, var(--route) 42%, var(--line)); transform: translateY(-1px); }

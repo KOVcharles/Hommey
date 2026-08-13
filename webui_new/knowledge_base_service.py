@@ -12,12 +12,16 @@ from pathlib import Path
 from typing import Callable
 
 from rag.config import RAGPipelineConfig
+from rag.encodings import decode_text_bytes, detect_encoding
 from rag.pipeline import RAGPipeline
 from webui_new.core.errors import BusinessError
 
 logger = logging.getLogger(__name__)
 
-SUPPORTED_UPLOAD_TYPES = {"txt", "md", "pdf"}
+# Phase 2 (audit §11): DOCX/CSV/XLSX are now first-class knowledge sources.
+# The set mirrors HOMMEY_RAG_SUPPORTED_FILE_TYPES so the service and the
+# ingestion pipeline agree on what an upload may be.
+SUPPORTED_UPLOAD_TYPES = {"txt", "md", "pdf", "docx", "csv", "xlsx"}
 MAX_UPLOAD_BYTES = 25 * 1024 * 1024
 MAX_UPLOAD_FILES = 10
 
@@ -73,7 +77,7 @@ class KnowledgeBaseManagementService:
         if file_type not in SUPPORTED_UPLOAD_TYPES:
             raise BusinessError(
                 "KNOWLEDGE_FILE_TYPE_UNSUPPORTED",
-                "仅支持 TXT、Markdown 和 PDF 文档",
+                "仅支持 TXT、Markdown、PDF、DOCX、CSV 和 XLSX 文档",
                 status_code=400,
             )
         if not content:
@@ -111,12 +115,16 @@ class KnowledgeBaseManagementService:
             if temporary.exists():
                 temporary.unlink()
 
+        detected_encoding = None
+        if file_type in {"txt", "md", "csv"}:
+            detected_encoding = detect_encoding(content)
         return {
             "filename": safe_name,
             "file_type": file_type,
             "size_bytes": len(content),
             "status": "updated" if existed else "created",
             "index_status": "pending",
+            "encoding": detected_encoding,
         }
 
     def document_index_status(self, document_id: str, path: Path) -> str:
@@ -226,11 +234,38 @@ class KnowledgeBaseManagementService:
             self._job.update({"stage": stage, "progress": max(0, min(99, int(progress)))})
 
     def _write_manifest(self, report: dict) -> None:
+        """Assemble the v2 manifest (audit §6.1.5 二).
+
+        The v1 shape (refreshed_at / documents / report) is preserved so the
+        two ``document_index_status`` readers keep working untouched.  Added:
+        schema_version, generated_by, the index version block from the pipeline
+        report, a previous_index snapshot, and per-document version/parser/
+        page-terminal-state/chunk-count detail.
+        """
         failed_sources = {
             Path(str(item.get("source_path") or "")).resolve()
             for item in report.get("errors", [])
             if item.get("source_path")
         }
+        # IngestionReport.to_dict() intentionally flattens its metadata into the
+        # top-level payload for backward compatibility.  Accept both that public
+        # shape and the nested shape used by a few injected test runners.
+        nested_metadata = report.get("metadata")
+        report_metadata = nested_metadata if isinstance(nested_metadata, dict) else report
+        index_block = report_metadata.get("index") or {}
+        report_documents = report_metadata.get("documents") or {}
+        previous = self._read_manifest()
+        previous_index = previous.get("index")
+        previous_index_snapshot = (
+            {
+                "version": previous_index.get("version"),
+                "built_at": previous_index.get("built_at"),
+                "collection_name": previous_index.get("collection_name"),
+            }
+            if isinstance(previous_index, dict)
+            else None
+        )
+
         documents = {}
         if self.documents_dir.exists():
             for path in self.documents_dir.rglob("*"):
@@ -243,8 +278,26 @@ class KnowledgeBaseManagementService:
                     document_id = resolved.relative_to(self.documents_dir).as_posix()
                 except ValueError:
                     continue
-                documents[document_id] = {"sha256": self._sha256(resolved), "indexed_at": _utc_now()}
-        payload = {"refreshed_at": _utc_now(), "documents": documents, "report": report}
+                entry = {"sha256": self._sha256(resolved), "indexed_at": _utc_now()}
+                detail = report_documents.get(document_id)
+                if isinstance(detail, dict):
+                    entry["document_version"] = detail.get("document_version")
+                    entry["parser"] = {
+                        "name": detail.get("parser_name"),
+                        "version": detail.get("parser_version"),
+                    }
+                    entry["pages"] = detail.get("pages") or {}
+                    entry["chunk_count"] = detail.get("chunk_count", 0)
+                documents[document_id] = entry
+        payload = {
+            "refreshed_at": _utc_now(),
+            "schema_version": report_metadata.get("schema_version") or "rag.v2.metadata.0",
+            "generated_by": "hommey-rag-v2",
+            "index": index_block,
+            "previous_index": previous_index_snapshot,
+            "documents": documents,
+            "report": report,
+        }
         self.manifest_root.mkdir(parents=True, exist_ok=True)
         temporary = self.manifest_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -279,17 +332,28 @@ class KnowledgeBaseManagementService:
 
     @staticmethod
     def _validate_content(file_type: str, content: bytes) -> None:
-        if file_type in {"txt", "md"}:
+        if file_type in {"txt", "md", "csv"}:
+            # Unified encoding strategy (audit §4.14): the same cascade the RAG
+            # parser uses, never a forced UTF-8 that rejects readable files.
             try:
-                text = content.decode("utf-8")
+                decode_text_bytes(content)
             except UnicodeDecodeError as exc:
                 raise BusinessError(
                     "KNOWLEDGE_TEXT_ENCODING_INVALID",
-                    "文本文件必须使用 UTF-8 编码",
+                    "文本文件编码无法识别，请使用 UTF-8 或 GB18030 编码",
                     status_code=400,
                 ) from exc
-            if not text.strip():
+            if not content.strip():
                 raise BusinessError("KNOWLEDGE_FILE_EMPTY", "不能上传空文档", status_code=400)
+        elif file_type in {"docx", "xlsx"}:
+            # DOCX/XLSX are ZIP-based OOXML containers; a quick magic-byte check
+            # keeps a renamed .zip (or garbage) out of the parser.
+            if not content.startswith((b"PK\x03\x04", b"PK\x05\x06")):
+                raise BusinessError(
+                    "KNOWLEDGE_OFFICE_INVALID",
+                    "Office 文档格式无效，请上传 .docx 或 .xlsx 文件",
+                    status_code=400,
+                )
         elif not content.startswith(b"%PDF"):
             raise BusinessError("KNOWLEDGE_PDF_INVALID", "PDF 文件格式无效", status_code=400)
 

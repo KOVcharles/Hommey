@@ -146,10 +146,28 @@ class TripComplianceAgent(AgentBase):
             if not isinstance(item, dict):
                 continue
             metadata = item.get("metadata") if isinstance(item.get("metadata"), dict) else {}
+            # `source` now points at the absolute source_path; citations must
+            # use the bare filename (audit §4.12 / §6.1.6).
+            filename = (
+                metadata.get("filename")
+                or metadata.get("file_name")
+                or metadata.get("parent_doc")
+                or item.get("file")
+                or "企业差旅知识库"
+            )
+            heading_path = metadata.get("heading_path")
+            if not isinstance(heading_path, list):
+                heading_path = []
+            section = (
+                "/".join(str(part) for part in heading_path)
+                if heading_path
+                else metadata.get("section") or metadata.get("title")
+            )
             normalized.append({
-                "file": metadata.get("source") or metadata.get("file_name") or item.get("source") or "企业差旅知识库",
-                "page": metadata.get("page") or metadata.get("page_number"),
-                "section": metadata.get("section") or metadata.get("title"),
+                "chunk_id": metadata.get("chunk_id") or item.get("chunk_id"),
+                "file": filename,
+                "page": metadata.get("page_start") or metadata.get("page") or metadata.get("page_number"),
+                "section": section,
                 "excerpt": item.get("content") or item.get("text") or "",
             })
         return normalized

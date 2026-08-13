@@ -52,6 +52,7 @@ class FileLongTermMemory:
             "session_titles": {},
             "trip_history": [],
             "active_trip": None,
+            "active_trips": {},
             "statistics": {
                 "total_trips": 0,
                 "total_messages": 0,
@@ -195,6 +196,7 @@ class FileLongTermMemory:
             row for row in rows if row.get("session_id") != session_id
         ]
         self.data.setdefault("session_titles", {}).pop(session_id, None)
+        self.data.setdefault("active_trips", {}).pop(str(session_id), None)
         self.data.setdefault("statistics", {})["total_messages"] = len(
             self.data["chat_history"]
         )
@@ -248,9 +250,17 @@ class FileLongTermMemory:
             rows = rows[-limit:]
         return [dict(row) for row in rows]
 
-    def upsert_active_trip(self, trip_info: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert_active_trip(
+        self,
+        trip_info: Dict[str, Any],
+        session_id: str | None = None,
+    ) -> Dict[str, Any]:
         trip_info = filter_safe_memory_mapping(trip_info)
-        current = self.data.get("active_trip") or {}
+        session_key = str(session_id or "legacy")
+        active_trips = self.data.setdefault("active_trips", {})
+        current = active_trips.get(session_key) or (
+            self.data.get("active_trip") if session_id is None else None
+        ) or {}
         if current.get("status") in {"completed", "cancelled"}:
             current = {}
         merged = {**current, **{key: value for key, value in trip_info.items() if value is not None}}
@@ -258,16 +268,24 @@ class FileLongTermMemory:
         merged["updated_at"] = _utc_now_iso()
         if merged["status"] in {"completed", "cancelled"}:
             merged["completed_at"] = _utc_now_iso()
-        self.data["active_trip"] = merged
+        active_trips[session_key] = merged
+        if session_id is None:
+            self.data["active_trip"] = merged
         self._save()
         return dict(merged)
 
-    def get_active_trip(self) -> Optional[Dict[str, Any]]:
-        trip = self.data.get("active_trip")
+    def get_active_trip(self, session_id: str | None = None) -> Optional[Dict[str, Any]]:
+        session_key = str(session_id or "legacy")
+        trip = self.data.setdefault("active_trips", {}).get(session_key)
+        if trip is None and session_id is None:
+            trip = self.data.get("active_trip")
         return dict(trip) if isinstance(trip, dict) else None
 
-    def clear_active_trip(self) -> None:
-        self.data["active_trip"] = None
+    def clear_active_trip(self, session_id: str | None = None) -> None:
+        session_key = str(session_id or "legacy")
+        self.data.setdefault("active_trips", {}).pop(session_key, None)
+        if session_id is None:
+            self.data["active_trip"] = None
         self._save()
 
     def get_frequent_destinations(self, top_n: int = 5) -> List[tuple]:
@@ -530,12 +548,14 @@ class LegacyAutocommitPostgresLongTermMemory:
             cur.execute(
                 """
                 CREATE TABLE IF NOT EXISTS active_trip_contexts (
-                    user_id TEXT PRIMARY KEY,
+                    user_id TEXT NOT NULL,
+                    session_id TEXT NOT NULL DEFAULT 'legacy',
                     status TEXT NOT NULL DEFAULT 'active',
                     context_data JSONB NOT NULL DEFAULT '{}'::jsonb,
                     created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
                     updated_at TIMESTAMPTZ NOT NULL DEFAULT NOW(),
-                    completed_at TIMESTAMPTZ
+                    completed_at TIMESTAMPTZ,
+                    PRIMARY KEY (user_id, session_id)
                 );
                 """
             )
@@ -1064,9 +1084,14 @@ class LegacyAutocommitPostgresLongTermMemory:
             for row in rows
         ]
 
-    def upsert_active_trip(self, trip_info: Dict[str, Any]) -> Dict[str, Any]:
+    def upsert_active_trip(
+        self,
+        trip_info: Dict[str, Any],
+        session_id: str | None = None,
+    ) -> Dict[str, Any]:
         trip_info = filter_safe_memory_mapping(trip_info)
-        current = self.get_active_trip() or {}
+        session_key = str(session_id or "legacy")
+        current = self.get_active_trip(session_key) or {}
         if current.get("status") in {"completed", "cancelled"}:
             current = {}
         merged = {**current, **{key: value for key, value in trip_info.items() if value is not None}}
@@ -1074,9 +1099,11 @@ class LegacyAutocommitPostgresLongTermMemory:
         with self.conn.cursor() as cur:
             cur.execute(
                 """
-                INSERT INTO active_trip_contexts (user_id, status, context_data, created_at, updated_at)
-                VALUES (%s, %s, %s, NOW(), NOW())
-                ON CONFLICT (user_id) DO UPDATE SET
+                INSERT INTO active_trip_contexts (
+                    user_id, session_id, status, context_data, created_at, updated_at
+                )
+                VALUES (%s, %s, %s, %s, NOW(), NOW())
+                ON CONFLICT (user_id, session_id) DO UPDATE SET
                     status = EXCLUDED.status,
                     context_data = EXCLUDED.context_data,
                     updated_at = NOW(),
@@ -1085,15 +1112,18 @@ class LegacyAutocommitPostgresLongTermMemory:
                         ELSE NULL
                     END
                 """,
-                (self.user_id, status, self._jsonb(merged)),
+                (self.user_id, session_key, status, self._jsonb(merged)),
             )
         return merged
 
-    def get_active_trip(self) -> Optional[Dict[str, Any]]:
+    def get_active_trip(self, session_id: str | None = None) -> Optional[Dict[str, Any]]:
+        session_key = str(session_id or "legacy")
         with self.conn.cursor() as cur:
             cur.execute(
-                "SELECT status, context_data, updated_at FROM active_trip_contexts WHERE user_id = %s",
-                (self.user_id,),
+                """SELECT status, context_data, updated_at
+                   FROM active_trip_contexts
+                   WHERE user_id = %s AND session_id = %s""",
+                (self.user_id, session_key),
             )
             row = cur.fetchone()
         if not row:
@@ -1103,9 +1133,13 @@ class LegacyAutocommitPostgresLongTermMemory:
         data["updated_at"] = row["updated_at"].isoformat()
         return data
 
-    def clear_active_trip(self) -> None:
+    def clear_active_trip(self, session_id: str | None = None) -> None:
+        session_key = str(session_id or "legacy")
         with self.conn.cursor() as cur:
-            cur.execute("DELETE FROM active_trip_contexts WHERE user_id = %s", (self.user_id,))
+            cur.execute(
+                "DELETE FROM active_trip_contexts WHERE user_id = %s AND session_id = %s",
+                (self.user_id, session_key),
+            )
 
     def get_frequent_destinations(self, top_n: int = 5) -> List[tuple]:
         """

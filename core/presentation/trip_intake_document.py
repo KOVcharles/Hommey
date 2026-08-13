@@ -38,6 +38,9 @@ class TripFieldPrompt(BaseModel):
     examples: List[str] = Field(default_factory=list)
     options: List[str] = Field(default_factory=list)
     error: str = ""
+    suggested_value: str = ""
+    suggestion_source: Literal["preference", "history"] | None = None
+    suggestion_reason: str = ""
 
 
 class TripConflict(BaseModel):
@@ -77,8 +80,16 @@ _VALUE_KEYS = {
 }
 
 
-def _field_prompt(key: str, error: str = "") -> TripFieldPrompt:
+def _field_prompt(
+    key: str,
+    error: str = "",
+    suggestion: Dict[str, Any] | None = None,
+) -> TripFieldPrompt:
     spec = FIELD_SPECS[key]
+    suggestion = suggestion if isinstance(suggestion, dict) else {}
+    source = suggestion.get("source")
+    if source not in {"preference", "history"}:
+        source = None
     return TripFieldPrompt(
         key=key,
         label=spec.label,
@@ -87,6 +98,9 @@ def _field_prompt(key: str, error: str = "") -> TripFieldPrompt:
         examples=list(spec.examples),
         options=list(spec.options),
         error=error,
+        suggested_value=str(suggestion.get("value") or ""),
+        suggestion_source=source,
+        suggestion_reason=str(suggestion.get("reason") or ""),
     )
 
 
@@ -127,7 +141,11 @@ def build_trip_intake_document(raw: Dict[str, Any]) -> TripIntakeDocument:
                 source="memory" if key == "origin" and data.get("origin_inferred") else "user",
             ))
 
-    prompts = [_field_prompt(key, errors.get(key, "")) for key in missing]
+    suggestions = data.get("suggested_fields") or {}
+    prompts = [
+        _field_prompt(key, errors.get(key, ""), suggestions.get(key))
+        for key in missing
+    ]
     optional = [_field_prompt(key) for key in state["optional_info"]]
     completed = state["completion"]["completed"]
     total = state["completion"]["total"]
@@ -183,6 +201,9 @@ def render_trip_intake_text(document: TripIntakeDocument) -> str:
         for item in document.missing_required:
             detail = item.error or item.help_text
             lines.append(f"- {item.label}：{detail}")
+            if item.suggested_value:
+                reason = item.suggestion_reason or "根据已有信息"
+                lines.append(f"  候选：{item.suggested_value}（{reason}，请确认）")
     if document.optional:
         lines.append("可选补充：" + "、".join(item.label for item in document.optional))
     if document.suggested_reply:

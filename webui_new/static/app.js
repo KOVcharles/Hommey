@@ -44,6 +44,8 @@
     const knowledgeRefreshButton = document.getElementById('knowledgeRefreshButton');
     const knowledgeAdminActions = document.getElementById('knowledgeAdminActions');
     const knowledgeSyncBar = document.getElementById('knowledgeSyncBar');
+    const knowledgeExitButton = document.getElementById('knowledgeExitButton');
+    const knowledgeExitLabel = document.getElementById('knowledgeExitLabel');
     const attachmentsLayer = document.getElementById('attachmentsLayer');
     const attachmentsList = document.getElementById('attachmentsList');
 
@@ -76,6 +78,7 @@
     let knowledgeRefreshTimer;
     let knowledgeRefreshPollFailures = 0;
     let isKnowledgeAdmin = false;
+    let knowledgeReturnView = 'home';
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -219,6 +222,7 @@
         document.getElementById('newChatButton').addEventListener('click', createNewSession);
         document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
         document.getElementById('knowledgeButton').addEventListener('click', showKnowledge);
+        knowledgeExitButton.addEventListener('click', returnFromKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
         document.getElementById('settingsClose').addEventListener('click', closeSettings);
         document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
@@ -333,7 +337,8 @@
 
     function submitHomeInput() {
         const text = homeInput.value.trim();
-        if (!text || isProcessing || isOnboarding) return;
+        const hasReadyAttachments = pendingAttachments.some((attachment) => attachment.status === 'ready');
+        if ((!text && !hasReadyAttachments) || isProcessing || isOnboarding) return;
         homeInput.value = '';
         resizeInput(homeInput);
         chatInput.value = text;
@@ -399,11 +404,26 @@
             showToast('完成首次设置后即可查阅知识库。');
             return;
         }
+        const currentView = appShell.dataset.view;
+        if (currentView === 'home' || currentView === 'chat') {
+            knowledgeReturnView = currentView;
+        }
+        const returnLabel = knowledgeReturnView === 'chat' ? '返回对话' : '返回首页';
+        knowledgeExitLabel.textContent = returnLabel;
+        knowledgeExitButton.setAttribute('aria-label', returnLabel);
         setMainView('knowledge');
         closeSidebar();
         loadKnowledgeDocuments();
         if (isKnowledgeAdmin) loadKnowledgeRefreshStatus();
         setTimeout(() => knowledgeSearch.focus(), 180);
+    }
+
+    function returnFromKnowledge() {
+        if (appShell.dataset.view !== 'knowledge') return;
+        const targetView = knowledgeReturnView === 'chat' ? 'chat' : 'home';
+        setMainView(targetView);
+        const targetInput = targetView === 'chat' ? chatInput : homeInput;
+        setTimeout(() => targetInput.focus(), 180);
     }
 
     function setMainView(view) {
@@ -417,6 +437,11 @@
     }
 
     function handleKnowledgeShortcut(event) {
+        if (event.key === 'Escape' && appShell.dataset.view === 'knowledge') {
+            event.preventDefault();
+            returnFromKnowledge();
+            return;
+        }
         if (!(event.metaKey || event.ctrlKey) || event.key.toLowerCase() !== 'k') return;
         if (appShell.dataset.view !== 'knowledge') return;
         event.preventDefault();
@@ -1243,14 +1268,18 @@
                 chip.className = attachment.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
                 chip.dataset.id = attachment.id || '';
                 chip.dataset.tmpId = attachment.tmpId || '';
-                chip.title = attachment.filename || '';
-                chip.appendChild(document.createTextNode(
-                    `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`
-                ));
+                chip.title = attachment.errorMessage
+                    ? `${attachment.filename || '未命名附件'}：${attachment.errorMessage}`
+                    : (attachment.filename || '');
+                const label = document.createElement('span');
+                label.className = 'pending-chip-label';
+                label.textContent = `${attachment.filename || '未命名附件'}${attachment.status === 'failed' ? '（失败）' : ''}`;
+                chip.appendChild(label);
                 const remove = document.createElement('button');
                 remove.type = 'button';
                 remove.className = 'pending-chip-remove';
                 remove.setAttribute('aria-label', `移除 ${attachment.filename || '附件'}`);
+                remove.title = '移除附件';
                 remove.textContent = '×';
                 remove.addEventListener('click', () => {
                     pendingAttachments = pendingAttachments.filter((item) => {
@@ -1284,12 +1313,28 @@
                 entry.filename = res.filename || file.name;
                 entry.kind = res.kind;
                 entry.status = res.status === 'ready' ? 'ready' : 'failed';
+                if (entry.status === 'failed') {
+                    entry.errorMessage = attachmentFailureMessage(res.error_code);
+                }
             } catch (err) {
                 entry.status = 'failed';
-                showToast(formatDisplayError(err, '附件上传失败'));
+                entry.errorMessage = formatDisplayError(err, '附件上传失败');
+                showToast(entry.errorMessage);
             }
             renderPendingAttachments();
         }
+    }
+
+    function attachmentFailureMessage(errorCode) {
+        const messages = {
+            VISION_DISABLED: '图片识别服务未开启',
+            VISION_KEY_MISSING: '图片识别服务未配置',
+            VISION_QUOTA_EXCEEDED: '今日图片识别次数已达上限',
+            IMAGE_PARSE_FAILED: '图片识别失败',
+            PARSE_FAILED: '附件解析失败',
+            PERSIST_FAILED: '附件处理结果保存失败',
+        };
+        return messages[String(errorCode || '').toUpperCase()] || '附件处理失败';
     }
 
     function escapeHtml(s) {
@@ -1412,7 +1457,8 @@
         }
         renderPendingAttachments();
         closeLayer('attachmentsLayer');
-        enterChatView();
+        const activeComposer = appShell.dataset.view === 'chat' ? chatInput : homeInput;
+        requestAnimationFrame(() => activeComposer.focus());
         showToast('已加入待发送附件');
     }
 
@@ -1671,13 +1717,14 @@
         if (role === 'ai') collapseTripIntakeCards();
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
-        const bubble = document.createElement('div');
-        bubble.className = `msg-bubble ${role}`;
-        if (text) {
-            if (role === 'user') renderUserMessageInto(bubble, text);
-            else renderMessageInto(bubble, text);
+        const visibleText = role === 'user' ? userMessageText(text, attachments) : String(text || '');
+        if (visibleText) {
+            const bubble = document.createElement('div');
+            bubble.className = `msg-bubble ${role}`;
+            if (role === 'user') renderUserMessageInto(bubble, visibleText);
+            else renderMessageInto(bubble, visibleText);
+            stack.appendChild(bubble);
         }
-        stack.appendChild(bubble);
         if (role === 'user' && attachments && attachments.length) {
             renderAttachmentCards(stack, attachments);
         }
@@ -1685,6 +1732,19 @@
         chatMessages.appendChild(row);
         scrollToBottom();
         return row;
+    }
+
+    function userMessageText(text, attachments) {
+        const value = String(text || '').trim();
+        if (!value || !attachments || !attachments.length) return value;
+        const manifestStart = value.lastIndexOf('（附件：');
+        if (manifestStart < 0 || !value.endsWith('）')) return value;
+        const manifest = value.slice(manifestStart);
+        const names = attachments
+            .map((attachment) => String(attachment.filename || '').trim())
+            .filter(Boolean);
+        if (!names.length || !names.some((name) => manifest.includes(name))) return value;
+        return value.slice(0, manifestStart).trim();
     }
 
     function addAnswerMessage(documentData, timestamp) {

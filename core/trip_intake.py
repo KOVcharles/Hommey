@@ -51,6 +51,30 @@ REQUIRED_KEYS = ("origin", "destination", "start_date", "trip_length", "trip_pur
 OPTIONAL_KEYS = ("work_location", "work_schedule")
 
 
+def remove_ungrounded_trip_locations(
+    data: Dict[str, Any],
+    trusted_sources: Iterable[Any],
+) -> List[str]:
+    """Clear origin/destination values absent from authoritative current context.
+
+    The caller decides which sources are authoritative.  For a new turn these are
+    the current user message, prior user messages in the same session, and the
+    still-active trip's existing origin/destination fields—not preferences or
+    completed-trip history.
+    """
+    trusted_text = "\n".join(str(value) for value in trusted_sources if value)
+    rejected: List[str] = []
+    for key in ("origin", "destination"):
+        value = data.get(key)
+        if value is None:
+            continue
+        normalized = str(value).strip()
+        if normalized and normalized not in trusted_text:
+            data[key] = None
+            rejected.append(key)
+    return rejected
+
+
 def _parse_date(value: Any) -> date | None:
     if not value:
         return None

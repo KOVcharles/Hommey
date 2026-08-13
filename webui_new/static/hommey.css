@@ -1263,20 +1263,32 @@ html[data-motion="off"] *::after {
     color: var(--ink-2);
     font-size: 12px;
     line-height: 1.4;
+    white-space: nowrap;
 }
-.pending-chip > span,
-.pending-chip { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.pending-chip-label {
+    min-width: 0;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
 .pending-chip.failed { border-color: color-mix(in srgb, var(--danger) 45%, transparent); color: var(--danger); }
 .pending-chip-remove {
     flex: 0 0 auto;
-    width: 18px; height: 18px;
-    border: 0; background: transparent;
+    width: 20px;
+    height: 20px;
+    padding: 0;
+    border: 0;
+    background: color-mix(in srgb, currentColor 7%, transparent);
     border-radius: 50%;
-    color: var(--ink-3);
+    color: currentColor;
     cursor: pointer;
-    font-size: 14px; line-height: 1;
+    display: grid;
+    place-items: center;
+    font-size: 15px;
+    line-height: 1;
+    opacity: .7;
 }
-.pending-chip-remove:hover { background: var(--soft-hover); color: var(--ink); }
+.pending-chip-remove:hover { background: color-mix(in srgb, currentColor 14%, transparent); opacity: 1; }
 
 .attach-button { cursor: pointer; }
 .attach-button input[type="file"] { position: absolute; width: 1px; height: 1px; opacity: 0; pointer-events: none; }
@@ -1304,11 +1316,11 @@ html[data-motion="off"] *::after {
 
 /* ── RAG 知识库阅读器 ─────────────────────────────────────── */
 .knowledge-view {
-    padding: 64px 22px 16px;
+    padding: 64px 22px clamp(28px, 5vh, 52px);
     overflow: hidden;
     opacity: 0;
     visibility: hidden;
-    transform: translateY(12px);
+    transform: translateX(12px);
 }
 .app-shell[data-view="knowledge"] .knowledge-view {
     opacity: 1;
@@ -1324,14 +1336,44 @@ html[data-motion="off"] *::after {
 }
 .knowledge-overview {
     flex: 0 0 auto;
-    padding: 10px 8px 15px;
+    padding: 8px 8px 11px;
     display: flex;
     align-items: flex-end;
     justify-content: space-between;
     gap: 24px;
 }
+.knowledge-nav {
+    margin-bottom: 6px;
+    display: flex;
+    align-items: center;
+    gap: 12px;
+}
+.knowledge-exit {
+    height: 28px;
+    padding: 0 9px 0 7px;
+    border: 1px solid var(--line);
+    border-radius: 9px;
+    color: var(--ink-2);
+    background: color-mix(in srgb, var(--panel) 72%, transparent);
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    font-size: 11px;
+    font-weight: 560;
+    cursor: pointer;
+    transition: color .18s ease, border-color .18s ease, background .18s ease, transform .24s var(--ease);
+}
+.knowledge-exit svg { transition: transform .24s var(--ease); }
+.knowledge-exit:hover {
+    color: var(--ink);
+    border-color: var(--line-2);
+    background: var(--panel);
+    transform: translateX(-2px);
+}
+.knowledge-exit:hover svg { transform: translateX(-2px); }
+.knowledge-exit:active { transform: translateX(-1px) scale(.97); }
 .knowledge-eyebrow {
-    margin-bottom: 8px;
+    margin-bottom: 0;
     color: var(--ink-3);
     display: flex;
     align-items: center;
@@ -1355,7 +1397,7 @@ html[data-motion="off"] *::after {
     font-weight: 620;
 }
 .knowledge-overview p {
-    margin: 7px 0 0;
+    margin: 5px 0 0;
     color: var(--ink-2);
     font-size: 13px;
     line-height: 1.55;
@@ -1740,6 +1782,10 @@ html[data-motion="off"] *::after {
 @media (max-width: 900px) {
     .knowledge-workspace { grid-template-columns: minmax(250px, 290px) minmax(0, 1fr); }
     .knowledge-document { width: min(720px, calc(100% - 38px)); }
+}
+
+@media (max-height: 760px) and (min-width: 761px) {
+    .knowledge-view { padding-bottom: 16px; }
 }
 
 @media (max-width: 760px) {

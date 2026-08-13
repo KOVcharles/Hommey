@@ -38,8 +38,11 @@ def test_pipeline_ingests_txt_and_keeps_metadata(tmp_path: Path):
     assert metadata["file_type"] == "txt"
     assert metadata["page_number"] is None
     assert metadata["chunk_index"] == 1
-    assert metadata["content_type"] == "text"
+    # V2 block chunker reports the dominant block type (audit §6.1.2).
+    assert metadata["content_type"] == "paragraph"
     assert metadata["hash"]
+    assert metadata["chunk_id"]
+    assert metadata["document_id"] == "01_travel_standards.txt"
 
 
 def test_pipeline_parses_pdf_by_page_and_keeps_page_number(tmp_path: Path, monkeypatch):

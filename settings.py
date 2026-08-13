@@ -93,6 +93,14 @@ RAG_CONFIG = {
     "embedding_dimension": _int_env("HOMMEY_EMBEDDING_DIMENSION", 1024),
     "embedding_batch_size": _int_env("HOMMEY_EMBEDDING_BATCH_SIZE", 32),
     "embedding_timeout_sec": _float_env("HOMMEY_EMBEDDING_TIMEOUT_SEC", 30.0),
+    # Phase 5: bounded embedding retry/backoff + process-local cache.
+    "embedding_max_retries": _int_env("HOMMEY_RAG_EMBEDDING_MAX_RETRIES", 2),
+    "embedding_retry_base_delay_sec": _float_env("HOMMEY_RAG_EMBEDDING_RETRY_BASE_DELAY_SEC", 1.0),
+    "embedding_retry_max_delay_sec": _float_env("HOMMEY_RAG_EMBEDDING_RETRY_MAX_DELAY_SEC", 30.0),
+    "embedding_cache_size": _int_env("HOMMEY_RAG_EMBEDDING_CACHE_SIZE", 1024),
+    # Phase 5: BM25/sparse backend seam (only "python" until the corpus
+    # outgrows the full-scan baseline; see audit §11 Phase 5).
+    "bm25_backend": os.getenv("HOMMEY_RAG_BM25_BACKEND", "python").lower(),
     "documents_dir": os.getenv(
         "HOMMEY_RAG_DOCUMENTS_DIR",
         "data/documents",
@@ -107,9 +115,22 @@ RAG_CONFIG = {
     ),
     "chunk_size": _int_env("HOMMEY_RAG_CHUNK_SIZE", 600),
     "chunk_overlap": _int_env("HOMMEY_RAG_CHUNK_OVERLAP", 100),
+    "chunk_min_tokens": _int_env("HOMMEY_RAG_CHUNK_MIN_TOKENS", 150),
+    "chunk_max_tokens": _int_env("HOMMEY_RAG_CHUNK_MAX_TOKENS", 400),
+    "chunk_overlap_tokens": _int_env("HOMMEY_RAG_CHUNK_OVERLAP_TOKENS", 60),
     "top_k": _int_env("HOMMEY_RAG_TOP_K", 3),
     "vector_top_k": _int_env("HOMMEY_RAG_VECTOR_TOP_K", 10),
     "bm25_top_k": _int_env("HOMMEY_RAG_BM25_TOP_K", 10),
+    # Phase 2: ingestion-accepted file types (comma-separated).  DOCX/CSV/XLSX
+    # are new; operators can narrow the set without code changes.
+    "supported_file_types": os.getenv(
+        "HOMMEY_RAG_SUPPORTED_FILE_TYPES",
+        "txt,md,pdf,docx,csv,xlsx",
+    ),
+    # Phase 3: OCR fallback for text-less PDF pages via the multimodal
+    # VisionClient.  Off by default; enable only when a vision API key is set.
+    "ocr_enabled": _bool_env("HOMMEY_RAG_OCR_ENABLED", False),
+    "ocr_confidence_threshold": _float_env("HOMMEY_RAG_OCR_CONFIDENCE_THRESHOLD", 0.5),
 }
 
 

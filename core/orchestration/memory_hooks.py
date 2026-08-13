@@ -58,10 +58,17 @@ class MemoryHookExecutor:
 
     def _update_active_trip(self, result: TaskResult, hook) -> None:
         data = _nested(result.data)
-        event_data = filter_safe_memory_mapping(data)
-        if not any(event_data.get(key) for key in (
-            "origin", "destination", "start_date", "end_date", "work_location",
-        )):
+        safe = filter_safe_memory_mapping(data)
+        fact_keys = (
+            "origin", "destination", "start_date", "end_date", "duration_days",
+            "return_location", "trip_purpose", "work_location", "work_schedule",
+        )
+        event_data = {
+            key: safe[key]
+            for key in fact_keys
+            if safe.get(key) not in (None, "")
+        }
+        if not event_data:
             return
         self.memory_manager.update_active_trip(event_data)
 

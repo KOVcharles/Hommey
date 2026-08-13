@@ -79,9 +79,6 @@ class HommeyWebInstance:
         self.initialized = False
         self.init_error: Optional[str] = None
 
-        # ── 性能优化: 缓存 ──
-        self._summary_cache: Optional[str] = None  # 长期记忆摘要缓存
-        self._summary_msg_count: int = 0           # 缓存时的消息数
         self._total_messages: int = 0              # 本会话消息计数
         self._last_activity_monotonic: Optional[float] = None
 
@@ -286,8 +283,6 @@ class HommeyWebInstance:
         self.session_id = session_id
         self._last_activity_monotonic = time.monotonic()
         self._total_messages = len(payload["messages"])
-        self._summary_cache = None  # 摘要按会话归属，切换会话后失效
-        self._summary_msg_count = 0
         return payload
 
     def rename_chat_session(self, session_id: str, title: str) -> None:
@@ -411,31 +406,6 @@ class HommeyWebInstance:
                 "附件已失效或已被其他消息使用，请重新上传",
             ) from exc
 
-    async def _get_cached_summary(self) -> str:
-        """Cache only query-independent memory; dynamic trip retrieval stays per request.
-
-        缓存键为 message_version（memory_versions.namespace='messages'，每条新消息 +1），
-        每条新消息恰好刷新一次；_get_long_term_summary 内部先跑便宜的 claim，未达阈值
-        不会触发 LLM。
-        """
-        stats = await self._ensure_async_memory().get_statistics()
-        current_version = int(stats.get("message_version", stats.get("total_messages", 0)))
-
-        if self._summary_cache is None or current_version != self._summary_msg_count:
-            summary = await self._get_long_term_summary()
-            if summary:
-                self._summary_cache = summary
-                self._summary_msg_count = current_version
-                return summary
-            elif self._summary_cache is not None:
-                self._summary_msg_count = current_version
-                return self._summary_cache
-            self._summary_cache = ""
-            self._summary_msg_count = current_version
-            return ""
-
-        return self._summary_cache or ""
-
     def _ensure_active_session(self) -> bool:
         """Resume or rotate the durable session after the idle timeout."""
         ensure_session = getattr(self.memory_manager, "ensure_active_session", None)
@@ -457,8 +427,6 @@ class HommeyWebInstance:
                     rotate_session(self.session_id)
             self._last_activity_monotonic = now
         if rotated:
-            self._summary_cache = None
-            self._summary_msg_count = 0
             self._total_messages = 0
         return rotated
 
@@ -679,8 +647,7 @@ class HommeyWebInstance:
             timings["context"] = 0.0
             timings["intent"] = 0.0
         else:
-            # ═══ 优化 2: 缓存长期记忆摘要，避免每次都 LLM 总结 ═══
-            # 同时构建上下文和意图识别可以部分重叠
+            # 意图层只读取当前任务和当前会话；历史与偏好由授权后的 skill 按需读取。
             context_future = asyncio.ensure_future(self._build_context(agent_query))
 
             # 2. Intent recognition
@@ -1088,19 +1055,16 @@ class HommeyWebInstance:
         """构建上下文消息（可与其他异步任务并行）"""
         from agentscope.message import Msg
 
-        long_term_summary = await self._get_cached_summary()
-        relevant_trip_context = await self._get_relevant_trip_context(message)
         recent_context = await self.async_memory.get_recent_context(n_turns=5)
 
         context_messages = []
         active_trip = await self.async_memory.get_active_trip()
         memory_parts = []
         if active_trip:
-            memory_parts.extend(["【当前出差任务】", json.dumps(active_trip, ensure_ascii=False)])
-        if long_term_summary:
-            memory_parts.append(long_term_summary)
-        if relevant_trip_context:
-            memory_parts.append(relevant_trip_context)
+            memory_parts.extend([
+                "【当前出差任务｜可用于补全当前问题】",
+                json.dumps(active_trip, ensure_ascii=False),
+            ])
         if memory_parts:
             context_messages.append(Msg(
                 name="system",
@@ -1112,79 +1076,6 @@ class HommeyWebInstance:
         context_messages.append(Msg(name="user", content=message, role="user"))
 
         return context_messages
-
-    async def _get_long_term_summary(self) -> str:
-        """Generate query-independent profile and historical-session summary."""
-        summary_parts = []
-        prefs = await self.async_memory.get_preference()
-        if prefs:
-            pref_lines = ["【用户背景信息】（来自长期记忆）"]
-            for pref_key, pref_value in prefs.items():
-                if pref_value:
-                    if isinstance(pref_value, list):
-                        pref_lines.append(f"• {pref_key}: {', '.join(pref_value)}")
-                    else:
-                        pref_lines.append(f"• {pref_key}: {pref_value}")
-            if len(pref_lines) > 1:
-                summary_parts.extend(pref_lines)
-
-        # 持久化增量摘要：惰性认领 + 读回，未达阈值不触发 LLM。
-        summaries = await self.memory_manager.ensure_session_summaries()
-        composed = self._compose_session_summaries(summaries)
-        if composed:
-            summary_parts.append("\n【历史会话总结】")
-            summary_parts.append(composed)
-
-        return "\n".join(summary_parts) if summary_parts else ""
-
-    @staticmethod
-    def _compose_session_summaries(summaries: list, max_segments: int = 12) -> str:
-        """拼接近段摘要为系统提示片段（摘要按 created_at 升序返回，取最近 N 段）。"""
-        recent = summaries[-max_segments:] if summaries else []
-        lines = []
-        for seg in recent:
-            header = f"[会话 {str(seg['session_id'])[:8]} · 第{seg['segment_no']}段]"
-            lines.append(header)
-            lines.append(seg["summary_text"] or "")
-            lines.append("")
-        return "\n".join(lines).strip()
-
-    async def _get_relevant_trip_context(self, user_input: str) -> str:
-        """Select recent and query-relevant trips without contaminating the static cache."""
-        all_trips = await self._ensure_async_memory().get_trip_history(limit=None)
-        return self._filter_relevant_trips(all_trips, user_input)
-
-    @staticmethod
-    def _filter_relevant_trips(all_trips: list[dict], user_input: str) -> str:
-        """Pure formatting/filter over a trips list (no I/O), shared by the async loader."""
-        summary_parts = []
-        if all_trips:
-            all_trips = sorted(
-                all_trips,
-                key=lambda item: item.get("timestamp", "") or "",
-                reverse=True,
-            )
-            relevant_trips = []
-            other_trips = []
-            for trip in all_trips:
-                origin = trip.get("origin", "") or ""
-                destination = trip.get("destination", "") or ""
-                if (origin and origin in user_input) or (destination and destination in user_input):
-                    relevant_trips.append(trip)
-                else:
-                    other_trips.append(trip)
-            trips_to_show = relevant_trips[:2] + other_trips[:1]
-            if trips_to_show:
-                summary_parts.append("\n【历史行程】")
-                for i, trip in enumerate(trips_to_show[:3], 1):
-                    origin = trip.get("origin", "未知")
-                    destination = trip.get("destination", "未知")
-                    start_date = trip.get("start_date", "")
-                    purpose = trip.get("purpose", "")
-                    mark = "✦ " if trip in relevant_trips else ""
-                    summary_parts.append(f"{i}. {mark}{origin} → {destination} ({start_date}) - {purpose}")
-            return "\n".join(summary_parts) if summary_parts else ""
-        return ""
 
     async def _handle_chitchat(self, user_input: str) -> str:
         """闲聊兜底（只用 skill 注册表，删除了硬编码脚本路径回退）。"""

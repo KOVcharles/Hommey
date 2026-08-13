@@ -51,13 +51,16 @@ def load_text_documents(directory: str, pattern: str = "*.txt") -> List[SourceDo
                 source_path=str(path),
                 title=title,
                 category=infer_category(path),
-                metadata={
-                    "source": "business_travel_documents",
-                    "parent_doc": path.name,
-                },
+                metadata={"document_version": _sha256_hex(content)},
             )
         )
     return documents
+
+
+def _sha256_hex(content: str) -> str:
+    import hashlib
+
+    return hashlib.sha256(content.encode("utf-8")).hexdigest()[:12]
 
 
 def iter_chunks(documents: Iterable[SourceDocument], max_chars: int = 600, overlap: int = 100):

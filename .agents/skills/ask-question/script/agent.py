@@ -16,17 +16,30 @@ from typing import Any, Dict, List, Optional, Union
 
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
+from jsonschema import Draft202012Validator
 
 project_root = Path(__file__).resolve().parents[4]
 if str(project_root) not in sys.path:
     sys.path.insert(0, str(project_root))
 
 from rag.retriever import KnowledgeRetriever
+from rag.evidence import evaluate_evidence
 from core.execution_budget import ExecutionLimitExceeded, consume_external_call
 from settings import RAG_CONFIG
 from utils.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
+
+_OUTPUT_SCHEMA_PATH = Path(__file__).resolve().parents[1] / "schemas" / "output.json"
+_OUTPUT_VALIDATOR = Draft202012Validator(
+    json.loads(_OUTPUT_SCHEMA_PATH.read_text(encoding="utf-8"))
+)
+
+_PARTIAL_EVIDENCE_GUIDANCE = (
+    "本次检索到的知识片段可能不完整或没有直接覆盖你的问题。\n"
+    "如果片段中没有直接回答用户问题的政策，必须如实回答“知识库中没有找到相关规定”，"
+    "不要用常识推测或编造金额、标准、流程。若只有部分相关，请先说明这一点，再给出检索到的部分。"
+)
 
 
 class RAGKnowledgeAgent(AgentBase):
@@ -72,6 +85,7 @@ class RAGKnowledgeAgent(AgentBase):
             return self._msg(
                 {
                     "status": "error",
+                    "answer": "RAG 知识库暂时不可用，请稍后重试。",
                     "message": self.retriever.error or "RAG Agent not initialized",
                     "retrieved_documents": [],
                 }
@@ -102,19 +116,55 @@ class RAGKnowledgeAgent(AgentBase):
                 }
             )
 
+        # Phase 4: universal evidence gate.  Every query passes the same
+        # deterministic classifier; a query with no evidence overlap answers
+        # as no-knowledge instead of letting the LLM improvise from unrelated
+        # fragments (audit §9.4 evidence classifier).
+        verdict = evaluate_evidence(user_query, retrieved_docs)
+        if verdict.verdict == "insufficient":
+            return self._msg(
+                {
+                    "status": "no_knowledge",
+                    "query": user_query,
+                    "answer": "抱歉，知识库中没有找到与这个问题相关的内容。",
+                    "retrieved_documents": [],
+                    "evidence": verdict.to_dict(),
+                }
+            )
+
         knowledge_context = self._format_knowledge_context(retrieved_docs)
+        retrieval_trace_id = next(
+            (
+                str(doc.get("retrieval_trace_id"))
+                for doc in retrieved_docs
+                if doc.get("retrieval_trace_id")
+            ),
+            "",
+        )
         if self.model:
-            answer = await self._generate_answer(user_query, knowledge_context)
+            answer = await self._generate_answer(
+                user_query,
+                knowledge_context,
+                evidence_guidance=(
+                    "" if verdict.verdict == "sufficient" else _PARTIAL_EVIDENCE_GUIDANCE
+                ),
+            )
         else:
             answer = "以下是知识库中的相关信息：\n\n" + knowledge_context
 
         return self._msg(
             {
-                "status": "success",
+                "status": "success" if verdict.verdict == "sufficient" else "partial",
                 "query": user_query,
                 "answer": answer,
                 "retrieved_documents": [self._serialize_doc(doc) for doc in retrieved_docs],
                 "sources": [self._serialize_source(doc) for doc in retrieved_docs],
+                "evidence": verdict.to_dict(),
+                **(
+                    {"retrieval_trace_id": retrieval_trace_id}
+                    if retrieval_trace_id
+                    else {}
+                ),
             }
         )
 
@@ -145,10 +195,11 @@ class RAGKnowledgeAgent(AgentBase):
         seen = set()
         for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
             for document in self.search_knowledge(query, top_k=max(3, self.retriever.top_k)):
+                # Deduplicate on the stable top-level chunk_id (audit §6.1.6 三);
+                # the legacy top-level source/file reads were always None.
                 key = (
+                    str(document.get("chunk_id") or (document.get("metadata") or {}).get("chunk_id") or ""),
                     str(document.get("id") or ""),
-                    str(document.get("source") or document.get("file") or ""),
-                    str(document.get("content") or ""),
                 )
                 if key in seen:
                     continue
@@ -236,9 +287,31 @@ class RAGKnowledgeAgent(AgentBase):
         return str(data.get("agent_query") or data.get("rewritten_query") or data.get("query") or text).strip()
 
     def _format_knowledge_context(self, docs: List[Dict[str, Any]]) -> str:
-        return "\n\n".join(f"【知识片段{i}】\n{doc.get('content', '')}" for i, doc in enumerate(docs, start=1))
+        """Inject display_text plus a policy-metadata block (audit §6.1.6 三)."""
+        blocks = []
+        for index, doc in enumerate(docs, start=1):
+            metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+            text = metadata.get("display_text") or doc.get("display_text") or doc.get("content", "")
+            policy_meta = self._policy_metadata_block(metadata)
+            header = f"【知识片段{index}】"
+            if policy_meta:
+                header += f"（{policy_meta}）"
+            blocks.append(f"{header}\n{text}")
+        return "\n\n".join(blocks)
 
-    async def _generate_answer(self, user_query: str, knowledge_context: str) -> str:
+    @staticmethod
+    def _policy_metadata_block(metadata: Dict[str, Any]) -> str:
+        parts: List[str] = []
+        if metadata.get("category"):
+            parts.append(f"分类:{metadata['category']}")
+        for key, label in (("effective_date", "生效"), ("expiry_date", "失效")):
+            if metadata.get(key):
+                parts.append(f"{label}:{metadata[key]}")
+        if metadata.get("policy_status"):
+            parts.append(f"状态:{metadata['policy_status']}")
+        return " | ".join(parts)
+
+    async def _generate_answer(self, user_query: str, knowledge_context: str, evidence_guidance: str = "") -> str:
         skill_instruction = self.skill_loader.get_skill_content("ask-question") or "请基于知识库中的信息回答用户的问题。"
         prompt = f"""请严格基于以下知识库信息回答用户问题。
 
@@ -262,6 +335,9 @@ class RAGKnowledgeAgent(AgentBase):
 6. 回答要面向用户总结：先给结论，再列依据/标准，最后补充限制或例外；不要直接堆叠原文。
 7. 严格校验城市、国家及国内/国际适用范围；不得将其他地区或范围不匹配的标准套用到当前目的地。只有通用规定时才可跨地区引用，无法确定时必须明确说明。
 """
+
+        if evidence_guidance:
+            prompt += f"\n【证据提示】\n{evidence_guidance}\n"
 
         try:
             response = await self.model(
@@ -429,20 +505,69 @@ class RAGKnowledgeAgent(AgentBase):
 
     def _serialize_doc(self, doc: Dict[str, Any]) -> Dict[str, Any]:
         content = doc.get("content", "")
+        # Audit §6.1.6 三: retrieved_documents must also carry the top-level
+        # file/page/section projection, not just nested metadata, so legacy
+        # readers (e.g. fallback_composer) that read only top-level keys get a
+        # real citation instead of a constant fallback.
+        source = self._serialize_source(doc)
         return {
             "content": content[:200] + "..." if len(content) > 200 else content,
             "metadata": doc.get("metadata", {}),
+            "chunk_id": source["chunk_id"],
+            "file": source["file"],
+            "page": source["page"],
+            "section": source["section"],
+            "excerpt": source["excerpt"],
         }
 
     def _serialize_source(self, doc: Dict[str, Any]) -> Dict[str, Any]:
+        """Canonical source citation (audit §6.1.6 三).
+
+        ``file`` is always the bare filename — never the absolute server path
+        (source_path). ``section`` is the V2 heading_path; ``excerpt`` is the
+        display text a caller can show next to the citation.
+        """
         metadata = doc.get("metadata") if isinstance(doc.get("metadata"), dict) else {}
+        heading_path = metadata.get("heading_path")
+        if not isinstance(heading_path, list):
+            heading_path = []
+        if not heading_path and metadata.get("section"):
+            heading_path = [str(metadata["section"])]
+        filename = (
+            metadata.get("filename")
+            or metadata.get("file_name")
+            or metadata.get("name")
+            or metadata.get("parent_doc")
+            or "企业差旅知识库"
+        )
+        display_text = metadata.get("display_text") or doc.get("display_text") or doc.get("content", "")
+        excerpt = display_text[:200] + "..." if len(display_text) > 200 else display_text
+        table = metadata.get("table")
         return {
-            "file": metadata.get("source") or metadata.get("file_name") or metadata.get("filename") or "企业差旅知识库",
-            "page": metadata.get("page") or metadata.get("page_number"),
-            "section": metadata.get("section") or metadata.get("title"),
+            "chunk_id": metadata.get("chunk_id") or doc.get("chunk_id"),
+            "file": filename,
+            "page": metadata.get("page_start") or metadata.get("page") or metadata.get("page_number"),
+            "section": "/".join(str(part) for part in heading_path) or metadata.get("title"),
+            "excerpt": excerpt,
+            # Phase 2 (audit §6.1.2 chunk layer): a table citation lets callers
+            # point at the exact sheet/table/row window a table chunk covers.
+            # Omitted (None) for non-table chunks so legacy readers stay intact.
+            "table": {
+                "sheet": table.get("sheet"),
+                "table_id": table.get("table_id"),
+                "row_start": table.get("row_start"),
+                "row_end": table.get("row_end"),
+                "col_start": table.get("col_start"),
+                "col_end": table.get("col_end"),
+            }
+            if isinstance(table, dict)
+            else None,
         }
 
     def _msg(self, content: Dict[str, Any]) -> Msg:
+        # Keep the Skill contract executable rather than documentary: every
+        # success and exceptional branch must satisfy the same state machine.
+        _OUTPUT_VALIDATOR.validate(content)
         return Msg(name=self.name, content=json.dumps(content, ensure_ascii=False), role="assistant")
 
     def __del__(self):
