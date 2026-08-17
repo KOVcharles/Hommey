@@ -203,13 +203,13 @@ def create_knowledge_base_router(
             )
         return {"uploaded": uploaded, "total": len(uploaded), "refresh_required": True}
 
-    @router.post("/api/knowledge/refresh")
+    @router.post("/api/knowledge/refresh", status_code=202)
     async def refresh_knowledge_base(current_user: User = Depends(require_admin)):
-        return management.start_refresh(str(current_user.id))
+        return await run_in_threadpool(management.start_refresh, str(current_user.id))
 
     @router.get("/api/knowledge/refresh/status")
     async def knowledge_refresh_status(current_user: User = Depends(require_admin)):
-        return management.status()
+        return await run_in_threadpool(management.status)
 
     @router.get("/api/knowledge/documents/{document_id:path}")
     async def get_knowledge_document(

@@ -5,6 +5,7 @@ WebUI 路由拆分后的最小契约测试。
 fastapi.testclient.TestClient 的线程 portal 兼容问题。
 """
 import json
+from contextlib import asynccontextmanager
 
 import pytest
 from httpx import ASGITransport, AsyncClient
@@ -143,6 +144,29 @@ async def test_chat_not_initialized_route_defers_to_manager_lazy_init(client, mo
 
 
 @pytest.mark.anyio
+async def test_chat_route_forwards_explicit_enhanced_retrieval_mode(client, monkeypatch):
+    calls = []
+
+    async def fake_process_message(
+        user_id, message, *, request_id=None, attachment_ids=None, retrieval_mode="standard"
+    ):
+        calls.append((user_id, message, request_id, attachment_ids, retrieval_mode))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
+
+    monkeypatch.setattr(manager, "get", lambda _user_id: None)
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
+
+    response = await client.post(
+        "/api/u1/chat",
+        json={"message": "发票丢了怎么报销", "retrieval_mode": "enhanced"},
+        headers={"X-Request-ID": "rid-hyde"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("u1", "发票丢了怎么报销", "rid-hyde", [], "enhanced")]
+
+
+@pytest.mark.anyio
 async def test_chat_lazy_init_failure_still_returns_not_initialized(client, monkeypatch):
     """manager 懒初始化后仍无实例（初始化失败）时，NOT_INITIALIZED 仍以 400 透传给客户端。"""
     async def fake_process_message(user_id, message, *, request_id=None, attachment_ids=None):
@@ -254,7 +278,12 @@ async def test_session_history_endpoints_contract(client, monkeypatch):
             calls.append(("clear",))
             return "s3"
 
-    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    instance = FakeInstance()
+
+    async def fake_state_operation(_user_id, operation):
+        return operation(instance)
+
+    monkeypatch.setattr(manager, "run_user_state_operation", fake_state_operation)
 
     listed = await client.get("/api/u1/sessions")
     created = await client.post("/api/u1/sessions")
@@ -304,7 +333,11 @@ async def test_onboarding_invalid_preference_contract(client, monkeypatch):
         async def save_onboarding_preference(self, _key, _value):
             raise ValueError("secret-token unsupported key")
 
-    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    @asynccontextmanager
+    async def fake_state_scope(_user_id):
+        yield FakeInstance()
+
+    monkeypatch.setattr(manager, "user_state_scope", fake_state_scope)
 
     response = await client.post(
         "/api/u1/onboarding/preference",
@@ -328,7 +361,11 @@ async def test_onboarding_save_failed_contract(client, monkeypatch):
         async def save_onboarding_preference(self, _key, _value):
             raise RuntimeError("password=super-secret")
 
-    monkeypatch.setattr(manager, "get", lambda _user_id: FakeInstance())
+    @asynccontextmanager
+    async def fake_state_scope(_user_id):
+        yield FakeInstance()
+
+    monkeypatch.setattr(manager, "user_state_scope", fake_state_scope)
 
     response = await client.post(
         "/api/u1/onboarding/preference",

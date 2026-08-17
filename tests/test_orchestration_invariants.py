@@ -38,7 +38,9 @@ def test_workflow_uses_explicit_edges_without_owning_independent_goals():
         by_agent["event_collection"].task_id,
         by_agent["rag_knowledge"].task_id,
         by_agent["information_query"].task_id,
+        by_agent["train_query"].task_id,
     }
+    assert by_agent["train_query"].depends_on == [by_agent["event_collection"].task_id]
 
 
 def test_same_intent_answer_sections_remain_goal_scoped():
@@ -147,6 +149,10 @@ def test_abort_failure_persists_downstream_skips_and_failed_run(tmp_path):
         if kwargs["agent_name"] == "information_query":
             return {"status": "success", "data": {
                 "query_success": True, "results": {"summary": "天气正常"},
+            }}
+        if kwargs["agent_name"] == "train_query":
+            return {"status": "success", "data": {
+                "query_success": True, "results": {"trains": []},
             }}
         raise AssertionError(f"downstream must not run: {kwargs['agent_name']}")
 

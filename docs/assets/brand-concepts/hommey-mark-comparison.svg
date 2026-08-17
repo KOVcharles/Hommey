@@ -1,0 +1,87 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1120 800" role="img" aria-labelledby="title desc">
+  <title id="title">Hommey 标志四版对比</title>
+  <desc id="desc">四个统一圆点尺寸、不同曲线与强调色的简约标志方案</desc>
+  <rect width="1120" height="800" fill="#ECEBE7"/>
+  <g font-family="Noto Sans CJK SC">
+    <text x="48" y="56" fill="#252521" font-size="28" font-weight="650">Hommey mark explorations</text>
+    <text x="48" y="84" fill="#74736D" font-size="14">Equal nodes · refined curves · restrained accent colors</text>
+
+    <g transform="translate(40 112)">
+      <rect width="500" height="304" rx="28" fill="#FAF9F6"/>
+      <text x="28" y="40" fill="#252521" font-size="17" font-weight="650">A · Balanced rise</text>
+      <text x="28" y="65" fill="#77766F" font-size="12">均衡上扬 · 最接近现版，比例更稳</text>
+      <g transform="translate(36 78) scale(2.6)">
+        <path d="M24 45C38 46 45 44 51 38C59 30 60 20 70 15C77 11.5 86 13 94 14" fill="none" stroke="#252521" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="45" r="9" fill="none" stroke="#252521" stroke-width="5.5"/>
+        <circle cx="103" cy="14" r="9" fill="none" stroke="#C7614F" stroke-width="5.5"/>
+      </g>
+      <rect x="384" y="104" width="88" height="88" rx="22" fill="#22221F"/>
+      <g transform="translate(392 129) scale(.6)">
+        <path d="M24 45C38 46 45 44 51 38C59 30 60 20 70 15C77 11.5 86 13 94 14" fill="none" stroke="#F2F0E9" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="45" r="9" fill="none" stroke="#F2F0E9" stroke-width="5.5"/>
+        <circle cx="103" cy="14" r="9" fill="none" stroke="#C7614F" stroke-width="5.5"/>
+      </g>
+      <circle cx="40" cy="276" r="8" fill="#C7614F"/>
+      <text x="58" y="281" fill="#77766F" font-family="DejaVu Sans Mono" font-size="12">#C7614F · mineral coral</text>
+    </g>
+
+    <g transform="translate(580 112)">
+      <rect width="500" height="304" rx="28" fill="#FAF9F6"/>
+      <text x="28" y="40" fill="#252521" font-size="17" font-weight="650">B · Soft arc</text>
+      <text x="28" y="65" fill="#77766F" font-size="12">柔和弧线 · 舒展、温暖、亲和</text>
+      <g transform="translate(36 78) scale(2.6)">
+        <path d="M24 46C47 47 49 39 57 29C66 18 77 14 94 15" fill="none" stroke="#252521" stroke-width="5.25" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="46" r="9" fill="none" stroke="#252521" stroke-width="5.25"/>
+        <circle cx="103" cy="15" r="9" fill="none" stroke="#B56B52" stroke-width="5.25"/>
+      </g>
+      <rect x="384" y="104" width="88" height="88" rx="22" fill="#22221F"/>
+      <g transform="translate(392 129) scale(.6)">
+        <path d="M24 46C47 47 49 39 57 29C66 18 77 14 94 15" fill="none" stroke="#F2F0E9" stroke-width="5.25" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="46" r="9" fill="none" stroke="#F2F0E9" stroke-width="5.25"/>
+        <circle cx="103" cy="15" r="9" fill="none" stroke="#B56B52" stroke-width="5.25"/>
+      </g>
+      <circle cx="40" cy="276" r="8" fill="#B56B52"/>
+      <text x="58" y="281" fill="#77766F" font-family="DejaVu Sans Mono" font-size="12">#B56B52 · warm copper</text>
+    </g>
+
+    <g transform="translate(40 440)">
+      <rect width="500" height="304" rx="28" fill="#FAF9F6"/>
+      <text x="28" y="40" fill="#252521" font-size="17" font-weight="650">C · Sculpted flow</text>
+      <text x="28" y="65" fill="#77766F" font-size="12">雕塑流线 · 识别度更强，更成熟</text>
+      <g transform="translate(36 78) scale(2.6)">
+        <path d="M24 44C42 45 49 43 55 35C63 24 68 15 82 14C86 14 90 14 94 14" fill="none" stroke="#252521" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="44" r="9" fill="none" stroke="#252521" stroke-width="5.5"/>
+        <circle cx="103" cy="14" r="9" fill="none" stroke="#A85249" stroke-width="5.5"/>
+      </g>
+      <rect x="384" y="104" width="88" height="88" rx="22" fill="#22221F"/>
+      <g transform="translate(392 129) scale(.6)">
+        <path d="M24 44C42 45 49 43 55 35C63 24 68 15 82 14C86 14 90 14 94 14" fill="none" stroke="#F2F0E9" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="44" r="9" fill="none" stroke="#F2F0E9" stroke-width="5.5"/>
+        <circle cx="103" cy="14" r="9" fill="none" stroke="#A85249" stroke-width="5.5"/>
+      </g>
+      <circle cx="40" cy="276" r="8" fill="#A85249"/>
+      <text x="58" y="281" fill="#77766F" font-family="DejaVu Sans Mono" font-size="12">#A85249 · deep brick</text>
+    </g>
+
+    <g transform="translate(580 440)">
+      <rect width="500" height="304" rx="28" fill="#FAF9F6"/>
+      <text x="28" y="40" fill="#252521" font-size="17" font-weight="650">D · Quiet route</text>
+      <text x="28" y="65" fill="#77766F" font-size="12">静谧路线 · 最简约、最克制</text>
+      <g transform="translate(36 78) scale(2.6)">
+        <path d="M24 45C41 45 51 39 62 29C73 19 82 15 94 15" fill="none" stroke="#252521" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="45" r="9" fill="none" stroke="#252521" stroke-width="5"/>
+        <circle cx="103" cy="15" r="9" fill="none" stroke="#B07A4F" stroke-width="5"/>
+      </g>
+      <rect x="384" y="104" width="88" height="88" rx="22" fill="#22221F"/>
+      <g transform="translate(392 129) scale(.6)">
+        <path d="M24 45C41 45 51 39 62 29C73 19 82 15 94 15" fill="none" stroke="#F2F0E9" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+        <circle cx="15" cy="45" r="9" fill="none" stroke="#F2F0E9" stroke-width="5"/>
+        <circle cx="103" cy="15" r="9" fill="none" stroke="#B07A4F" stroke-width="5"/>
+      </g>
+      <circle cx="40" cy="276" r="8" fill="#B07A4F"/>
+      <text x="58" y="281" fill="#77766F" font-family="DejaVu Sans Mono" font-size="12">#B07A4F · muted bronze</text>
+    </g>
+
+    <text x="40" y="782" fill="#86857F" font-size="12">Concepts only · current production mark remains unchanged</text>
+  </g>
+</svg>

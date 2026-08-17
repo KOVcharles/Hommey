@@ -72,7 +72,7 @@ class AnswerSpec(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     section_kind: Optional[Literal[
-        "policy", "weather", "memory", "preference", "trip", "notice", "general"
+        "policy", "weather", "memory", "preference", "trip", "notice", "train", "general"
     ]] = None
     require_section: bool = True
     # 主 agent 成功后隐藏这些工作流中间 agent 的结果（例如 plan-trip 完成后

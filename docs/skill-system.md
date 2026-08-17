@@ -218,7 +218,7 @@ agent_name ──→ skill name
   → hommey.yaml execution 编译可信 DAG
 ```
 
-默认 Skill 置信度门槛是 `0.65`；外部信息查询因涉及联网，门槛是 `0.75`，并额外要求明确查询对象和公司差旅上下文。
+默认 Skill 置信度门槛是 `0.65`；外部信息查询因涉及联网，门槛是 `0.75`，并额外要求明确查询对象（天气、车票、航班、酒店等公共信息无需完整差旅上下文）。
 
 门禁还会阻止：
 
@@ -292,7 +292,7 @@ Agent 返回 `Msg`。如果 `content` 是 JSON 字符串，协调器解析为对
 
 ```text
 Priority 1  event-collection
-Priority 2  ask-question + query-info（并行）
+Priority 2  ask-question + query-info + train-query（并行）
 Priority 3  plan-trip
 Priority 4  check-trip-compliance
 ```
@@ -301,7 +301,7 @@ Priority 4  check-trip-compliance
 
 1. `event-collection` 从本轮输入、偏好和当前出差任务提取结构化事项；
 2. 如果缺少出发地、目的地、出发日期、出差目的，以及时长或返程日期，协调器暂停后续步骤；
-3. 收集完整后，`ask-question` 查询公司制度，`query-info` 查询天气和路线级公开信息；
+3. 收集完整后，`ask-question` 查询公司制度，`query-info` 查询天气和路线级公开信息，`train-query` 查询真实车次/时刻/余票（结果经 `all_info` 聚合，plan-trip 直接引用真实车次，不虚构）；
 4. `plan-trip` 读取前序结果生成工作优先的行程；
 5. `check-trip-compliance` 只依据 RAG 证据进行合规检查，无证据时返回 `unknown`。
 
@@ -394,7 +394,8 @@ PostgreSQL 的 `skill_execution_runs` 为每个执行步骤记录：
 | `event-collection` | `event_collection` | business | low | 开启 | 收集并增量更新当前出差事项 |
 | `plan-trip` | `itinerary_planning` | workflow | medium | 开启 | 组合事项、制度、外部信息和合规检查 |
 | `check-trip-compliance` | `trip_compliance` | business | high | 开启 | 基于制度证据检查行程合规性 |
-| `query-info` | `information_query` | capability | medium | 开启 | 差旅天气和公开交通信息 |
+| `query-info` | `information_query` | capability | medium | 开启 | 天气和公开交通信息（无需差旅上下文） |
+| `train-query` | `train_query` | capability | medium | 开启 | 12306 车票/车次/时刻/历时/余票，结构化喂给编排 |
 | `memory-query` | `memory_query` | capability | medium | 开启 | 查询当前用户差旅记忆 |
 | `preference` | `preference` | capability | medium | 开启 | 识别并保存差旅偏好 |
 | `chitchat` | `chitchat` | interaction | low | 开启 | 简短问候、感谢和能力引导 |

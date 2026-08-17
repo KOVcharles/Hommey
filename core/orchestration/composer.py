@@ -18,7 +18,7 @@ from .models import IntentTask, TaskResult
 logger = logging.getLogger(__name__)
 
 _ALLOWED_KINDS = {
-    "policy", "weather", "memory", "preference", "trip", "notice", "general",
+    "policy", "weather", "memory", "preference", "trip", "notice", "train", "general",
 }
 _STRUCTURED_KINDS = _ALLOWED_KINDS - {"general"}
 
@@ -149,7 +149,7 @@ class AnswerComposer:
 生成一张紧凑的统一答案卡片。要求：
 - 按用户提问顺序组织 section，不提 Agent、RAG、编排或知识库缺少天气。
 - 每个任务 Goal 至少有一个 section，并原样填写该任务的 task_id 到 goal_id；不得把不同 Goal 合并后遗漏。
-- 每个意图的 section.kind 用结果中标注的 kind（policy/weather/memory/preference/trip/notice/general）。
+- 每个意图的 section.kind 用结果中标注的 kind（policy/weather/memory/preference/trip/notice/train/general）。
 - 尽量使用 items 和 days，避免大段文字。
 - 失败任务保留对应 section，status=error，并给出一句简短提示。
 - summary 不超过80个中文字符。
@@ -163,7 +163,7 @@ JSON结构：
   "sections": [
     {{
       "goal_id": "对应任务的task_id",
-      "kind": "policy或weather或memory或preference或trip或notice或general",
+      "kind": "policy或weather或memory或preference或trip或notice或train或general",
       "title": "分区标题",
       "status": "success、partial或error",
       "body": "必要时使用的短文本",

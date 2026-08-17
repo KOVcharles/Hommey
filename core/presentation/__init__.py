@@ -10,6 +10,7 @@ from .answer_document import (
     DepartureCheckItem,
     DepartureWeather,
     PreDepartureChecklist,
+    RetrievalPresentation,
     WeatherDay,
     render_plain_text,
 )
@@ -30,6 +31,7 @@ __all__ = [
     "DepartureCheckItem",
     "DepartureWeather",
     "PreDepartureChecklist",
+    "RetrievalPresentation",
     "WeatherDay",
     "render_plain_text",
     "TripIntakeDocument",

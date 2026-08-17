@@ -1,7 +1,6 @@
 """PostgreSQL-authoritative orchestration snapshots with a local file fallback."""
 from __future__ import annotations
 
-import asyncio
 from contextlib import contextmanager
 import json
 from pathlib import Path
@@ -10,6 +9,7 @@ from typing import Callable, Optional
 import uuid
 
 from settings import MEMORY_CONFIG
+from utils.io_executor import run_blocking
 
 from .state import (
     GoalState,
@@ -84,30 +84,30 @@ class OrchestrationStateStore:
         )
         turn = WorkflowTurn(turn_id=turn_id, run_id=run_id, request_id=request_id, input=original_query)
         if self._postgres:
-            await asyncio.to_thread(self._pg_insert, state, turn)
+            await run_blocking(self._pg_insert, state, turn)
         else:
-            await asyncio.to_thread(self._file_insert, state, turn)
+            await run_blocking(self._file_insert, state, turn)
         return state
 
     async def get(self, run_id: str) -> Optional[WorkflowRunState]:
         if self._postgres:
-            return await asyncio.to_thread(self._pg_get, run_id)
-        return await asyncio.to_thread(self._file_get, run_id)
+            return await run_blocking(self._pg_get, run_id)
+        return await run_blocking(self._file_get, run_id)
 
     async def get_active(self, session_id: str) -> Optional[WorkflowRunState]:
         if self._postgres:
-            return await asyncio.to_thread(self._pg_active, session_id)
-        return await asyncio.to_thread(self._file_active, session_id)
+            return await run_blocking(self._pg_active, session_id)
+        return await run_blocking(self._file_active, session_id)
 
     async def list_resumable(self, session_id: str | None = None) -> list[WorkflowRunState]:
         if self._postgres:
-            return await asyncio.to_thread(self._pg_resumable, session_id)
-        return await asyncio.to_thread(self._file_resumable, session_id)
+            return await run_blocking(self._pg_resumable, session_id)
+        return await run_blocking(self._file_resumable, session_id)
 
     async def mutate(self, run_id: str, fn: Callable[[WorkflowRunState], None]) -> WorkflowRunState:
         if self._postgres:
-            return await asyncio.to_thread(self._pg_mutate, run_id, fn)
-        return await asyncio.to_thread(self._file_mutate, run_id, fn)
+            return await run_blocking(self._pg_mutate, run_id, fn)
+        return await run_blocking(self._file_mutate, run_id, fn)
 
     async def start_turn(
         self, run_id: str, request_id: str, text: str,
@@ -138,8 +138,8 @@ class OrchestrationStateStore:
                     goal.status = "RUNNING"
             state.waits = [wait for wait in state.waits if wait.goal_id not in selected]
         if self._postgres:
-            return await asyncio.to_thread(self._pg_start_turn, run_id, turn, apply)
-        return await asyncio.to_thread(self._file_start_turn, run_id, turn, apply)
+            return await run_blocking(self._pg_start_turn, run_id, turn, apply)
+        return await run_blocking(self._file_start_turn, run_id, turn, apply)
 
     async def add_goals(
         self, run_id: str, *, request_id: str, text: str,
@@ -192,8 +192,8 @@ class OrchestrationStateStore:
             state.status = "ACTIVE"
 
         if self._postgres:
-            return await asyncio.to_thread(self._pg_start_turn, run_id, turn, apply)
-        return await asyncio.to_thread(self._file_start_turn, run_id, turn, apply)
+            return await run_blocking(self._pg_start_turn, run_id, turn, apply)
+        return await run_blocking(self._file_start_turn, run_id, turn, apply)
 
     async def request_interrupt(
         self, run_id: str, turn_id: str, *, request_id: str | None = None,
@@ -245,9 +245,9 @@ class OrchestrationStateStore:
 
     async def set_turn_status(self, turn_id: str, status: str) -> None:
         if self._postgres:
-            await asyncio.to_thread(self._pg_turn_status, turn_id, status)
+            await run_blocking(self._pg_turn_status, turn_id, status)
         else:
-            await asyncio.to_thread(self._file_turn_status, turn_id, status)
+            await run_blocking(self._file_turn_status, turn_id, status)
 
     async def should_interrupt(self, run_id: str, turn_id: str) -> bool:
         state = await self.get(run_id)

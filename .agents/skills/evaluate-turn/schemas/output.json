@@ -1,0 +1,43 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "eval.turn.result.1",
+  "type": "object",
+  "properties": {
+    "schema_version": {"const": "eval.turn.result.1"},
+    "verdict": {"enum": ["pass", "warning", "fail", "critical_fail", "unscored"]},
+    "score": {"type": ["integer", "null"], "minimum": 0, "maximum": 100},
+    "dimensions": {
+      "type": "object",
+      "properties": {
+        "understanding": {"type": "integer", "minimum": 0, "maximum": 4},
+        "task_progress": {"type": "integer", "minimum": 0, "maximum": 4},
+        "groundedness": {"type": "integer", "minimum": 0, "maximum": 4},
+        "safety": {"type": "integer", "minimum": 0, "maximum": 4},
+        "clarity": {"type": "integer", "minimum": 0, "maximum": 4}
+      },
+      "required": ["understanding", "task_progress", "groundedness", "safety", "clarity"],
+      "additionalProperties": false
+    },
+    "reason_codes": {"type": "array", "items": {"type": "string"}},
+    "critical_errors": {"type": "array", "items": {"type": "string"}},
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "code": {"type": "string"},
+          "severity": {"enum": ["low", "medium", "high", "critical"]},
+          "message": {"type": "string"},
+          "subject_ref": {"type": "string"},
+          "evidence_refs": {"type": "array", "items": {"type": "string"}}
+        },
+        "required": ["code", "severity", "message", "subject_ref", "evidence_refs"],
+        "additionalProperties": false
+      }
+    },
+    "review_required": {"type": "boolean"},
+    "summary": {"type": "string"}
+  },
+  "required": ["schema_version", "verdict", "score", "dimensions", "reason_codes", "critical_errors", "findings", "review_required", "summary"],
+  "additionalProperties": false
+}

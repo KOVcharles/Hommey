@@ -33,15 +33,14 @@ def create_users_router(manager):
     @router.get("/status")
     async def get_status(user_id: str, current_user: User = Depends(require_path_user)):
         """获取用户实例状态"""
-        return manager.get_status(user_id)
+        instance = await manager.get_initialized_user(user_id)
+        return {"initialized": instance.initialized, "error": instance.init_error}
 
     @router.get("/is-new")
     async def is_new_user(user_id: str, current_user: User = Depends(require_path_user)):
         """检查是否为新用户"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            return {"is_new": True}
         try:
+            instance = await manager.get_initialized_user(user_id)
             is_new = await instance.is_new_user()
             return {"is_new": is_new}
         except Exception:
@@ -50,18 +49,8 @@ def create_users_router(manager):
     @router.get("/summary")
     async def get_user_summary(request: Request, user_id: str, current_user: User = Depends(require_path_user)):
         """获取用户摘要信息（右侧面板）"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            return {
-                "user_id": user_id,
-                "name_display": user_id,
-                "preferences": [],
-                "member_level": "",
-                "member_tag": "",
-                "initialized": False,
-                "role": current_user.role,
-            }
         try:
+            instance = await manager.get_initialized_user(user_id)
             summary = await instance.get_user_summary()
             summary["initialized"] = True
             summary["role"] = current_user.role
@@ -80,9 +69,7 @@ def create_users_router(manager):
 
     @router.get("/trip/active")
     async def get_active_trip(user_id: str, current_user: User = Depends(require_path_user)):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            return {"active_trip": None}
+        instance = await manager.get_initialized_user(user_id)
         return await instance.get_active_trip()
 
     return router

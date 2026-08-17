@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 64" role="img" aria-labelledby="title desc">
+  <title id="title">Hommey 标志方案 D：静谧路线</title>
+  <desc id="desc">两个同尺寸圆点由一条接近对角线的极简缓弧连接</desc>
+  <path d="M24 45C41 45 51 39 62 29C73 19 82 15 94 15" fill="none" stroke="#252521" stroke-width="5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="15" cy="45" r="9" fill="none" stroke="#252521" stroke-width="5"/>
+  <circle cx="103" cy="15" r="9" fill="none" stroke="#B07A4F" stroke-width="5"/>
+</svg>

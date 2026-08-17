@@ -5,7 +5,8 @@ import re
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List, Optional
 
-from .milvus_store import _fresh_versions, filter_relevant_results, rerank_results
+from .milvus_store import _fresh_versions
+from .ranking import filter_relevant_results, rerank_results
 from .schemas import DocumentChunk, RetrievalResult
 
 
@@ -17,6 +18,14 @@ class VectorStore(ABC):
     @abstractmethod
     def search(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
         raise NotImplementedError
+
+    def search_dense(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
+        """Dense-only extension point used by HyDE.
+
+        Backends without a separate dense implementation may retain the
+        compatibility fallback; the production Milvus backend overrides it.
+        """
+        return self.search(query, top_k=top_k)
 
     @abstractmethod
     def stats(self) -> Dict[str, Any]:
@@ -86,6 +95,12 @@ class MilvusVectorStore(VectorStore):
 
     def search(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
         return [_result_from_dict(item) for item in self.store.hybrid_search(query, top_k=top_k)]
+
+    def search_dense(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
+        return [
+            _result_from_dict(item)
+            for item in self.store.vector_search(query, top_k or self.store.vector_top_k)
+        ]
 
     def stats(self) -> Dict[str, Any]:
         return self.store.stats()
@@ -176,6 +191,44 @@ class InMemoryVectorStore(VectorStore):
             "added_count": len(replacement),
             "total_count": len(replacement),
         }
+
+
+def create_vector_store(config: Any) -> VectorStore:
+    """Build the configured backend through one production construction seam."""
+    backend = str(getattr(config, "vector_backend", "milvus_lite") or "milvus_lite").lower()
+    if backend == "memory":
+        return InMemoryVectorStore()
+
+    common = {
+        "collection_name": config.collection_name,
+        "embedding_model": config.embedding_model,
+        "embedding_backend": config.embedding_backend,
+        "embedding_api_key": config.embedding_api_key,
+        "embedding_base_url": config.embedding_base_url,
+        "embedding_dimension": config.embedding_dimension,
+        "embedding_batch_size": config.embedding_batch_size,
+        "embedding_timeout_sec": config.embedding_timeout_sec,
+        "embedding_max_retries": config.embedding_max_retries,
+        "embedding_retry_base_delay_sec": config.embedding_retry_base_delay_sec,
+        "embedding_retry_max_delay_sec": config.embedding_retry_max_delay_sec,
+        "embedding_cache_size": config.embedding_cache_size,
+        "top_k": config.top_k,
+        "vector_top_k": config.vector_top_k,
+        "bm25_top_k": config.bm25_top_k,
+        "sparse_backend": config.bm25_backend,
+    }
+    if backend == "postgres":
+        from .postgres_vector_store import PostgresVectorStore
+
+        return PostgresVectorStore(postgres_dsn=config.postgres_dsn, **common)
+    if backend in {"milvus", "milvus_lite"}:
+        return MilvusVectorStore(
+            knowledge_base_path=config.knowledge_base_path,
+            **common,
+        )
+    raise ValueError(
+        f"Unsupported RAG vector backend: {backend}. Use postgres, milvus_lite, or memory."
+    )
 
 
 def chunk_key(chunk: DocumentChunk) -> tuple[str, str, str]:

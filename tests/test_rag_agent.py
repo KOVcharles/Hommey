@@ -64,9 +64,11 @@ def test_rag_agent_expands_broad_standard_retrieval_without_weather_terms():
     agent = object.__new__(module.RAGKnowledgeAgent)
     agent.retriever = FakeRetriever()
 
-    documents = agent._retrieve_for_question(
+    import asyncio
+
+    documents, diagnostics = asyncio.run(agent._retrieve_for_question(
         "南京 查询公司的差旅标准"
-    )
+    ))
 
     assert agent.retriever.queries[0] == "南京 差旅标准"
     assert any("南京 出差 住宿标准" == query for query in agent.retriever.queries)
@@ -74,6 +76,7 @@ def test_rag_agent_expands_broad_standard_retrieval_without_weather_terms():
     assert any("南京 出差 餐饮补贴 报销标准" == query for query in agent.retriever.queries)
     assert all("天气" not in query and "规划" not in query for query in agent.retriever.queries)
     assert len(documents) == 4
+    assert diagnostics is None
 
 
 def test_rag_standard_expansion_is_destination_driven_not_domestic_hardcoded():
@@ -98,7 +101,9 @@ def test_rag_standard_expansion_is_destination_driven_not_domestic_hardcoded():
 
     agent = object.__new__(module.RAGKnowledgeAgent)
     agent.retriever = FakeRetriever()
-    agent._retrieve_for_question("查询东京的差旅标准")
+    import asyncio
+
+    asyncio.run(agent._retrieve_for_question("查询东京的差旅标准"))
 
     assert "东京 出差 住宿标准" in agent.retriever.queries
     assert "东京 出差 交通标准" in agent.retriever.queries

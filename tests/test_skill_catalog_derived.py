@@ -31,8 +31,8 @@ def test_every_intent_skill_declares_section_kind_and_progress_key():
         assert progress_key_for_intent(intent), f"{intent} 缺少 progress_key"
 
 
-def test_section_kind_is_one_of_seven_answer_kinds():
-    allowed = {"policy", "weather", "memory", "preference", "trip", "notice", "general"}
+def test_section_kind_is_one_of_eight_answer_kinds():
+    allowed = {"policy", "weather", "memory", "preference", "trip", "notice", "train", "general"}
     for intent in SKILL_INTENTS:
         assert section_kind_for_intent(intent) in allowed, intent
 
@@ -68,7 +68,7 @@ def test_plan_trip_declares_pause_and_side_effect():
     assert side_effect_allowed("itinerary_planning") is True
     assert primary_agent_for_intent("itinerary_planning") == "itinerary_planning"
     assert suppress_agents_for_intent("itinerary_planning") == [
-        "event_collection", "rag_knowledge", "information_query",
+        "event_collection", "rag_knowledge", "information_query", "train_query",
     ]
 
 
@@ -78,6 +78,7 @@ def test_plan_trip_execution_template_matches_declared_steps():
         ("event_collection", 1, "abort"),
         ("rag_knowledge", 2, "abort"),
         ("information_query", 2, "continue"),
+        ("train_query", 2, "continue"),
         ("itinerary_planning", 3, "abort"),
         ("trip_compliance", 4, "continue"),
     ]
@@ -114,6 +115,16 @@ def test_query_info_result_rules_replace_executor_special_case():
         "error_code": "INFORMATION_QUERY_UNAVAILABLE",
     }
     assert result_rules_for_intent("rag_knowledge") == {}
+
+
+def test_train_query_result_rules_replace_executor_special_case():
+    rules = result_rules_for_intent("train_query")
+    assert rules == {
+        "error_when_field": "query_success",
+        "error_code": "TRAIN_QUERY_UNAVAILABLE",
+    }
+    assert confidence_threshold_for_intent("train_query") == 0.75
+    assert progress_key_for_intent("train_query") == "train_query_searching"
 
 
 def test_scope_forbidden_and_expansion_terms_are_declarative():

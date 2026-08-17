@@ -8,7 +8,6 @@ import math
 import os
 import re
 import shutil
-import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path, PosixPath
@@ -16,7 +15,6 @@ from typing import Any, Dict, List, Optional
 
 from .embedder import create_text_embedder
 from .schemas import KnowledgeChunk, RetrievalResult
-from .trace import append_retrieval_trace, build_retrieval_trace, new_trace_id
 
 logger = logging.getLogger(__name__)
 _EMBEDDING_MODEL_CACHE: Dict[str, Any] = {}
@@ -519,67 +517,14 @@ class MilvusKnowledgeStore:
         # behavior and scores exactly; a future native-sparse backend plugs in
         # via HOMMEY_RAG_BM25_BACKEND without touching hybrid_search/fusion.
         # Imported lazily to avoid a module cycle (sparse imports _tokenize here).
-        from .sparse import create_sparse_index
+        from .hybrid import bm25_search
 
-        docs = self.fetch_all_documents()
-        if not docs:
-            return []
-
-        index = create_sparse_index(self.sparse_backend)
-        index.index(docs)
-        return index.search(query, top_k or self.bm25_top_k)
+        return bm25_search(self, query, top_k)
 
     def hybrid_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
-        start = time.perf_counter()
-        trace_id = new_trace_id()
-        vector_docs = self.vector_search(query, self.vector_top_k)
-        bm25_docs = self.bm25_search(query, self.bm25_top_k)
-        final_k = top_k or self.top_k
-        # Keep the union large enough for reranking.  Using only the maximum
-        # branch size can discard a keyword-only candidate before the reranker
-        # sees it when vector and BM25 result sets are mostly disjoint.
-        candidate_k = max(final_k, self.vector_top_k + self.bm25_top_k)
-        fused_docs = fuse_results(vector_docs, bm25_docs, candidate_k)
-        reranked_docs = rerank_results(fused_docs, query)
-        filtered_docs = filter_relevant_results(reranked_docs, query)
-        final = (filtered_docs or reranked_docs)[:final_k]
-        for doc in final:
-            doc["retrieval_trace_id"] = trace_id
-        elapsed_ms = round((time.perf_counter() - start) * 1000, 2)
-        append_retrieval_trace(
-            build_retrieval_trace(
-                trace_id=trace_id,
-                query=query,
-                expanded_query=query,
-                top_k=final_k,
-                docs=final,
-                metrics={
-                    "candidates": len(fused_docs),
-                    "kept": len(final),
-                    "dropped_by_filter": (
-                        max(0, len(reranked_docs) - len(filtered_docs))
-                        if filtered_docs
-                        else 0
-                    ),
-                    "reranked": len(reranked_docs),
-                    "latency_ms": elapsed_ms,
-                },
-                index_version=str(
-                    ((final[0].get("metadata") or {}).get("index_version") if final else "")
-                    or ""
-                ),
-                collection_name=self.collection_name,
-            )
-        )
-        logger.info(
-            "RAG hybrid search completed in %.3fs (vector=%d, bm25=%d, fused=%d, filtered=%d)",
-            elapsed_ms / 1000.0,
-            len(vector_docs),
-            len(bm25_docs),
-            len(fused_docs),
-            len(filtered_docs),
-        )
-        return final
+        from .hybrid import hybrid_search
+
+        return hybrid_search(self, query, top_k)
 
     def count(self) -> int:
         stats = self.client.get_collection_stats(self.collection_name)
@@ -833,3 +778,13 @@ def _tokenize(text: str) -> List[str]:
         for start in range(0, len(run) - width + 1)
     ]
     return word_tokens + phrase_tokens + zh_tokens + zh_ngrams
+
+
+# Compatibility re-exports: callers historically imported ranking helpers from
+# this module.  Runtime binding now points every backend to the shared module.
+from .ranking import (  # noqa: E402,F401
+    _tokenize as _tokenize,
+    filter_relevant_results as filter_relevant_results,
+    fuse_results as fuse_results,
+    rerank_results as rerank_results,
+)

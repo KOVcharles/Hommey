@@ -16,6 +16,11 @@ from rag.encodings import decode_text_bytes, detect_encoding
 from rag.pipeline import RAGPipeline
 from webui_new.core.errors import BusinessError
 
+try:
+    from rag.refresh_jobs import PostgresRAGRefreshJobRepository
+except ImportError:  # pragma: no cover - only relevant in reduced installations
+    PostgresRAGRefreshJobRepository = object  # type: ignore[misc,assignment]
+
 logger = logging.getLogger(__name__)
 
 # Phase 2 (audit §11): DOCX/CSV/XLSX are now first-class knowledge sources.
@@ -40,6 +45,7 @@ class KnowledgeBaseManagementService:
         *,
         config: RAGPipelineConfig | None = None,
         ingestion_runner: Callable[[Callable[[str, int], None]], dict] | None = None,
+        job_repository: PostgresRAGRefreshJobRepository | None = None,
     ):
         self.documents_dir = Path(documents_dir).resolve()
         self.knowledge_base_path = Path(knowledge_base_path).resolve()
@@ -56,6 +62,7 @@ class KnowledgeBaseManagementService:
             }
         )
         self._ingestion_runner = ingestion_runner or self._run_pipeline
+        self.job_repository = job_repository
         self._lock = threading.Lock()
         self._source_lock = threading.Lock()
         self._job = self._initial_status()
@@ -65,13 +72,14 @@ class KnowledgeBaseManagementService:
             return self._upload_locked(filename, content)
 
     def _upload_locked(self, filename: str, content: bytes) -> dict:
-        with self._lock:
-            if self._job.get("status") == "running":
-                raise BusinessError(
-                    "KNOWLEDGE_REFRESH_RUNNING",
-                    "知识库正在刷新，完成后再上传新文档",
-                    status_code=409,
-                )
+        if self.job_repository is None:
+            with self._lock:
+                if self._job.get("status") == "running":
+                    raise BusinessError(
+                        "KNOWLEDGE_REFRESH_RUNNING",
+                        "知识库正在刷新，完成后再上传新文档",
+                        status_code=409,
+                    )
         safe_name = self._safe_filename(filename)
         file_type = Path(safe_name).suffix.lower().lstrip(".")
         if file_type not in SUPPORTED_UPLOAD_TYPES:
@@ -97,35 +105,62 @@ class KnowledgeBaseManagementService:
         except ValueError as exc:
             raise BusinessError("KNOWLEDGE_FILENAME_INVALID", "文档名称不合法", status_code=400) from exc
 
-        existed = destination.exists()
-        if existed:
-            raise BusinessError(
-                "KNOWLEDGE_DOCUMENT_EXISTS",
-                "同名文档已存在。为避免误覆盖制度文件，请先使用新文件名上传",
-                status_code=409,
-            )
-        temporary = self.documents_dir / f".{uuid.uuid4().hex}.upload"
-        try:
-            with temporary.open("wb") as handle:
-                handle.write(content)
-                handle.flush()
-                os.fsync(handle.fileno())
-            os.replace(temporary, destination)
-        finally:
-            if temporary.exists():
-                temporary.unlink()
+        published = False
 
-        detected_encoding = None
-        if file_type in {"txt", "md", "csv"}:
-            detected_encoding = detect_encoding(content)
-        return {
-            "filename": safe_name,
-            "file_type": file_type,
-            "size_bytes": len(content),
-            "status": "updated" if existed else "created",
-            "index_status": "pending",
-            "encoding": detected_encoding,
-        }
+        def publish() -> dict:
+            nonlocal published
+            if destination.exists():
+                raise BusinessError(
+                    "KNOWLEDGE_DOCUMENT_EXISTS",
+                    "同名文档已存在。为避免误覆盖制度文件，请先使用新文件名上传",
+                    status_code=409,
+                )
+            temporary = self.documents_dir / f".{uuid.uuid4().hex}.upload"
+            try:
+                with temporary.open("xb") as handle:
+                    handle.write(content)
+                    handle.flush()
+                    os.fsync(handle.fileno())
+                # Hard-link publication is atomic and refuses to overwrite a file
+                # created concurrently by another web worker.
+                os.link(temporary, destination)
+                published = True
+            except FileExistsError as exc:
+                raise BusinessError(
+                    "KNOWLEDGE_DOCUMENT_EXISTS",
+                    "同名文档已存在。为避免误覆盖制度文件，请先使用新文件名上传",
+                    status_code=409,
+                ) from exc
+            finally:
+                if temporary.exists():
+                    temporary.unlink()
+
+            detected_encoding = None
+            if file_type in {"txt", "md", "csv"}:
+                detected_encoding = detect_encoding(content)
+            return {
+                "filename": safe_name,
+                "file_type": file_type,
+                "size_bytes": len(content),
+                "status": "created",
+                "index_status": "pending",
+                "encoding": detected_encoding,
+            }
+
+        try:
+            if self.job_repository is None:
+                return publish()
+            result, generation = self.job_repository.run_source_change(publish)
+            return {**result, "source_generation": generation}
+        except Exception:
+            # The file is new and immutable. If the PostgreSQL generation commit
+            # fails, remove only this process's just-published file.
+            if published:
+                try:
+                    destination.unlink()
+                except OSError:
+                    logger.exception("Failed to roll back unpublished knowledge source")
+            raise
 
     def document_index_status(self, document_id: str, path: Path) -> str:
         manifest = self._read_manifest()
@@ -156,6 +191,17 @@ class KnowledgeBaseManagementService:
         return statuses
 
     def start_refresh(self, requested_by: str) -> dict:
+        if self.job_repository is not None:
+            from rag.refresh_jobs import ActiveRefreshJobError
+
+            try:
+                return self.job_repository.enqueue(str(requested_by), self.source_snapshot)
+            except ActiveRefreshJobError as exc:
+                raise BusinessError(
+                    "KNOWLEDGE_REFRESH_RUNNING",
+                    "知识库正在刷新，请等待当前任务完成",
+                    status_code=409,
+                ) from exc
         with self._source_lock:
             with self._lock:
                 if self._job.get("status") == "running":
@@ -182,8 +228,35 @@ class KnowledgeBaseManagementService:
         return payload
 
     def status(self) -> dict:
+        if self.job_repository is not None:
+            return self.job_repository.latest_status()
         with self._lock:
             return dict(self._job)
+
+    def source_snapshot(self) -> list[dict]:
+        """Freeze the immutable shared-volume files included in one refresh."""
+        snapshot: list[dict] = []
+        if not self.documents_dir.exists():
+            return snapshot
+        for path in sorted(self.documents_dir.rglob("*")):
+            if not path.is_file() or path.name.startswith("."):
+                continue
+            if path.suffix.lower().lstrip(".") not in SUPPORTED_UPLOAD_TYPES:
+                continue
+            resolved = path.resolve()
+            try:
+                document_id = resolved.relative_to(self.documents_dir).as_posix()
+            except ValueError:
+                continue
+            stat = resolved.stat()
+            snapshot.append(
+                {
+                    "document_id": document_id,
+                    "sha256": self._sha256(resolved),
+                    "size_bytes": stat.st_size,
+                }
+            )
+        return snapshot
 
     def _refresh_worker(self) -> None:
         try:
@@ -233,7 +306,7 @@ class KnowledgeBaseManagementService:
                 return
             self._job.update({"stage": stage, "progress": max(0, min(99, int(progress)))})
 
-    def _write_manifest(self, report: dict) -> None:
+    def _write_manifest(self, report: dict, source_manifest: list[dict] | None = None) -> dict:
         """Assemble the v2 manifest (audit §6.1.5 二).
 
         The v1 shape (refreshed_at / documents / report) is preserved so the
@@ -267,7 +340,23 @@ class KnowledgeBaseManagementService:
         )
 
         documents = {}
-        if self.documents_dir.exists():
+        if source_manifest is not None:
+            for source in source_manifest:
+                document_id = str(source.get("document_id") or "")
+                if not document_id:
+                    continue
+                entry = {"sha256": source.get("sha256"), "indexed_at": _utc_now()}
+                detail = report_documents.get(document_id)
+                if isinstance(detail, dict):
+                    entry["document_version"] = detail.get("document_version")
+                    entry["parser"] = {
+                        "name": detail.get("parser_name"),
+                        "version": detail.get("parser_version"),
+                    }
+                    entry["pages"] = detail.get("pages") or {}
+                    entry["chunk_count"] = detail.get("chunk_count", 0)
+                documents[document_id] = entry
+        elif self.documents_dir.exists():
             for path in self.documents_dir.rglob("*"):
                 if not path.is_file() or path.suffix.lower().lstrip(".") not in SUPPORTED_UPLOAD_TYPES:
                     continue
@@ -302,8 +391,13 @@ class KnowledgeBaseManagementService:
         temporary = self.manifest_path.with_suffix(".tmp")
         temporary.write_text(json.dumps(payload, ensure_ascii=False, indent=2), encoding="utf-8")
         os.replace(temporary, self.manifest_path)
+        return payload
 
     def _read_manifest(self) -> dict:
+        if self.job_repository is not None:
+            manifest = self.job_repository.latest_manifest()
+            if manifest:
+                return manifest
         try:
             return json.loads(self.manifest_path.read_text(encoding="utf-8"))
         except (OSError, ValueError, TypeError):

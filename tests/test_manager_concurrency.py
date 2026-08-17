@@ -47,15 +47,22 @@ class FakeDistributedLock:
 
 
 class FakeSemaphore:
-    """模拟 create_redis_semaphore 返回的全局信号量。"""
-    def __init__(self, acquire_result=True):
+    """模拟 create_redis_semaphore 返回的全局信号量（token 化租约接口）。"""
+    def __init__(self, acquire_result=True, renew_result=True, renew_exc=None):
         self.acquire_result = acquire_result
+        self.renew_result = renew_result
+        self.renew_exc = renew_exc
         self.acquire_calls = 0
         self.released = False
 
     async def acquire(self):
         self.acquire_calls += 1
         return self.acquire_result
+
+    async def renew(self):
+        if self.renew_exc is not None:
+            raise self.renew_exc
+        return self.renew_result
 
     async def release(self):
         self.released = True
@@ -186,6 +193,25 @@ async def test_process_message_semaphore_timeout_raises_global_limit(monkeypatch
 
 
 @pytest.mark.asyncio
+async def test_process_message_redis_unavailable_fails_closed(monkeypatch):
+    """Redis 不可用时 acquire() 抛 RedisError → REDIS_UNAVAILABLE（fail closed，§3.3）。"""
+    from redis.exceptions import RedisError
+
+    class FailingRedisLock(FakeDistributedLock):
+        async def acquire(self):
+            raise RedisError("connection refused")
+
+    manager = WebHommeyManager()
+    _mock_redis(monkeypatch, lock=FailingRedisLock("hommey:lock:user:u1"))
+    manager._instances["u1"] = FakeInstance(StubProcess().process)
+
+    with pytest.raises(UpstreamError) as excinfo:
+        await manager.process_message("u1", "m")
+    assert excinfo.value.code == "REDIS_UNAVAILABLE"
+    assert excinfo.value.retryable is True
+
+
+@pytest.mark.asyncio
 async def test_process_message_aborts_when_lock_lost(monkeypatch):
     """心跳续约失败（锁易主）时中止在途处理，抛 LOCK_LOST（Important 3）。"""
     manager = WebHommeyManager()
@@ -237,6 +263,21 @@ class FakeStreamInstance:
         yield {"type": "done", "preferences_updated": False, "timings": {}}
 
 
+class BlockingStreamInstance:
+    """Yield once, then block so lock-loss detection must race __anext__()."""
+    def __init__(self):
+        self.initialized = True
+        self.closed = asyncio.Event()
+        self._never = asyncio.Event()
+
+    async def stream_message(self, message, request_id=None, attachment_ids=None):
+        try:
+            yield {"type": "status", "phase": "analyzing"}
+            await self._never.wait()
+        finally:
+            self.closed.set()
+
+
 @pytest.mark.asyncio
 async def test_process_message_lazy_initializes_missing_instance(monkeypatch):
     """跨 worker 场景：当前 worker 无该用户实例时，process_message 先懒初始化再处理（不 deadlock）。"""
@@ -275,3 +316,44 @@ async def test_stream_message_lazy_initializes_missing_instance(monkeypatch):
 
     assert init_calls == ["u1"]
     assert events[-1]["type"] == "done"
+
+
+@pytest.mark.asyncio
+async def test_stream_message_aborts_while_waiting_for_next_event(monkeypatch):
+    """续约失败必须立即打断阻塞中的流，不能等下一条事件才发现。"""
+    manager = WebHommeyManager()
+    lock = FakeDistributedLock("hommey:lock:user:u1", renew_result=False)
+    _mock_redis(monkeypatch, lock=lock)
+    _patch_concurrency(monkeypatch, lock_heartbeat_interval_sec=0.005)
+    instance = BlockingStreamInstance()
+    manager._instances["u1"] = instance
+
+    stream = manager.stream_message("u1", "hello")
+    assert (await anext(stream))["type"] == "status"
+    with pytest.raises(UpstreamError) as excinfo:
+        await asyncio.wait_for(anext(stream), timeout=0.2)
+
+    assert excinfo.value.code == "LOCK_LOST"
+    assert instance.closed.is_set()
+    assert lock.released is True
+
+
+@pytest.mark.asyncio
+async def test_user_state_operation_uses_user_lock_without_global_slot(monkeypatch):
+    """短状态操作跨 worker 串行，但不占用昂贵请求的全局 LLM 槽位。"""
+    manager = WebHommeyManager()
+    lock = FakeDistributedLock("hommey:lock:user:u1")
+    monkeypatch.setattr(manager_module, "create_distributed_lock", lambda _key: lock)
+    monkeypatch.setattr(
+        manager_module,
+        "create_redis_semaphore",
+        lambda: (_ for _ in ()).throw(AssertionError("state operation used global slot")),
+    )
+    instance = FakeInstance(StubProcess().process)
+    instance.value = "ok"
+    manager._instances["u1"] = instance
+
+    result = await manager.run_user_state_operation("u1", lambda item: item.value)
+
+    assert result == "ok"
+    assert lock.released is True

@@ -9,6 +9,7 @@ from settings import RAG_CONFIG
 
 @dataclass(frozen=True)
 class RAGPipelineConfig:
+    vector_backend: str = "postgres"
     embedding_backend: str = "siliconflow"
     embedding_model: str = "BAAI/bge-m3"
     embedding_api_key: str | None = None
@@ -26,6 +27,7 @@ class RAGPipelineConfig:
     documents_dir: str = "data/documents"
     knowledge_base_path: str = "data/rag_knowledge"
     collection_name: str = "business_travel_knowledge"
+    postgres_dsn: str = ""
     chunk_size: int = 600
     chunk_overlap: int = 100
     # Phase-1 token-based chunk sizing (audit §7 P7): min/max/overlap in tokens.
@@ -45,6 +47,7 @@ class RAGPipelineConfig:
     @classmethod
     def from_settings(cls, overrides: Optional[Dict[str, Any]] = None) -> "RAGPipelineConfig":
         data = {
+            "vector_backend": RAG_CONFIG.get("vector_backend", cls.vector_backend),
             "embedding_backend": RAG_CONFIG.get("embedding_backend", cls.embedding_backend),
             "embedding_model": RAG_CONFIG.get("embedding_model", cls.embedding_model),
             "embedding_api_key": RAG_CONFIG.get("embedding_api_key", cls.embedding_api_key),
@@ -64,6 +67,7 @@ class RAGPipelineConfig:
             "documents_dir": RAG_CONFIG.get("documents_dir", cls.documents_dir),
             "knowledge_base_path": RAG_CONFIG.get("knowledge_base_path", cls.knowledge_base_path),
             "collection_name": RAG_CONFIG.get("collection_name", cls.collection_name),
+            "postgres_dsn": RAG_CONFIG.get("postgres_dsn", cls.postgres_dsn),
             "chunk_size": RAG_CONFIG.get("chunk_size", cls.chunk_size),
             "chunk_overlap": RAG_CONFIG.get("chunk_overlap", cls.chunk_overlap),
             "chunk_min_tokens": RAG_CONFIG.get("chunk_min_tokens", cls.chunk_min_tokens),

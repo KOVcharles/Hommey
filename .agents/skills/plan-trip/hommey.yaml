@@ -15,7 +15,7 @@ pause:
 answer:
   section_kind: trip
   require_section: true
-  suppress_agents: [event_collection, rag_knowledge, information_query]
+  suppress_agents: [event_collection, rag_knowledge, information_query, train_query]
   primary_agent: itinerary_planning
 memory_hooks:
   - agent: itinerary_planning
@@ -31,6 +31,8 @@ requires:
     purpose: 获取公司差旅制度证据
   - skill: query-info
     purpose: 查询目的地天气和公开交通信息
+  - skill: train-query
+    purpose: 查询真实高铁/火车车次、时刻与余票，供行程编排引用
   - skill: check-trip-compliance
     purpose: 检查最终方案是否符合制度
 execution:
@@ -61,6 +63,17 @@ execution:
     result_rules:
       error_when_field: query_success
       error_code: INFORMATION_QUERY_UNAVAILABLE
+  - skill: train-query
+    agent_name: train_query
+    priority: 2
+    on_failure: continue
+    max_retries: 1
+    reason: 基于已收集的出差事项查询真实高铁/火车车次与余票
+    expected_output: 带核验提醒的真实车次、时刻、历时、票价和余票
+    query: 查询 {origin}→{destination} 在 {start_date} 的火车车次与余票
+    result_rules:
+      error_when_field: query_success
+      error_code: TRAIN_QUERY_UNAVAILABLE
   - skill: plan-trip
     agent_name: itinerary_planning
     priority: 3

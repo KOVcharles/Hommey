@@ -15,7 +15,7 @@ import math
 from abc import ABC, abstractmethod
 from typing import Any, Dict, List
 
-from .milvus_store import _tokenize
+from .ranking import _tokenize
 
 BM25_K1 = 1.5
 BM25_B = 0.75

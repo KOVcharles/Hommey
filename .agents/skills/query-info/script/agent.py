@@ -167,9 +167,10 @@ class InformationQueryAgent(AgentBase):
         start_date = trip.get("start_date", "")
         end_date = trip.get("end_date") or f"约{trip.get('duration_days')}天"
         weather_query = f"{destination} {start_date} 天气"
+        # 车次/高铁/火车时刻归 train-query，此处只保留航班与机场/车站接驳。
         transport_query = (
-            f"{origin}到{destination} {start_date} 商务出行 高铁 航班 交通方式 "
-            "官方时刻与机场或车站接驳"
+            f"{origin}到{destination} {start_date} 商务出行 航班 交通方式 "
+            "机场或车站接驳"
         )
         weather, transport = await asyncio.gather(
             # The collected trip is the authority for the destination. Passing

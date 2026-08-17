@@ -80,43 +80,84 @@ class DistributedLock:
         return bool(await self._client.eval(_RELEASE_LUA, 1, self._key, self._token))
 
 
-# ── RedisSemaphore ─────────────────────────────────────────────────
+# ── RedisSemaphore (tokenized lease) ────────────────────────────────
+#
+# 每个持有者持有唯一 token，作为 Redis ZSET 的 member；score 是租约过期时间
+# （Unix 秒）。相比"单计数器 + 整体 TTL"，单个长请求不会在跨过 TTL 后让整个
+# 计数器归零、静默突破并发上限：每个 token 独立续约、独立过期。时间取 Redis
+# 服务端（TIME），避免跨 worker 时钟偏移。全部用 Lua 原子执行。
 
 _SEM_ACQUIRE_LUA = """
-local n = redis.call('INCR', KEYS[1])
-if n <= tonumber(ARGV[1]) then
-    redis.call('EXPIRE', KEYS[1], tonumber(ARGV[2]))
-    return 1
+local now = tonumber(redis.call('TIME')[1])
+redis.call('ZREMRANGEBYSCORE', KEYS[1], '-inf', now)
+if redis.call('ZCARD', KEYS[1]) >= tonumber(ARGV[1]) then
+    return 0
 end
-redis.call('DECR', KEYS[1])
-return 0
+redis.call('ZADD', KEYS[1], now + tonumber(ARGV[2]), ARGV[3])
+return 1
+"""
+
+_SEM_RENEW_LUA = """
+if not redis.call('ZSCORE', KEYS[1], ARGV[1]) then
+    return 0
+end
+local now = tonumber(redis.call('TIME')[1])
+redis.call('ZADD', KEYS[1], now + tonumber(ARGV[2]), ARGV[1])
+return 1
 """
 
 _SEM_RELEASE_LUA = """
-local n = redis.call('DECR', KEYS[1])
-if n < 0 then
-    redis.call('SET', KEYS[1], 0)
+if redis.call('ZREM', KEYS[1], ARGV[1]) == 1 then
+    return 1
 end
-return 1
+return 0
 """
 
 
 class RedisSemaphore:
+    """Strict lease semaphore shared across workers.
+
+    单个对象建模一个已持有的槽位：``acquire()`` 铸一个唯一 token 并作为 ZSET
+    member 插入（score 为租约过期时间）。持有方调用 ``renew()`` 延长自己的租约，
+    ``release()`` 只删除自己的 token——崩溃持有方的 token 会自然过期，不影响他人。
+    """
+
     def __init__(self, key: str, max_concurrency: int = 8, ttl_sec: int = 60):
         self._client = get_redis_coordination_client()
         self._key = key
         self._max = max(1, int(max_concurrency))
         self._ttl_sec = max(1, int(ttl_sec))
+        self._token: Optional[str] = None
+
+    @property
+    def token(self) -> str:
+        return self._token or ""
 
     async def acquire(self) -> bool:
+        token = uuid.uuid4().hex
+        acquired = bool(
+            await self._client.eval(
+                _SEM_ACQUIRE_LUA, 1, self._key, self._max, self._ttl_sec, token
+            )
+        )
+        self._token = token if acquired else None
+        return acquired
+
+    async def renew(self) -> bool:
+        if not self._token:
+            return False
         return bool(
             await self._client.eval(
-                _SEM_ACQUIRE_LUA, 1, self._key, self._max, self._ttl_sec
+                _SEM_RENEW_LUA, 1, self._key, self._token, self._ttl_sec
             )
         )
 
     async def release(self) -> None:
-        await self._client.eval(_SEM_RELEASE_LUA, 1, self._key)
+        token = self._token
+        self._token = None
+        if not token:
+            return
+        await self._client.eval(_SEM_RELEASE_LUA, 1, self._key, token)
 
 
 # ── RedisCircuitBreaker ────────────────────────────────────────────
@@ -264,7 +305,7 @@ def create_redis_semaphore() -> RedisSemaphore:
     return RedisSemaphore(
         "hommey:global:semaphore",
         max_concurrency=int(cc.get("global_concurrency_limit", 8)),
-        ttl_sec=int(cc.get("semaphore_ttl_sec", 60)),
+        ttl_sec=int(cc.get("semaphore_lease_ttl_sec", 45)),
     )
 
 

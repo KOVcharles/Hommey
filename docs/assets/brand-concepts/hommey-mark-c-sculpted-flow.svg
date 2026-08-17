@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 64" role="img" aria-labelledby="title desc">
+  <title id="title">Hommey 标志方案 C：雕塑流线</title>
+  <desc id="desc">两个同尺寸圆点由一条起步平稳、中段上扬的精致曲线连接</desc>
+  <path d="M24 44C42 45 49 43 55 35C63 24 68 15 82 14C86 14 90 14 94 14" fill="none" stroke="#252521" stroke-width="5.5" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="15" cy="44" r="9" fill="none" stroke="#252521" stroke-width="5.5"/>
+  <circle cx="103" cy="14" r="9" fill="none" stroke="#A85249" stroke-width="5.5"/>
+</svg>

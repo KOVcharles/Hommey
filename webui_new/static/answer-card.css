@@ -21,6 +21,23 @@
     letter-spacing: .06em;
     text-transform: uppercase;
 }
+.answer-retrieval-badge {
+    margin-left: 5px;
+    padding: 3px 7px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink-3);
+    background: var(--soft);
+    font-size: 10px;
+    font-weight: 610;
+    letter-spacing: 0;
+}
+.answer-retrieval-badge.enhanced {
+    color: var(--route);
+    border-color: color-mix(in srgb, var(--route) 28%, var(--line));
+    background: color-mix(in srgb, var(--route) 8%, var(--panel));
+}
+.answer-retrieval-badge.fallback { color: var(--ink-2); }
 .answer-card-route {
     width: 18px;
     height: 1px;
@@ -221,6 +238,16 @@
     transition: color .2s ease, border-color .2s ease, background .2s ease, transform .2s var(--ease);
 }
 .answer-section-toggle:hover { color: var(--ink); border-color: color-mix(in srgb, var(--sage) 45%, var(--line)); background: var(--soft); }
+.answer-section-toggle:active { transform: scale(.97); }
+.answer-section-toggle-icon {
+    width: 6px;
+    height: 6px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: translateY(-1px) rotate(45deg);
+    transition: transform .36s var(--ease);
+}
+.answer-section-toggle[aria-expanded="true"] .answer-section-toggle-icon { transform: translateY(2px) rotate(225deg); }
 .answer-weather-days { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 7px; }
 .answer-weather-day { min-width: 0; padding: 9px 10px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--panel) 78%, transparent); display: flex; flex-direction: column; gap: 3px; }
 .answer-weather-day.is-current { background: color-mix(in srgb, var(--route) 5%, var(--panel)); }
@@ -238,16 +265,6 @@
 .answer-card-footer { padding: 0 20px 10px; border-top: 1px solid var(--line); }
 .answer-details { border-bottom: 1px solid var(--line); }
 .answer-details:last-child { border-bottom: 0; }
-.answer-section-toggle:active { transform: scale(.97); }
-.answer-section-toggle-icon {
-    width: 6px;
-    height: 6px;
-    border-right: 1.5px solid currentColor;
-    border-bottom: 1.5px solid currentColor;
-    transform: translateY(-1px) rotate(45deg);
-    transition: transform .36s var(--ease);
-}
-.answer-section-toggle[aria-expanded="true"] .answer-section-toggle-icon { transform: translateY(2px) rotate(225deg); }
 .answer-details-trigger {
     width: 100%;
     min-height: 43px;

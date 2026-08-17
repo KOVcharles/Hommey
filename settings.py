@@ -79,6 +79,7 @@ SYSTEM_CONFIG = {
 
 
 RAG_CONFIG = {
+    "vector_backend": os.getenv("HOMMEY_RAG_VECTOR_BACKEND", "postgres").lower(),
     "embedding_backend": os.getenv("HOMMEY_RAG_EMBEDDING_BACKEND", "siliconflow").lower(),
     "embedding_model": os.getenv(
         "HOMMEY_EMBEDDING_MODEL",
@@ -113,6 +114,15 @@ RAG_CONFIG = {
         "HOMMEY_RAG_COLLECTION",
         "business_travel_knowledge",
     ),
+    "postgres_dsn": os.getenv("HOMMEY_RAG_POSTGRES_DSN", "")
+    or os.getenv("HOMMEY_POSTGRES_DSN", ""),
+    "refresh_backend": os.getenv("HOMMEY_RAG_REFRESH_BACKEND", "postgres").lower(),
+    "source_storage": os.getenv("HOMMEY_RAG_SOURCE_STORAGE", "shared_filesystem").lower(),
+    "refresh_lease_seconds": _int_env("HOMMEY_RAG_REFRESH_LEASE_SECONDS", 90),
+    "refresh_max_attempts": _int_env("HOMMEY_RAG_REFRESH_MAX_ATTEMPTS", 3),
+    "refresh_retry_delay_seconds": _int_env("HOMMEY_RAG_REFRESH_RETRY_DELAY_SECONDS", 5),
+    "refresh_poll_seconds": _float_env("HOMMEY_RAG_REFRESH_POLL_SECONDS", 2.0),
+    "refresh_worker_stale_seconds": _int_env("HOMMEY_RAG_REFRESH_WORKER_STALE_SECONDS", 45),
     "chunk_size": _int_env("HOMMEY_RAG_CHUNK_SIZE", 600),
     "chunk_overlap": _int_env("HOMMEY_RAG_CHUNK_OVERLAP", 100),
     "chunk_min_tokens": _int_env("HOMMEY_RAG_CHUNK_MIN_TOKENS", 150),
@@ -121,6 +131,18 @@ RAG_CONFIG = {
     "top_k": _int_env("HOMMEY_RAG_TOP_K", 3),
     "vector_top_k": _int_env("HOMMEY_RAG_VECTOR_TOP_K", 10),
     "bm25_top_k": _int_env("HOMMEY_RAG_BM25_TOP_K", 10),
+    # HyDE is a user-selected retrieval capability. Requests remain on
+    # standard retrieval unless the chat payload explicitly asks for enhanced.
+    "hyde_enabled": _bool_env("HOMMEY_RAG_HYDE_ENABLED", True),
+    "hyde_timeout_sec": _float_env("HOMMEY_RAG_HYDE_TIMEOUT_SEC", 12.0),
+    "hyde_max_chars": _int_env("HOMMEY_RAG_HYDE_MAX_CHARS", 600),
+    "hyde_candidate_top_k": _int_env("HOMMEY_RAG_HYDE_CANDIDATE_TOP_K", 10),
+    "hyde_rrf_weight": _float_env("HOMMEY_RAG_HYDE_RRF_WEIGHT", 0.6),
+    "hyde_prompt_version": os.getenv("HOMMEY_RAG_HYDE_PROMPT_VERSION", "hyde-policy-v1"),
+    "hyde_trace_file": os.getenv(
+        "HOMMEY_RAG_HYDE_TRACE_FILE",
+        "data/rag_knowledge/hyde_traces.jsonl",
+    ),
     # Phase 2: ingestion-accepted file types (comma-separated).  DOCX/CSV/XLSX
     # are new; operators can narrow the set without code changes.
     "supported_file_types": os.getenv(
@@ -134,8 +156,44 @@ RAG_CONFIG = {
 }
 
 
+TRAIN_QUERY_CONFIG = {
+    # 车次查询后端接缝：默认 12306 直连（免费、无 Key）；juhe 为付费/限频预留。
+    # 未知后端在 create_train_query_backend 处 fail-fast。
+    "backend": os.getenv("HOMMEY_TRAIN_QUERY_BACKEND", "12306").lower(),
+    "juhe_train_key": _optional_env("HOMMEY_JUHE_TRAIN_KEY"),
+    "timeout_sec": _float_env("HOMMEY_TRAIN_QUERY_TIMEOUT_SEC", 10.0),
+    "max_retries": _int_env("HOMMEY_TRAIN_QUERY_MAX_RETRIES", 2),
+    "retry_base_delay_sec": _float_env("HOMMEY_TRAIN_QUERY_RETRY_BASE_DELAY_SEC", 1.0),
+    "retry_max_delay_sec": _float_env("HOMMEY_TRAIN_QUERY_RETRY_MAX_DELAY_SEC", 10.0),
+    "station_cache_ttl_sec": _int_env("HOMMEY_TRAIN_STATION_CACHE_TTL_SEC", 604800),
+}
+
+
 SKILL_CONFIG = {
     "root": os.getenv("HOMMEY_SKILLS_ROOT", ".agents/skills"),
+}
+
+
+EVALUATION_CONFIG = {
+    # Shadow evaluation is opt-in and cannot affect the chat response path.
+    "enabled": _bool_env("HOMMEY_EVALUATION_ENABLED", False),
+    "llm_enabled": _bool_env("HOMMEY_EVALUATION_LLM_ENABLED", False),
+    "sample_rate": _float_env("HOMMEY_EVALUATION_SAMPLE_RATE", 0.2),
+    "queue_size": _int_env("HOMMEY_EVALUATION_QUEUE_SIZE", 256),
+    "worker_concurrency": _int_env("HOMMEY_EVALUATION_WORKER_CONCURRENCY", 2),
+    "judge_timeout_sec": _float_env("HOMMEY_EVALUATION_JUDGE_TIMEOUT_SEC", 30.0),
+    "judge_model": os.getenv("HOMMEY_EVALUATION_JUDGE_MODEL", ""),
+    "judge_api_key": _optional_env("HOMMEY_EVALUATION_API_KEY") or LLM_CONFIG["api_key"],
+    "judge_base_url": os.getenv("HOMMEY_EVALUATION_BASE_URL") or LLM_CONFIG["base_url"],
+    "context_messages": _int_env("HOMMEY_EVALUATION_CONTEXT_MESSAGES", 4),
+    "retention_days": _int_env("HOMMEY_EVALUATION_RETENTION_DAYS", 30),
+    "database_pool_size": _int_env("HOMMEY_EVALUATION_DB_POOL_SIZE", 2),
+    "database_timeout_sec": _float_env("HOMMEY_EVALUATION_DB_TIMEOUT_SEC", 5.0),
+    "lease_seconds": _int_env("HOMMEY_EVALUATION_LEASE_SECONDS", 90),
+    "max_attempts": _int_env("HOMMEY_EVALUATION_MAX_ATTEMPTS", 3),
+    "evaluator_version": os.getenv("HOMMEY_EVALUATOR_VERSION", "turn-evaluator-v1"),
+    "judge_prompt_version": os.getenv("HOMMEY_JUDGE_PROMPT_VERSION", "turn-judge-v1"),
+    "rubric_version": os.getenv("HOMMEY_EVALUATION_RUBRIC_VERSION", "travel-rubric-v1"),
 }
 
 
@@ -169,14 +227,19 @@ CONCURRENCY_CONFIG = {
     "semaphore_acquire_timeout_sec": _float_env("HOMMEY_SEMAPHORE_ACQUIRE_TIMEOUT_SEC", 120.0),
     # 分布式锁 TTL（秒），每次续约重设。
     "distributed_lock_ttl_sec": _float_env("HOMMEY_DISTRIBUTED_LOCK_TTL_SEC", 45.0),
-    # 心跳续约间隔（秒）。
-    "lock_heartbeat_interval_sec": _float_env("HOMMEY_LOCK_HEARTBEAT_INTERVAL_SEC", 15.0),
+    # 全局信号量单租约 TTL（秒），由心跳续约重设。
+    # 与单计数器 TTL 不同：这是每个持有者独立的租约，长请求持续续约即可，
+    # 不再要求 >= request_timeout_sec；崩溃持有者的 token 到期后自动回收。
+    "semaphore_lease_ttl_sec": _float_env("HOMMEY_SEMAPHORE_LEASE_TTL_SEC", 45.0),
+    # 心跳续约间隔（秒）。必须 < 任一租约 TTL 的 1/3，为瞬时延迟留出余量。
+    "lock_heartbeat_interval_sec": _float_env("HOMMEY_LOCK_HEARTBEAT_INTERVAL_SEC", 12.0),
     # 拿锁重试 sleep 间隔（秒）。
     "lock_retry_interval_sec": _float_env("HOMMEY_LOCK_RETRY_INTERVAL_SEC", 0.2),
-    # 信号量计数 TTL（秒），防 worker 崩溃泄漏计数。
-    # 必须 >= RESILIENCE_CONFIG.request_timeout_sec（默认 240），否则长时间请求
-    # 超过 TTL 会导致计数 key 过期、并发上限被静默突破（Task 2 review 实测复现）。
-    "semaphore_ttl_sec": _int_env("HOMMEY_SEMAPHORE_TTL_SEC", 240),
+    # 应用自有有界 I/O 线程池上限（RAG embedding / psycopg 等同步阻塞 I/O）。
+    # 避免默认 asyncio executor 被突发请求放大、事件循环被同步调用拖慢。
+    "io_executor_max_workers": _int_env("HOMMEY_IO_EXECUTOR_MAX_WORKERS", 16),
+    # 等待线程执行的最大任务数；超过后立即返回可重试的过载错误。
+    "io_executor_max_pending": _int_env("HOMMEY_IO_EXECUTOR_MAX_PENDING", 32),
 }
 
 
@@ -193,7 +256,7 @@ MEMORY_CONFIG = {
         "redis_key_prefix": os.getenv("HOMMEY_REDIS_KEY_PREFIX", "hommey:short_term"),
     },
     "long_term": {
-        "backend": os.getenv("HOMMEY_LONG_TERM_BACKEND", "file").lower(),
+        "backend": os.getenv("HOMMEY_LONG_TERM_BACKEND", "postgres").lower(),
         "storage_path": os.getenv("HOMMEY_MEMORY_STORAGE_PATH", "data/memory"),
         "postgres_dsn": os.getenv("HOMMEY_POSTGRES_DSN", ""),
         "postgres_pool_min_size": _int_env("HOMMEY_POSTGRES_POOL_MIN_SIZE", 1),

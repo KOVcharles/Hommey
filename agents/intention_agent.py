@@ -18,6 +18,7 @@ from agentscope.message import Msg
 from typing import Optional, Union, List
 import json
 import logging
+import re
 from core.intent_catalog import (
     build_intent_prompt_section,
     catalog_rank,
@@ -33,6 +34,7 @@ from core.intent_guard import (
     can_call_information_query,
     guard_user_input,
     has_business_travel_context,
+    has_train_intent,
     has_travel_policy_context,
     is_limited_chitchat,
     passes_confidence_gate,
@@ -41,6 +43,14 @@ from core.llm_response import extract_text_from_response
 from core.trip_intake import remove_ungrounded_trip_locations
 
 logger = logging.getLogger(__name__)
+
+
+_TRAIN_DATE_FOLLOWUP_RE = re.compile(
+    r"^(?:就|改成|查(?:一下)?|看(?:一下)?)?\s*"
+    r"(?:今天|明天|后天|大后天|(?:这|本|下)?周[一二三四五六日天]|"
+    r"\d{4}-\d{1,2}-\d{1,2}|\d{1,2}月\d{1,2}日)"
+    r"(?:的)?(?:车票|车次|票)?(?:呢|吧)?[。！!？?]?$"
+)
 
 
 class IntentionAgent(AgentBase):
@@ -90,6 +100,23 @@ class IntentionAgent(AgentBase):
         trusted_fact_parts.append(user_query)
 
         scope_context = "\n".join(self.conversation_history)
+
+        # “明天的”这类短回复本身没有车票关键词，LLM 容易把它误判成行程
+        # 收集。若紧邻的上一条用户消息明确在查车票，则确定性继承那条查询，
+        # 同时保留本轮日期覆盖，让下游拿到完整的路线和日期。
+        inherited_train_query = self._resolve_train_date_followup(user_query)
+        if inherited_train_query:
+            route = FastIntentRouter.route(inherited_train_query)
+            if route and route.intent_type == "train_query":
+                result = route.to_intention_data(inherited_train_query)
+                result["reasoning"] = "日期型短回复续接到上一轮车票查询"
+                result = self._apply_routing_guard(result, inherited_train_query)
+                return Msg(
+                    name=self.name,
+                    content=json.dumps(result, ensure_ascii=False),
+                    role="assistant",
+                )
+
         guard_result = guard_user_input(user_query, scope_context)
         if guard_result:
             result = self._apply_routing_guard(guard_result.to_intention_data(user_query), user_query)
@@ -160,7 +187,8 @@ class IntentionAgent(AgentBase):
 【产品边界】
 你服务于公司员工的差旅规划、差旅制度查询和报销准备。
 - 明确属于公司差旅的政策、补贴、路线、交通、住宿、天气、行程和报销问题可以处理。
-- 天气、航班、铁路、酒店等外部信息，只有与当前或对话中的差旅行程相关时才使用 information_query。
+- 天气、航班、酒店等公共信息可直接查询（information_query），无需完整出差上下文。
+- 车票、车次、高铁、火车时刻、历时与余票查询使用 train_query；铁路信息不再属于 information_query。
 - 私人旅游、编程、作业、创作、娱乐、投资等领域外请求必须识别为 unsupported，不调用任何 skill。
 - 仅提供建议，不执行预订、付款、审批或报销提交；相关操作识别为 unsupported。
 - 简短问候、感谢、告别和能力介绍可以使用 chitchat；不要进行开放式闲聊或情绪陪伴。
@@ -170,6 +198,7 @@ class IntentionAgent(AgentBase):
 - "我去过北京吗？" → memory_query（询问自己的历史）
 - "下周去北京出差，那边天气怎么样？" → information_query（差旅相关外部信息）
 - "帮我规划去北京出差的路线" → itinerary_planning（公司差旅行程）
+- "帮我查一下下周上海到北京的高铁车次" → train_query（差旅车次/时刻/余票查询）
 - "北京有什么好玩的？" → unsupported（私人旅游/泛城市信息）
 - "差旅住宿标准是多少" → rag_knowledge（企业制度/政策）
 当问题涉及"我的/我之前/我去过"等用户自身历史时，必须优先 memory_query，优先级高于 information_query。
@@ -178,7 +207,8 @@ class IntentionAgent(AgentBase):
 - 只判断意图及其是否允许调用 skill；不要生成 agent、步骤、优先级或执行顺序，这些由后续编排层依据 Skill 声明生成。
 - 查询"我的/我之前/我去过"优先 memory_query；差旅标准、报销、政策优先 rag_knowledge。
 - confidence 低于 {DEFAULT_CONFIDENCE_THRESHOLD:.2f} 时 should_call_skill=false。
-- information_query 仅用于与差旅行程直接相关的天气、航班、铁路、酒店和交通信息，confidence 至少 {INFORMATION_QUERY_THRESHOLD:.2f}，且查询对象明确。
+- information_query 用于天气、航班、酒店和交通等公共信息查询（无需完整出差上下文），confidence 至少 {INFORMATION_QUERY_THRESHOLD:.2f}，且查询对象明确。
+- train_query 用于车票/车次/高铁/火车时刻、历时、余票与票价查询（无需完整出差上下文）；出发/到达站与日期尽量明确，confidence 至少 {INFORMATION_QUERY_THRESHOLD:.2f}；不预订、不付款。
 - 禁止将短输入、寒暄、半句话、无明确查询对象的问题识别为 information_query。
 - 进行中的行程收集：若对话历史中系统正在收集出差信息（如询问出发地、目的地、日期、天数、出差目的），用户回复的信息片段（如"北京"、"培训"、"2天"、"8月10日返程"）是补全行程信息，应识别为 event_collection，不得判定为 unclear 或 unsupported。
 - 寒暄类（chitchat）允许调用 chitchat skill；unclear、unsupported 的 should_call_skill 必须为 false。
@@ -190,10 +220,15 @@ class IntentionAgent(AgentBase):
 - "你?" → unclear, should_call_skill=false
 - "这个呢" → unclear, should_call_skill=false
 - "在吗" → chitchat, should_call_skill=true
-- "帮我查明天东京天气" → unclear, should_call_skill=false（缺少差旅上下文）
+- "帮我查明天东京天气" → information_query, should_call_skill=true（天气可直接查询，无需差旅上下文）
 - "我明天去东京出差，帮我查天气" → information_query, should_call_skill=true
 - "餐补标准是多少" → rag_knowledge, should_call_skill=true
 - "我下周去上海出差，帮我安排两天行程" → itinerary_planning, should_call_skill=true
+- "我下周去上海出差，帮我查一下周四上海到北京的高铁车次" → train_query, should_call_skill=true
+- "帮我查一下北京到上海的高铁" → train_query, should_call_skill=true
+- "查一下去南京的车票" → train_query, should_call_skill=true
+- "查南京的天气" → information_query, should_call_skill=true
+- "帮我订去南京的火车票" → unsupported, should_call_skill=false（不预订、不付款）
 - "（上轮系统询问：还差1项，出差目的是什么）"培训" → event_collection, should_call_skill=true
 - "（上轮系统询问：出发地从哪出发）"北京" → event_collection, should_call_skill=true
 - "帮我写一个 Python 程序" → unsupported, should_call_skill=false
@@ -286,6 +321,21 @@ class IntentionAgent(AgentBase):
             for key in ("origin", "destination")
             if active_trip.get(key)
         ]
+
+    def _resolve_train_date_followup(self, user_query: str) -> Optional[str]:
+        """Bind a date-only reply to the immediately preceding train request."""
+        current = (user_query or "").strip()
+        if not _TRAIN_DATE_FOLLOWUP_RE.fullmatch(current):
+            return None
+
+        for item in reversed(self.conversation_history):
+            if not item.startswith("用户: "):
+                continue
+            previous = item.removeprefix("用户: ").strip()
+            if not has_train_intent(previous):
+                return None
+            return f"{previous.rstrip('，,。！？!? ')}，{current}"
+        return None
 
     @staticmethod
     def _enforce_trip_entity_provenance(
@@ -443,6 +493,13 @@ class IntentionAgent(AgentBase):
         if intent_type == "information_query":
             info_guard = can_call_information_query(user_query, confidence, conversation_context)
             return info_guard.intent == "information_query" and info_guard.should_call_skill
+        if intent_type == "train_query":
+            # 车票/车次/高铁/火车时刻等公共信息可直接查询，无需完整出差上下文；
+            # 只要 query 确含车次语言（has_train_intent）且置信度达标即授权。
+            return (
+                has_train_intent(user_query)
+                and passes_confidence_gate(intent_type, confidence)
+            )
         # Preference and personal travel-memory skills are intrinsically
         # user-scoped and safe to authorize from a high-confidence semantic
         # classification.  Requiring an extra “出差” keyword here incorrectly

@@ -661,6 +661,18 @@
         const eyebrow = element('div', 'answer-card-eyebrow');
         eyebrow.appendChild(element('span', 'answer-card-route'));
         eyebrow.appendChild(element('span', '', 'Hommey · 已整理'));
+        if (data.retrieval?.requested_mode === 'enhanced') {
+            const enhanced = data.retrieval.effective_mode === 'enhanced';
+            const badge = element(
+                'span',
+                `answer-retrieval-badge ${enhanced ? 'enhanced' : 'fallback'}`,
+                enhanced ? '增强检索' : '增强未完成 · 已使用标准检索'
+            );
+            badge.title = enhanced
+                ? '本次知识库查询使用了 HyDE 辅助召回'
+                : '增强检索未完成，本次已自动回退到标准检索';
+            eyebrow.appendChild(badge);
+        }
         header.appendChild(eyebrow);
         header.appendChild(element('h2', '', data.title || '查询结果'));
         if (data.summary) header.appendChild(element('p', '', data.summary));

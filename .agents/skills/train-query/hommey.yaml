@@ -1,0 +1,28 @@
+version: 1.0.0
+display_name: 高铁车次查询
+category: capability
+intent: train_query
+agent_name: train_query
+user_facing: false
+risk_level: medium
+catalog_order: 55
+confidence_threshold: 0.75
+progress_key: train_query_searching
+scope:
+  forbidden_terms: [制度, 标准, 补贴, 报销, 审批, 公司规定]
+  query_anchor_fields: [origin, destination, start_date]
+answer:
+  section_kind: train
+tools: [active_trip_context]
+execution:
+  - skill: train-query
+    agent_name: train_query
+    priority: 1
+    on_failure: continue
+    max_retries: 1
+    reason: 查询真实高铁/火车车次、时刻、历时、票价与余票
+    expected_output: 带核验提醒的真实车次、时刻、历时、票价和余票
+    query: 查询 {origin}→{destination} 在 {start_date} 的火车车次与余票
+    result_rules:
+      error_when_field: query_success
+      error_code: TRAIN_QUERY_UNAVAILABLE

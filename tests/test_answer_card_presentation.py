@@ -216,6 +216,16 @@ def test_frontend_localizes_weather_api_conditions_to_chinese():
     assert "localizeWeatherPresentation" in script
 
 
+def test_login_route_animation_has_a_defined_keyframe_and_fresh_asset_version():
+    root = Path(__file__).resolve().parents[1]
+    css = (root / "webui_new/static/hommey.css").read_text(encoding="utf-8")
+    template = (root / "webui_new/templates/login.html").read_text(encoding="utf-8")
+
+    assert "animation: auth-route-travel 7s ease-in-out infinite" in css
+    assert "@keyframes auth-route-travel" in css
+    assert "20260817-auth-route-motion-v1" in template
+
+
 def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     root = Path(__file__).resolve().parents[1]
     css = (root / "webui_new/static/hommey.css").read_text(encoding="utf-8")

@@ -1,6 +1,6 @@
 services:
   postgres-test:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
     environment:
       POSTGRES_USER: hommey
       POSTGRES_PASSWORD: hommey-test
