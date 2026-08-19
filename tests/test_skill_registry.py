@@ -7,11 +7,13 @@ EXPECTED_SKILLS = {
     "check-trip-compliance",
     "chitchat",
     "event-collection",
+    "evaluate-turn",
     "mcp-tool",
     "memory-query",
     "plan-trip",
     "preference",
     "query-info",
+    "train-query",
 }
 
 
@@ -23,8 +25,10 @@ EXPECTED_LEGACY_AGENT_NAMES = {
     "information_query",
     "itinerary_planning",
     "event_collection",
+    "turn_evaluator",
     "chitchat",
     "mcp_tool",
+    "train_query",
 }
 
 
@@ -40,6 +44,21 @@ def test_lazy_agent_registry_exposes_skill_and_legacy_names():
 
     assert EXPECTED_SKILLS.issubset(keys)
     assert EXPECTED_LEGACY_AGENT_NAMES.issubset(keys)
+
+
+def test_turn_evaluator_is_discoverable_but_not_intent_backed():
+    from core.intent_catalog import SKILL_INTENTS
+
+    definition = SkillLoader().load_definitions()["evaluate-turn"]
+    registry = LazyAgentRegistry(model=None, cache={})
+
+    assert definition.agent_name == "turn_evaluator"
+    assert definition.intent is None
+    assert definition.execution == []
+    assert definition.tools == []
+    assert definition.user_facing is False
+    assert "evaluate-turn" not in {item["skill"] for item in SKILL_INTENTS.values()}
+    assert "turn_evaluator" in registry
 
 
 def test_lazy_registry_passes_explicit_skill_root_to_agent(tmp_path):

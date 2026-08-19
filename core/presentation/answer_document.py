@@ -32,7 +32,7 @@ class WeatherDay(BaseModel):
 class AnswerSection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    kind: Literal["policy", "weather", "memory", "preference", "trip", "notice", "general"]
+    kind: Literal["policy", "weather", "memory", "preference", "trip", "notice", "train", "general"]
     goal_id: str = Field(default="", max_length=64)
     title: str = Field(min_length=1, max_length=80)
     status: Literal["success", "partial", "error"] = "success"
@@ -83,6 +83,17 @@ class PreDepartureChecklist(BaseModel):
     reimbursement_items: List[DepartureCheckItem] = Field(default_factory=list, max_length=12)
 
 
+class RetrievalPresentation(BaseModel):
+    """User-facing summary of an explicitly requested retrieval mode."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    requested_mode: Literal["enhanced"] = "enhanced"
+    effective_mode: Literal["standard", "enhanced"] = "standard"
+    status: Literal["enhanced", "fallback"] = "fallback"
+    fallback_reason: str = Field(default="", max_length=120)
+
+
 class AnswerDocument(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -93,6 +104,7 @@ class AnswerDocument(BaseModel):
     notices: List[str] = Field(default_factory=list, max_length=10)
     sources: List[AnswerSource] = Field(default_factory=list, max_length=ANSWER_SOURCE_CAP)
     pre_departure: PreDepartureChecklist | None = None
+    retrieval: RetrievalPresentation | None = None
     plain_text: str = Field(default="", max_length=12000)
 
 

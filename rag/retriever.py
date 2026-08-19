@@ -7,7 +7,7 @@ from typing import Any, Dict, List, Optional
 
 from .config import RAGPipelineConfig
 from .schemas import DocumentChunk, RetrievalResult
-from .vector_store import MilvusVectorStore, VectorStore
+from .vector_store import VectorStore, create_vector_store
 
 
 class Retriever(ABC):
@@ -24,6 +24,13 @@ class VectorStoreRetriever(Retriever):
         if not query:
             return []
         return self.vector_store.search(expand_query(query), top_k=top_k)
+
+    def retrieve_dense(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
+        if not query:
+            return []
+        # HyDE text must remain dense-only: do not call expand_query(), BM25,
+        # or any lexical branch here.
+        return self.vector_store.search_dense(query, top_k=top_k)
 
 
 class KnowledgeRetriever:
@@ -50,12 +57,6 @@ class KnowledgeRetriever:
             self.initialized = True
             return
 
-        from .milvus_store import DEPENDENCIES_AVAILABLE
-
-        if not DEPENDENCIES_AVAILABLE:
-            self.error = "RAG dependencies not installed"
-            return
-
         try:
             config = RAGPipelineConfig.from_settings(
                 {
@@ -66,20 +67,7 @@ class KnowledgeRetriever:
                     "top_k": top_k,
                 }
             )
-            self.store = MilvusVectorStore(
-                knowledge_base_path=config.knowledge_base_path,
-                collection_name=config.collection_name,
-                embedding_model=config.embedding_model,
-                embedding_backend=config.embedding_backend,
-                embedding_api_key=config.embedding_api_key,
-                embedding_base_url=config.embedding_base_url,
-                embedding_dimension=config.embedding_dimension,
-                embedding_batch_size=config.embedding_batch_size,
-                embedding_timeout_sec=config.embedding_timeout_sec,
-                top_k=config.top_k,
-                vector_top_k=config.vector_top_k,
-                bm25_top_k=config.bm25_top_k,
-            )
+            self.store = create_vector_store(config)
             self.retriever = VectorStoreRetriever(self.store)
             self.initialized = True
         except Exception as exc:
@@ -94,6 +82,11 @@ class KnowledgeRetriever:
         if not self.retriever or not query:
             return []
         return [result.to_dict() for result in self.retriever.retrieve(query, top_k=top_k)]
+
+    def search_dense(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+        if not self.retriever or not query:
+            return []
+        return [result.to_dict() for result in self.retriever.retrieve_dense(query, top_k=top_k)]
 
     def stats(self) -> Dict[str, Any]:
         if not self.store:

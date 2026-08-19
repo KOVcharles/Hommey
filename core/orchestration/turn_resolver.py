@@ -82,7 +82,8 @@ class TurnResolver:
     def _looks_like_same_intent(message: str, active_intents: set[str]) -> bool:
         text = message or ""
         hints = {
-            "information_query": ("天气", "交通", "航班", "高铁", "火车", "机场"),
+            "information_query": ("天气", "交通", "航班", "机场"),
+            "train_query": ("车次", "高铁", "火车", "动车", "时刻", "班次", "铁路", "车票"),
             "memory_query": ("上次", "历史", "去过", "记得", "以前"),
             "rag_knowledge": ("标准", "政策", "制度", "报销", "补贴"),
             "itinerary_planning": ("行程", "规划", "安排", "路线", "住宿"),

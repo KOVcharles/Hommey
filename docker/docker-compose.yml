@@ -27,16 +27,19 @@ services:
       HOMMEY_REDIS_PASSWORD: ""
       HOMMEY_LONG_TERM_BACKEND: postgres
       HOMMEY_POSTGRES_DSN: postgresql://hommey:${PG_PASSWORD:-hommey123}@hommey-postgres:5432/hommey
+      HOMMEY_RAG_VECTOR_BACKEND: postgres
+      HOMMEY_RAG_POSTGRES_DSN: postgresql://hommey:${PG_PASSWORD:-hommey123}@hommey-postgres:5432/hommey
+      HOMMEY_RAG_REFRESH_BACKEND: postgres
+      HOMMEY_RAG_SOURCE_STORAGE: shared_filesystem
       # HOMMEY_EMBEDDING_*（backend/model/api_key/base_url/dimension）故意不在 environment: 声明：
       # 它们由上面的 env_file(../.env) 提供。若在此用 ${VAR:-...} 重复声明，不带 --env-file 启动时
       # ${VAR} 会解析为空，而 environment: 优先级高于 env_file，会把真值（尤其 API key）覆盖成空 → RAG 静默失效。
       HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
       HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
       HOMMEY_UPLOADS_PATH: /app/data/uploads
-      # 当前 RAG 使用 Milvus Lite 单文件库，且 WebHommeyManager 的热实例为
-      # 进程内状态；两者都不支持多个 Uvicorn worker 共享同一运行时。若未来
-      # 切换到独立 Milvus 服务并外置实例状态，再显式恢复多 worker。
-      UVICORN_WORKERS: "1"
+      # 同一主机内两个 worker 共享 Redis、PostgreSQL 和下方持久卷。
+      # 跨主机副本必须先把 shared_filesystem 改成对象存储。
+      UVICORN_WORKERS: "${UVICORN_WORKERS:-2}"
     volumes:
       # 仅管理员 API 可写；知识库上传需要该目录可写。
       - ../data/documents:/app/data/documents
@@ -55,6 +58,40 @@ services:
     dns:
       - 8.8.8.8         # 实测从 bridge 可达
       - 223.5.5.5       # AliDNS（备，本机 bridge 当前暂不可达）
+
+  rag-worker:
+    image: hommey:latest
+    container_name: hommey-rag-worker
+    command: ["python", "scripts/run_rag_refresh_worker.py"]
+    env_file:
+      - path: ../.env
+        required: false
+    environment:
+      PYTHONUTF8: "1"
+      PYTHONIOENCODING: utf-8
+      HOMMEY_LONG_TERM_BACKEND: postgres
+      HOMMEY_POSTGRES_DSN: postgresql://hommey:${PG_PASSWORD:-hommey123}@hommey-postgres:5432/hommey
+      HOMMEY_RAG_VECTOR_BACKEND: postgres
+      HOMMEY_RAG_POSTGRES_DSN: postgresql://hommey:${PG_PASSWORD:-hommey123}@hommey-postgres:5432/hommey
+      HOMMEY_RAG_REFRESH_BACKEND: postgres
+      HOMMEY_RAG_SOURCE_STORAGE: shared_filesystem
+      HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
+      HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
+    volumes:
+      - ../data/documents:/app/data/documents
+      - ../data/rag_knowledge:/app/data/rag_knowledge
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: unless-stopped
+    # The image healthcheck probes the Web port; this worker intentionally has
+    # no HTTP listener. Web readiness verifies its PostgreSQL heartbeat instead.
+    healthcheck:
+      disable: true
+    dns:
+      - 8.8.8.8
+      - 223.5.5.5
+
   redis:
     image: redis:7-alpine
     container_name: hommey-redis
@@ -63,7 +100,7 @@ services:
     restart: unless-stopped
 
   postgres:
-    image: postgres:16-alpine
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
     container_name: hommey-postgres
     ports:
       - "5432:5432"

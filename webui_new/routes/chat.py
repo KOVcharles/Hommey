@@ -51,12 +51,13 @@ def create_chat_router(manager):
         try:
             rid = request_id(request)
             logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(data.message))
-            result = await manager.process_message(
-                user_id,
-                data.message,
-                request_id=rid,
-                attachment_ids=data.attachment_ids,
-            )
+            kwargs = {
+                "request_id": rid,
+                "attachment_ids": data.attachment_ids,
+            }
+            if data.retrieval_mode == "enhanced":
+                kwargs["retrieval_mode"] = "enhanced"
+            result = await manager.process_message(user_id, data.message, **kwargs)
             safe_response = redact_sensitive_text(result.get("response", ""))
             logger.info("[%s] ◀ %s...", user_id, safe_response[:80])
             return result
@@ -87,12 +88,13 @@ def create_chat_router(manager):
             started_at = time.perf_counter()
             try:
                 logger.info("[%s] -> %s", user_id, redact_sensitive_text(data.message))
-                async for event in manager.stream_message(
-                    user_id,
-                    data.message,
-                    request_id=request_id(request),
-                    attachment_ids=data.attachment_ids,
-                ):
+                kwargs = {
+                    "request_id": request_id(request),
+                    "attachment_ids": data.attachment_ids,
+                }
+                if data.retrieval_mode == "enhanced":
+                    kwargs["retrieval_mode"] = "enhanced"
+                async for event in manager.stream_message(user_id, data.message, **kwargs):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except asyncio.CancelledError:
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -137,20 +139,20 @@ def create_chat_router(manager):
 
     @router.get("/api/{user_id}/sessions")
     async def list_sessions(user_id: str, current_user: User = Depends(require_path_user)):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        return {
-            "active_session_id": instance.session_id,
-            "sessions": instance.list_chat_sessions(),
-        }
+        return await manager.run_user_state_operation(
+            user_id,
+            lambda instance: {
+                "active_session_id": instance.session_id,
+                "sessions": instance.list_chat_sessions(),
+            },
+        )
 
     @router.post("/api/{user_id}/sessions")
     async def create_session(user_id: str, current_user: User = Depends(require_path_user)):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        return {"session_id": instance.start_new_chat_session()}
+        session_id = await manager.run_user_state_operation(
+            user_id, lambda instance: instance.start_new_chat_session()
+        )
+        return {"session_id": session_id}
 
     @router.get("/api/{user_id}/sessions/{session_id}")
     async def get_session(
@@ -158,10 +160,9 @@ def create_chat_router(manager):
         session_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        payload = instance.get_chat_session(session_id)
+        payload = await manager.run_user_state_operation(
+            user_id, lambda instance: instance.get_chat_session(session_id)
+        )
         if not payload["messages"]:
             raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除")
         return payload
@@ -172,11 +173,10 @@ def create_chat_router(manager):
         session_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
         try:
-            return instance.activate_chat_session(session_id)
+            return await manager.run_user_state_operation(
+                user_id, lambda instance: instance.activate_chat_session(session_id)
+            )
         except ValueError:
             raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除")
 
@@ -190,11 +190,10 @@ def create_chat_router(manager):
         title = data.title.strip()
         if not title:
             raise ValidationError("EMPTY_SESSION_TITLE", "会话名称不能为空")
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
         try:
-            instance.rename_chat_session(session_id, title)
+            await manager.run_user_state_operation(
+                user_id, lambda instance: instance.rename_chat_session(session_id, title)
+            )
         except ValueError:
             raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除")
         return {"session_id": session_id, "title": title[:80]}
@@ -205,20 +204,20 @@ def create_chat_router(manager):
         session_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        return {"active_session_id": instance.delete_chat_session(session_id)}
+        active_session_id = await manager.run_user_state_operation(
+            user_id, lambda instance: instance.delete_chat_session(session_id)
+        )
+        return {"active_session_id": active_session_id}
 
     @router.delete("/api/{user_id}/history")
     async def clear_chat_history(
         user_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        return {"active_session_id": instance.clear_chat_history()}
+        active_session_id = await manager.run_user_state_operation(
+            user_id, lambda instance: instance.clear_chat_history()
+        )
+        return {"active_session_id": active_session_id}
 
     @router.get("/api/intents")
     async def list_intents(current_user: User = Depends(get_current_user)):

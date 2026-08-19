@@ -23,10 +23,8 @@ def create_onboarding_router(manager):
     @router.get("/api/{user_id}/onboarding")
     async def get_onboarding_state(request: Request, user_id: str, current_user: User = Depends(require_path_user)):
         """获取新用户初始化偏好进度"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            return {"is_new": True, "completed": False, "missing_keys": []}
         try:
+            instance = await manager.get_initialized_user(user_id)
             return await instance.get_onboarding_state()
         except Exception as e:
             logger.error("Onboarding state failed request_id=%s user_id=%s error=%s", request_id(request), user_id, sanitize_for_log(e))
@@ -37,11 +35,9 @@ def create_onboarding_router(manager):
         request: Request, user_id: str, data: OnboardingPreferenceRequest, current_user: User = Depends(require_path_user)
     ):
         """保存新用户初始化偏好，不经过普通聊天链路"""
-        instance = manager.get(user_id)
-        if not instance or not instance.initialized:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
         try:
-            return await instance.save_onboarding_preference(data.key, data.value)
+            async with manager.user_state_scope(user_id) as instance:
+                return await instance.save_onboarding_preference(data.key, data.value)
         except ValueError as e:
             logger.warning("Onboarding validation failed request_id=%s user_id=%s error=%s", request_id(request), user_id, sanitize_for_log(e))
             raise ValidationError("INVALID_ONBOARDING_PREFERENCE", "偏好项不支持，请刷新页面后重试")

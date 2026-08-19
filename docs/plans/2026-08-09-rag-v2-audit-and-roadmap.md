@@ -6,7 +6,7 @@
 >
 > 本轮性质：只读审计与方案设计；未修改生产运行逻辑、索引或知识库原文
 >
-> 修订说明：按 2026-08-12 复核更新了与当前代码不一致的过时事实；把本期范围聚焦到"修复现有 RAG 系统的数据质量、幂等和可追溯问题"；HyDE 流程本期明确不做，移出承诺范围（设计保留在附录 A 备查）；补充了 Milvus 与 PostgreSQL 的存储决策分析；将远期元数据模型明确标为分期目标，不再作为一期一次性交付。
+> 修订说明：按 2026-08-12 复核更新了与当前代码不一致的过时事实；把一期范围聚焦到"修复现有 RAG 系统的数据质量、幂等和可追溯问题"；HyDE 不进入一期验收，在 Phase Y 分水岭之后按 Phase 6a～6f 独立推进；补充了 Milvus 与 PostgreSQL 的存储决策分析；将远期元数据模型明确标为分期目标，不再作为一期一次性交付。
 
 ## 1. 结论先行
 
@@ -736,7 +736,7 @@ TxtParser/PdfTextParser/... → blocks[](带 type) → TextNormalizer(按 type) 
 
 ## 11. 分阶段改造路线
 
-> 与上一版相比：删除了"条件式 HyDE"从承诺路径（移到附录 A 备查），Phase 5 的存储升级改为"按 §8.3 条件触发评估，默认保留 Milvus Lite、不预设 Standalone"。
+> 与上一版相比：HyDE 仍不属于一期承诺，但在一期基础能力基本完成后，以 Phase Y 为 Go / No-Go 分水岭，进入独立的 Phase 6 实验与上线链路；Phase 5 的存储升级仍按 §8.3 条件触发评估，默认保留 Milvus Lite、不预设 Standalone。
 
 ### ~~Phase 0：建立可比较基线~~
 
@@ -806,6 +806,83 @@ TxtParser/PdfTextParser/... → blocks[](带 type) → TextNormalizer(按 type) 
 
 ~~落地记录（2026-08-12）：embedding 侧补齐 §4.15 的重试与退避（指数退避，仅瞬时 5xx/429/连接超时重试，4xx 鉴权错误不重试）与进程内 LRU 缓存（同文不重复付费调用，返回副本防污染），开关经 `HOMMEY_RAG_EMBEDDING_MAX_RETRIES`/`RETRY_BASE_DELAY_SEC`/`RETRY_MAX_DELAY_SEC`/`CACHE_SIZE` 配置。BM25 侧把全表扫描 Python 实现从 `MilvusVectorStore.bm25_search` 迁移到 `rag/sparse.py` 的 `SparseIndex` 接缝（`PythonBM25SparseIndex` 分数与旧内联实现逐位一致），`HOMMEY_RAG_BM25_BACKEND` 选型，原生 sparse/预计算倒排索引是未来触发项、只差一个配置值；元数据/权限过滤与 Milvus Standalone 仍按 §8.3 触发条件评估，本期未实施。测试见 `tests/test_rag_phase5_resilience.py`。~~
 
+---
+
+### Phase Y：HyDE 分水岭（一期基础工程结束 / 二期召回增强开始）
+
+> `Y` 是准入门（gate），不是排在 Phase 5 与 Phase 6 之间的新功能阶段。Phase 5 中按规模触发的存储/权限项不阻塞 HyDE；只有与 HyDE 安全性和可评测性直接相关的条件必须全部满足。
+
+进入 Phase 6 前必须同时满足：
+
+- Phase 0/1/4 的黄金集、稳定 `chunk_id`、检索 trace、通用 evidence gate 和 `success/partial/no_knowledge` 状态机已在线可用。
+- 当前生产索引不存在未关闭的 S1 数据完整性或引用归因问题；合成文本与真实文档在数据模型中可以明确区分。
+- 冻结一份 HyDE 实验集，至少标出 `hyde_candidate`（口语/情境描述）、`exact_query`（金额/日期/政策号）、`no_answer` 和安全负例四类。
+- 先完成不调用 LLM 的确定性 query rewrite 对照组；若它已解决目标失败样本，则对应样本不启用 HyDE。
+- 预先登记 Go / No-Go 指标和延迟、调用量、成本预算，禁止看到实验结果后再改变成功口径。
+
+任一条件不满足即停在 Phase Y，不得以“先全量打开再观察”替代准入。Phase Y 通过只表示可以开始受控实验，不表示 HyDE 已获准进入回答链路。
+
+---
+
+### Phase 6a：冻结实验协议与对照组
+
+- 从现有黄金集和真实失败 trace 中建立 `tests/data/hyde_queries.json`；每条记录包含查询类别、相关 chunk ID、是否允许 HyDE、应跳过原因和期望回答状态。
+- 固定三个对照臂：当前标准检索、标准检索 + 确定性 rewrite、用户显式选择的增强检索。所有实验使用同一索引版本、top-k、reranker 和 evidence gate。
+- 先报告分组后的 Recall@5/10、MRR@10、no-knowledge precision、duplicate-evidence rate、p50/p95 延迟、LLM 调用率和单查询增量成本，不只看全量平均值。
+- 将以下规则写成实验清单：产品默认始终为标准检索；只有用户显式选择增强检索才生成 HyDE。非差旅域不会调用 `ask-question`，权限校验失败、空输入和提示注入命中时即使用户选择增强也禁止生成并回退标准检索。
+
+完成条件：实验集、基线结果、预算和 Go / No-Go 口径进入版本控制，同一命令可重复生成对比报告。
+
+### Phase 6b：引入 QueryBundle 与用户显式模式选择
+
+- 新增独立的 `QueryBundle` / `QueryVariant` 模型，至少承载 `text`、`kind`、`weight`、`synthetic`、`prompt_version` 和 `skip_reason`；不把 HyDE 逻辑塞进现有 `expand_query()`。
+- 保持当前原始 query 与确定性扩展行为不变，先将它们适配为 bundle 的基线分支，再增加 `hyde_passage` 可选分支。
+- Web 端提供会话级模式选择器：`标准检索（速度快且稳定）`与`增强检索（HyDE 辅助召回，提高准确率但会增加少量等待时间）`。新会话默认标准；用户选择增强后在该会话保持，直到手动切回。
+- 后端不根据置信度自动替用户切换模式。`retrieval_mode=enhanced` 只影响本轮实际执行的 `ask-question` RAG 节点；天气、火车、偏好等其他节点保持原行为。行程规划内部若调用制度查询，则该制度查询继承本轮模式。
+- 模式决策写入 trace，包括 `requested_mode/effective_mode/status/fallback_reason`；增强失败时自动回退标准检索，并在回答旁显示“增强未完成 · 已使用标准检索”。
+
+完成条件：未传字段或 `retrieval_mode=standard` 时结果与改造前逐条一致；只有用户显式选择增强时才产生 HyDE LLM 调用。
+
+### Phase 6c：实现受约束的 HyDE 生成器
+
+- 新增可替换的生成器接口（建议 `rag/hyde.py`），输入只包含规范化查询和必要的 policy scope，输出 `HyDEResult(text/model/prompt_version/latency/error)`；不得读取召回文档后再反向生成“假想文档”。
+- 使用附录 A.4 的 prompt 作为 v1，并增加确定性输出校验：若生成内容引入用户问题中不存在的金额、比例、日期、城市等级、审批人或确定性报销结论，则丢弃该分支并无损回退，不把违规文本送去 embedding。
+- 限制单次生成、最大字符数、超时和总调用预算；超时、限流、空结果、格式错误和安全校验失败统一返回可观测的 fallback，不影响原始检索。
+- 缓存键使用 `normalized_query + model + prompt_version + policy_scope`；缓存设 TTL、容量和敏感数据策略，不缓存权限范围不明确的请求。
+- 单元测试覆盖 prompt 注入、凭空金额/日期、超长输出、超时、429/5xx、空响应和 cache scope 隔离。
+
+完成条件：故障注入下 100% 回退到原始检索；HyDE 文本进入 evidence、引用或回答上下文的次数为 0。
+
+### Phase 6d：接入 dense-only 分支、融合与追踪
+
+- `hyde_passage` 只做 dense embedding/search，绝不进入 BM25、lexical query 或回答 context；原始 query 继续同时走 dense + lexical。
+- 所有分支按稳定 `chunk_id` 去重后再做加权 RRF；初始实验权重沿用附录 A.1 的候选范围，但权重必须由 Phase 6a 实验选定，不能硬编码成产品规则。
+- 对每条 query 设置最大 variant 数、每分支候选数和总候选预算，避免“rewrite 数 × HyDE × top-k”乘法膨胀。
+- 扩展 retrieval trace：记录原始/规范化/HyDE 各分支候选、分支 rank、融合贡献、cache hit、生成耗时、embedding/search 耗时和最终 evidence gate 结果；合成文本标记 `synthetic=true` 并按敏感数据策略存储或哈希化。
+- evidence gate、reranker 和回答生成器只接收融合后命中的真实 chunk；禁止把 HyDE passage 伪装成 rank 0 文档或 citation。
+
+完成条件：关闭 HyDE 可一键回到当前检索；任一最终引用都能回溯到真实 `document_id/chunk_id`，且 trace 能解释 HyDE 是否改变了最终排名。
+
+### Phase 6e：离线 A/B 与 Go / No-Go 决策
+
+- 运行 Phase 6a 的四臂对比，并按查询类型单独出表，重点检查“发票丢了怎么报销”等词面错位样本，而不是用精确金额类的高基线结果稀释收益。
+- 推荐候选 Go 条件：`hyde_candidate` 子集 Recall@10 相对确定性 rewrite 有稳定提升（首轮可观察 `+5` 个百分点或 MRR@10 `+0.03`），全量检索质量不下降，no-answer 误放行不增加，合成证据泄漏为 0。候选数值必须根据样本量和置信区间复核，不直接作为长期 SLO。
+- 同时报告代价：p95 端到端延迟、每查询 LLM 调用率、cache 命中率、token 与金额成本。任一项超过 Phase Y 登记预算即 No-Go，即使召回指标上涨也不得进入灰度。
+- 对收益样本做消融：确认增益来自 HyDE，而不是 query rewrite、候选数增加或权重变化；若确定性 rewrite 达到相同效果，优先采用更便宜、更可解释的方案。
+
+完成条件：形成一份可复现的决策记录，只允许 `No-Go/继续离线迭代` 或 `Go/作为用户可选模式上线`，不得把 HyDE 设为默认检索。
+
+### Phase 6f：可选模式上线、观测与回滚
+
+- 标准检索始终为默认路径；增强检索作为用户可选模式上线，不做后端自动全量开启。观测按用户明确选择增强的请求单独统计，不用标准请求稀释延迟与错误率。
+- 产品模式只有 `standard/enhanced`；另保留 `HOMMEY_RAG_HYDE_ENABLED` 运维总开关。总开关关闭时，前端增强请求仍可被识别，但后端必须回退标准并返回可展示状态。
+- 自动回滚条件至少包括：no-knowledge precision 恶化、错误/超时率越界、p95 或成本超预算、出现任何 synthetic evidence/citation 泄漏。回滚只关闭 HyDE 分支，不切索引、不影响基础检索。
+- 上线后持续保留对照桶和按类别指标；路由规则、prompt、模型、权重任一变化都提升版本并重跑 Phase 6e，不允许静默热改。
+
+完成条件：默认标准检索；用户选择增强后该会话持续生效；可不重建索引关闭 HyDE；连续观测期内满足 Phase Y 登记指标且没有合成证据泄漏。
+
+落地记录（2026-08-12）：聊天请求新增向后兼容的 `retrieval_mode=standard|enhanced`；首页与对话输入区新增会话级检索模式菜单，新会话默认标准，浏览器按用户与 session ID 保存选择。模式经 manager/request context 只传入 `ask-question`；新增 `rag/hyde.py` 的输出硬事实校验、dense-only 分支、稳定 chunk 去重与加权 RRF。生成超时、运维关闭、模型错误、空结果、违规金额/日期/政策结论均自动回退标准。回答卡显示“增强检索”或“增强未完成 · 已使用标准检索”；独立 trace 记录 request ID、模式、fallback reason、模型/prompt 版本、耗时、候选数、selected chunk IDs 及 query/output hash，不落原始 query 与假想文本。
+
 ## 12. 建议的功能开关与回滚点
 
 > 以下是跨阶段开关目录，不代表所有开关都要在 Phase 1 实现。一期仅需覆盖 index version、structured parsing/block chunking 和必要的新旧索引切换。
@@ -821,7 +898,14 @@ RAG_VISION_CLIENT_ENABLED=false          # 复用聊天视觉模型做扫描页 
 RAG_RERANKER_ENABLED=false
 RAG_EVIDENCE_GATE_ENABLED=false
 RAG_STORE_BACKEND=milvus_lite|in_memory  # VectorStore ABC 的选型开关
-RAG_HYDE_ENABLED=false                    # 本期恒为 false，保留字段便于未来评估
+HOMMEY_RAG_HYDE_ENABLED=true              # 运维能力总开关；产品请求默认仍是 standard
+# ChatRequest.retrieval_mode=standard|enhanced  # 用户会话级选择，缺省 standard
+HOMMEY_RAG_HYDE_TIMEOUT_SEC=<seconds>
+HOMMEY_RAG_HYDE_MAX_CHARS=<chars>
+HOMMEY_RAG_HYDE_CANDIDATE_TOP_K=<count>
+HOMMEY_RAG_HYDE_RRF_WEIGHT=<offline-calibrated>
+HOMMEY_RAG_HYDE_PROMPT_VERSION=hyde-policy-v1
+HOMMEY_RAG_HYDE_TRACE_FILE=data/rag_knowledge/hyde_traces.jsonl
 ```
 
 回滚策略：
@@ -935,7 +1019,7 @@ pytest -q \
 5. **再接 DOCX、CSV、XLSX 原生结构**：成本低于 OCR，能快速获得表格能力，且验证切块器的泛化。
 6. **OCR/layout worker 小流量上线**：对扫描 PDF 和复杂表格按页回退，可复用 VisionClient。
 7. **存储仅在触发条件满足时评估**（§8.3）：默认保留 Milvus Lite，不按时间排期做迁移。
-8. **HyDE 待基础数据质量修复完成后，按附录 A 单独评估**：本期不做。
+8. **通过 Phase Y 后按 Phase 6a～6f 评估 HyDE**：一期不做；二期完成离线验证后作为用户显式选择的增强检索上线，标准检索始终为默认。
 
 一句话原则：先让"真实文档被正确理解和切分"，再考虑"查询产生更多召回路径"。
 
@@ -955,9 +1039,9 @@ pytest -q \
 - pgvector：[pgvector/pgvector](https://github.com/pgvector/pgvector)
 - HyDE 原始论文与代码：见附录 A
 
-## 附录 A：HyDE 设计（本期明确不做，保留设计供未来参考）
+## 附录 A：HyDE 设计约束（一期不做，作为 Phase 6 实施依据）
 
-> 本期承诺范围**不包含** HyDE（2026-08-12 明确）。以下设计保留在文档中，仅作为未来"召回增强"阶段的候选参考，不进入任何 Phase 的完成条件。若未来重新评估，应先满足 Phase 0 基线、Phase 1 数据质量与 Phase 4 证据门槛，再做 A/B。
+> 一期承诺范围**不包含** HyDE（2026-08-12 明确）。一期基础工程完成后，HyDE 只允许按 §11 的 Phase Y 和 Phase 6a～6f 推进；本附录定义 QueryBundle、权重候选、安全规则、prompt 与追踪约束，阶段准入和完成条件以 §11 为准。
 
 HyDE 的原始论文流程是：LLM 生成一段假想相关文档，再将其编码为向量，用该向量在真实语料附近检索。论文同时明确指出假想文档可能包含错误细节。对公司政策尤其是金额、审批和报销资格，这一风险必须隔离。
 
@@ -992,22 +1076,21 @@ QueryBundle
 - HyDE 超时、限流或模型错误时无损降级到原始检索。
 - trace 中标记 `synthetic=true`，但日志要遵守敏感数据策略。
 
-### A.3 条件式启用
+### A.3 用户显式启用
 
-适合启用：
+产品规则：
+
+- 默认使用现有标准检索，不产生 HyDE LLM 调用。
+- 用户在输入区选择“增强检索”后，该会话的 RAG 查询使用 HyDE；后端不得基于置信度自动替用户打开。
+- 非 RAG 能力不受此选择影响；增强失败无损回退标准，并向前端返回实际模式和失败状态。
+
+适合用户主动选择增强的场景：
 
 - 用户表达模糊、口语化，词面与政策术语差异大。
 - 问题描述的是情境或后果，而不是精确条目名称。
-- 基础 dense + lexical 的候选一致性或重排置信度低。
+- 标准检索没有找到满意答案，希望主动扩大语义召回。
 
-建议跳过：
-
-- 精确政策编号、文件名、金额、日期、城市或航班/车次查询。
-- 只有 1～2 个实体词且意图不完整。
-- 原始查询已高置信命中精确条款。
-- 非公司差旅领域、权限不足或输入安全校验失败。
-
-"发票丢了怎么报销"是适合比较 query rewrite 与 HyDE 的样本，但更便宜、更可解释的第一步是将"丢了"规范化为"遗失/丢失发票、票据遗失处理"。只有基础改写仍低置信时才启用 HyDE。
+“发票丢了怎么报销”是适合比较标准检索与增强检索的样本。即使用户主动选择增强，HyDE 仍只是检索查询，任何合成内容都不得成为制度证据。
 
 ### A.4 HyDE prompt 草案
 

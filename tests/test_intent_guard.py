@@ -83,15 +83,50 @@ def test_social_single_words_short_circuit_as_chitchat():
         assert route.intent_types == ("chitchat",)
 
 
-def test_weather_query_without_trip_context_does_not_fast_route():
+def test_weather_query_without_trip_context_now_routes_to_information_query():
     route = FastIntentRouter.route("帮我查一下明天东京天气")
 
-    assert route is None
+    assert route is not None
+    assert route.intent_type == "information_query"
+    assert route.should_call_skill is True
+    assert route.intent_types == ("information_query",)
 
     result = can_call_information_query("帮我查一下明天东京天气", 0.9)
+    assert result.intent == "information_query"
+    assert result.should_call_skill is True
+
+
+def test_ticket_query_routes_to_train_query_without_trip_context():
+    route = FastIntentRouter.route("查一下去南京的车票")
+
+    assert route is not None
+    assert route.intent_type == "train_query"
+    assert route.should_call_skill is True
+    assert route.intent_types == ("train_query",)
+
+
+def test_weather_query_with_place_routes_to_information_query():
+    route = FastIntentRouter.route("查南京的天气")
+
+    assert route is not None
+    assert route.intent_type == "information_query"
+    assert route.should_call_skill is True
+
+
+def test_booking_request_is_denied_as_unsupported():
+    result = guard_user_input("帮我订去南京的火车票")
+
+    assert result is not None
+    assert result.intent == "unsupported"
+    assert result.should_call_skill is False
+
+
+def test_generic_play_search_does_not_leak_to_information_query():
+    # 「查一下X」但没有天气/交通/差旅上下文 → 不放行为通用搜索（information_query）。
+    result = can_call_information_query("查一下北京有什么好玩的", 0.82)
+
     assert result.intent == "unclear"
     assert result.should_call_skill is False
-    assert "出差" in result.clarification
 
 
 def test_weather_query_with_trip_context_routes_to_information_query():
@@ -161,6 +196,72 @@ def test_intention_followup_uses_dialogue_context_instead_of_context_free_route(
     assert data["routing"]["should_call_skill"] is True
 
 
+def test_date_only_followup_inherits_immediately_previous_train_query():
+    async def model_must_not_run(_messages):
+        raise AssertionError("明确的车票日期补充不应再交给 LLM 猜测")
+
+    agent = IntentionAgent(name="IntentionAgent", model=model_must_not_run)
+    result = asyncio.run(
+        agent.reply(
+            [
+                Msg(name="user", content="帮我查一下定南到重庆的车票", role="user"),
+                Msg(name="assistant", content="请告诉我出行日期", role="assistant"),
+                Msg(name="user", content="明天的", role="user"),
+            ]
+        )
+    )
+    data = json.loads(result.content)
+
+    assert data["routing"]["intent"] == "train_query"
+    assert data["routing"]["should_call_skill"] is True
+    assert data["rewritten_query"] == "帮我查一下定南到重庆的车票，明天的"
+
+
+def test_date_only_reply_does_not_inherit_non_train_query():
+    model_calls = []
+
+    async def contextual_model(_messages):
+        model_calls.append(True)
+        return json.dumps(
+            {
+                "reasoning": "补充出差日期",
+                "routing": {
+                    "intent": "event_collection",
+                    "confidence": 0.9,
+                    "reason": "补充日期",
+                    "should_call_skill": True,
+                },
+                "intents": [
+                    {
+                        "type": "event_collection",
+                        "confidence": 0.9,
+                        "description": "",
+                        "reason": "补充日期",
+                        "should_call_skill": True,
+                    }
+                ],
+                "key_entities": {"date": "2026-08-18"},
+                "rewritten_query": "出差日期为2026-08-18",
+            },
+            ensure_ascii=False,
+        )
+
+    agent = IntentionAgent(name="IntentionAgent", model=contextual_model)
+    result = asyncio.run(
+        agent.reply(
+            [
+                Msg(name="user", content="我要去重庆出差", role="user"),
+                Msg(name="assistant", content="请补充日期", role="assistant"),
+                Msg(name="user", content="明天的", role="user"),
+            ]
+        )
+    )
+    data = json.loads(result.content)
+
+    assert model_calls == [True]
+    assert data["routing"]["intent"] == "event_collection"
+
+
 def test_programming_request_is_rejected_as_out_of_scope():
     result = guard_user_input("帮我写一个 Python 程序")
 
@@ -178,11 +279,14 @@ def test_private_tourism_request_is_rejected():
     assert result.should_call_skill is False
 
 
-def test_booking_payment_request_passes_guard_to_llm_decision():
-    # 无 ticket skill 时 guard 不再硬拒订票请求：LLM 主导，由产品边界 prompt 判定。
+def test_booking_payment_request_is_rejected_deterministically():
+    # 无 ticket skill 时，订票/付款等交易语言确定性拒绝（产品边界「仅建议、不交易」）；
+    # 目录出现 ticket_purchase/payment skill 后 transaction_supported() 变 True 自动放行。
     result = guard_user_input("帮我订票付款")
 
-    assert result is None
+    assert result is not None
+    assert result.intent == "unsupported"
+    assert result.should_call_skill is False
 
 
 def test_booking_request_without_ticket_skill_resolves_to_unsupported():
@@ -335,6 +439,24 @@ def test_information_query_requires_clear_target():
 
     assert result.intent == "unclear"
     assert result.should_call_skill is False
+
+
+def test_train_query_sentence_is_never_authorized_to_information_query():
+    result = can_call_information_query("帮我查一下这周四上海到北京的高铁车次", 0.9)
+
+    assert result.intent != "information_query"
+    assert result.should_call_skill is False
+    assert "train_query" in result.reason
+
+
+def test_train_query_sentence_passes_guard_and_routes_to_train_query():
+    assert guard_user_input("帮我查一下这周四上海到北京的高铁车次") is None
+
+    route = FastIntentRouter.route("帮我查一下这周四上海到北京的高铁车次")
+    assert route is not None
+    assert route.intent_types == ("train_query",)
+    assert route.intent_type == "train_query"
+    assert route.safe_to_short_circuit is True
 
 
 def test_intention_connection_error_falls_back_without_information_query():

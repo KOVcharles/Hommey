@@ -1,0 +1,10 @@
+version: 1.0.0
+display_name: Turn 质量评测
+category: capability
+agent_name: turn_evaluator
+user_facing: false
+enabled_by_default: true
+risk_level: low
+tools: []
+input_schema: schemas/input.json
+output_schema: schemas/output.json

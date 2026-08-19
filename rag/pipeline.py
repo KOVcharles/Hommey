@@ -16,7 +16,7 @@ from .ocr import PageOcrFallback
 from .parser import ParserRegistry, UnsupportedFileTypeError
 from .retriever import Retriever, VectorStoreRetriever
 from .schemas import DocumentChunk, IngestionReport, ParsedDocument, RetrievalResult
-from .vector_store import MilvusVectorStore, VectorStore
+from .vector_store import VectorStore, create_vector_store
 from .versions import index_version_block
 
 logger = logging.getLogger(__name__)
@@ -56,25 +56,7 @@ class RAGPipeline:
             max_tokens=self.config.chunk_max_tokens,
             overlap_tokens=self.config.chunk_overlap_tokens,
         )
-        self.vector_store = vector_store or MilvusVectorStore(
-            knowledge_base_path=self.config.knowledge_base_path,
-            collection_name=self.config.collection_name,
-            embedding_model=self.config.embedding_model,
-            embedding_backend=self.config.embedding_backend,
-            embedding_api_key=self.config.embedding_api_key,
-            embedding_base_url=self.config.embedding_base_url,
-            embedding_dimension=self.config.embedding_dimension,
-            embedding_batch_size=self.config.embedding_batch_size,
-            embedding_timeout_sec=self.config.embedding_timeout_sec,
-            embedding_max_retries=self.config.embedding_max_retries,
-            embedding_retry_base_delay_sec=self.config.embedding_retry_base_delay_sec,
-            embedding_retry_max_delay_sec=self.config.embedding_retry_max_delay_sec,
-            embedding_cache_size=self.config.embedding_cache_size,
-            top_k=self.config.top_k,
-            vector_top_k=self.config.vector_top_k,
-            bm25_top_k=self.config.bm25_top_k,
-            sparse_backend=self.config.bm25_backend,
-        )
+        self.vector_store = vector_store or create_vector_store(self.config)
         self.retriever = retriever or VectorStoreRetriever(self.vector_store)
 
     def ingest(

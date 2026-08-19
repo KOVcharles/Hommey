@@ -91,6 +91,8 @@ class OrchestrationAgent(AgentBase):
             "original_query": request_context.get("original_query", rewritten_query),
             # Attachment facts bypass the lossy intent-query rewrite.
             "agent_query": request_context.get("agent_query", rewritten_query),
+            "retrieval_mode": request_context.get("retrieval_mode", "standard"),
+            "request_id": request_context.get("request_id", ""),
             "attachment_sources": request_context.get("attachment_sources", []),
             "attachment_warnings": request_context.get("attachment_warnings", []),
         }

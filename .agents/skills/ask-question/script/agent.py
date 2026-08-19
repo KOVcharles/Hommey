@@ -6,11 +6,14 @@ orchestrator input into a query, calls the retriever, and formats the answer.
 """
 from __future__ import annotations
 
+import asyncio
 import json
 import logging
 import os
 import re
 import sys
+import time
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Union
 
@@ -24,8 +27,19 @@ if str(project_root) not in sys.path:
 
 from rag.retriever import KnowledgeRetriever
 from rag.evidence import evaluate_evidence
+from rag.hyde import (
+    HYDE_SYSTEM_PROMPT,
+    HYDE_USER_PROMPT,
+    HyDEDiagnostics,
+    append_hyde_trace,
+    merge_enhanced_results,
+    selected_chunk_ids,
+    stable_hash,
+    validate_hyde_output,
+)
 from core.execution_budget import ExecutionLimitExceeded, consume_external_call
-from settings import RAG_CONFIG
+from settings import LLM_CONFIG, RAG_CONFIG
+from utils.io_executor import run_blocking
 from utils.skill_loader import SkillLoader
 
 logger = logging.getLogger(__name__)
@@ -80,6 +94,11 @@ class RAGKnowledgeAgent(AgentBase):
         consume_external_call("rag")
         return self.retriever.search(query, top_k=top_k)
 
+    def search_knowledge_dense(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Search the dense branch only; HyDE must never enter BM25."""
+        consume_external_call("rag")
+        return self.retriever.search_dense(query, top_k=top_k)
+
     async def reply(self, x: Optional[Union[Msg, List[Msg]]] = None) -> Msg:
         if not self.initialized:
             return self._msg(
@@ -92,10 +111,22 @@ class RAGKnowledgeAgent(AgentBase):
             )
 
         user_query = self._extract_query(x)
+        retrieval_mode = self._extract_context_value(x, "retrieval_mode", "standard")
+        retrieval_mode = "enhanced" if retrieval_mode == "enhanced" else "standard"
+        request_id = self._extract_context_value(x, "request_id", "")
         if not user_query:
             return self._msg({"status": "no_knowledge", "query": "", "answer": "请先告诉我你想查询的问题。", "retrieved_documents": []})
 
-        retrieved_docs = self._retrieve_for_question(user_query)
+        retrieved_docs, hyde_diagnostics = await self._retrieve_for_question(
+            user_query,
+            retrieval_mode=retrieval_mode,
+            request_id=request_id,
+        )
+        retrieval_payload = (
+            {"retrieval": hyde_diagnostics.to_public_dict()}
+            if hyde_diagnostics is not None
+            else {}
+        )
         if not retrieved_docs:
             stats = self.get_stats()
             if stats.get("status") == "success" and int(stats.get("total_documents", 0)) == 0:
@@ -105,6 +136,7 @@ class RAGKnowledgeAgent(AgentBase):
                         "query": user_query,
                         "answer": "知识库还没有完成入库。请先停止正在运行的 CLI/WebUI，然后执行 RAG 入库命令。",
                         "retrieved_documents": [],
+                        **retrieval_payload,
                     }
                 )
             return self._msg(
@@ -113,6 +145,7 @@ class RAGKnowledgeAgent(AgentBase):
                     "query": user_query,
                     "answer": "抱歉，我在知识库中没有找到相关信息。",
                     "retrieved_documents": [],
+                    **retrieval_payload,
                 }
             )
 
@@ -129,6 +162,7 @@ class RAGKnowledgeAgent(AgentBase):
                     "answer": "抱歉，知识库中没有找到与这个问题相关的内容。",
                     "retrieved_documents": [],
                     "evidence": verdict.to_dict(),
+                    **retrieval_payload,
                 }
             )
 
@@ -160,6 +194,7 @@ class RAGKnowledgeAgent(AgentBase):
                 "retrieved_documents": [self._serialize_doc(doc) for doc in retrieved_docs],
                 "sources": [self._serialize_source(doc) for doc in retrieved_docs],
                 "evidence": verdict.to_dict(),
+                **retrieval_payload,
                 **(
                     {"retrieval_trace_id": retrieval_trace_id}
                     if retrieval_trace_id
@@ -171,7 +206,13 @@ class RAGKnowledgeAgent(AgentBase):
     def get_stats(self) -> Dict[str, Any]:
         return self.retriever.stats()
 
-    def _retrieve_for_question(self, user_query: str) -> List[Dict[str, Any]]:
+    async def _retrieve_for_question(
+        self,
+        user_query: str,
+        *,
+        retrieval_mode: str = "standard",
+        request_id: str = "",
+    ) -> tuple[List[Dict[str, Any]], Optional[HyDEDiagnostics]]:
         """Retrieve policy evidence without carrying conversational filler.
 
         Broad “差旅标准” questions need evidence from several policy sections;
@@ -194,7 +235,10 @@ class RAGKnowledgeAgent(AgentBase):
         documents: List[Dict[str, Any]] = []
         seen = set()
         for query in dict.fromkeys(item.strip() for item in queries if item.strip()):
-            for document in self.search_knowledge(query, top_k=max(3, self.retriever.top_k)):
+            # 同步 embedding HTTP + Milvus 检索移出事件循环（§5.4），否则心跳无法续约。
+            for document in await run_blocking(
+                self.search_knowledge, query, top_k=max(3, self.retriever.top_k)
+            ):
                 # Deduplicate on the stable top-level chunk_id (audit §6.1.6 三);
                 # the legacy top-level source/file reads were always None.
                 key = (
@@ -206,8 +250,160 @@ class RAGKnowledgeAgent(AgentBase):
                 seen.add(key)
                 documents.append(document)
                 if len(documents) >= 10:
-                    return documents
-        return documents
+                    if retrieval_mode != "enhanced":
+                        return documents, None
+                    break
+            if len(documents) >= 10:
+                break
+
+        if retrieval_mode != "enhanced":
+            return documents, None
+        return await self._enhance_with_hyde(
+            user_query,
+            documents,
+            request_id=request_id,
+        )
+
+    async def _enhance_with_hyde(
+        self,
+        user_query: str,
+        standard_docs: List[Dict[str, Any]],
+        *,
+        request_id: str,
+    ) -> tuple[List[Dict[str, Any]], HyDEDiagnostics]:
+        """Add one guarded dense-only branch and always preserve fallback."""
+        prompt_version = str(RAG_CONFIG.get("hyde_prompt_version", "hyde-policy-v1"))
+        model_name = str(LLM_CONFIG.get("model_name") or "shared-rag-llm")
+        trace_file = str(RAG_CONFIG.get("hyde_trace_file", "data/rag_knowledge/hyde_traces.jsonl"))
+        diagnostics = HyDEDiagnostics(
+            request_id=request_id,
+            model=model_name,
+            prompt_version=prompt_version,
+            standard_candidates=len(standard_docs),
+            query_hash=stable_hash(user_query),
+        )
+
+        fallback_reason = ""
+        generation_started = 0.0
+        try:
+            if not bool(RAG_CONFIG.get("hyde_enabled", True)):
+                fallback_reason = "feature_disabled"
+                return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+            if self.model is None:
+                fallback_reason = "model_unavailable"
+                return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+
+            prompt = HYDE_USER_PROMPT.format(query=user_query)
+            generation_started = time.perf_counter()
+            response = await asyncio.wait_for(
+                self.model(
+                    [
+                        {"role": "system", "content": HYDE_SYSTEM_PROMPT},
+                        {"role": "user", "content": prompt},
+                    ]
+                ),
+                timeout=max(1.0, float(RAG_CONFIG.get("hyde_timeout_sec", 12.0))),
+            )
+            passage = (await self._extract_model_text(response)).strip()
+            latency_ms = round((time.perf_counter() - generation_started) * 1000, 2)
+            diagnostics = replace(
+                diagnostics,
+                generation_latency_ms=latency_ms,
+                generated_chars=len(passage),
+                output_hash=stable_hash(passage),
+            )
+            validation = validate_hyde_output(
+                user_query,
+                passage,
+                max_chars=int(RAG_CONFIG.get("hyde_max_chars", 600)),
+            )
+            if not validation.valid:
+                fallback_reason = validation.reason
+                return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+
+            hyde_docs = await run_blocking(
+                self.search_knowledge_dense,
+                passage,
+                top_k=max(1, int(RAG_CONFIG.get("hyde_candidate_top_k", 10))),
+            )
+            if not hyde_docs:
+                fallback_reason = "no_dense_candidates"
+                return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+
+            merged = merge_enhanced_results(
+                standard_docs,
+                hyde_docs,
+                top_k=10,
+                hyde_weight=float(RAG_CONFIG.get("hyde_rrf_weight", 0.6)),
+            )
+            diagnostics = replace(
+                diagnostics,
+                effective_mode="enhanced",
+                status="enhanced",
+                hyde_candidates=len(hyde_docs),
+                selected_candidates=len(merged),
+                selected_chunk_ids=tuple(selected_chunk_ids(merged)),
+            )
+            logger.info(
+                "hyde_retrieval_completed request_id=%s query_hash=%s prompt_version=%s "
+                "latency_ms=%.2f standard_candidates=%d hyde_candidates=%d selected=%d",
+                request_id,
+                diagnostics.query_hash,
+                prompt_version,
+                diagnostics.generation_latency_ms,
+                len(standard_docs),
+                len(hyde_docs),
+                len(merged),
+            )
+            return merged, diagnostics
+        except asyncio.TimeoutError:
+            fallback_reason = "generation_timeout"
+            if generation_started:
+                diagnostics = replace(
+                    diagnostics,
+                    generation_latency_ms=round(
+                        (time.perf_counter() - generation_started) * 1000,
+                        2,
+                    ),
+                )
+            return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+        except ExecutionLimitExceeded:
+            # A selected enhancement may not consume the budget required for
+            # the standard answer; degrade instead of failing the whole turn.
+            fallback_reason = "execution_budget_exceeded"
+            return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+        except Exception as exc:
+            fallback_reason = f"{type(exc).__name__}"
+            logger.exception(
+                "hyde_retrieval_failed request_id=%s query_hash=%s prompt_version=%s reason=%s",
+                request_id,
+                diagnostics.query_hash,
+                prompt_version,
+                fallback_reason,
+            )
+            return standard_docs, replace(diagnostics, fallback_reason=fallback_reason)
+        finally:
+            # Return statements evaluate their value before finally, so build a
+            # trace snapshot from the latest local diagnostics/reason here.
+            trace_diagnostics = diagnostics
+            if fallback_reason:
+                trace_diagnostics = replace(
+                    diagnostics,
+                    effective_mode="standard",
+                    status="fallback",
+                    fallback_reason=fallback_reason,
+                )
+                logger.warning(
+                    "hyde_fallback request_id=%s query_hash=%s prompt_version=%s reason=%s "
+                    "latency_ms=%.2f standard_candidates=%d",
+                    request_id,
+                    diagnostics.query_hash,
+                    prompt_version,
+                    fallback_reason,
+                    diagnostics.generation_latency_ms,
+                    len(standard_docs),
+                )
+            append_hyde_trace(trace_diagnostics, trace_file)
 
     @staticmethod
     def _normalize_retrieval_query(query: str) -> str:
@@ -285,6 +481,27 @@ class RAGKnowledgeAgent(AgentBase):
             if query:
                 return str(query).strip()
         return str(data.get("agent_query") or data.get("rewritten_query") or data.get("query") or text).strip()
+
+    @staticmethod
+    def _extract_context_value(
+        x: Optional[Union[Msg, List[Msg]]],
+        key: str,
+        default: str = "",
+    ) -> str:
+        if x is None:
+            return default
+        content = x[-1].content if isinstance(x, list) and x else getattr(x, "content", "")
+        if not isinstance(content, str) or not content.lstrip().startswith("{"):
+            return default
+        try:
+            payload = json.loads(content)
+        except (TypeError, json.JSONDecodeError):
+            return default
+        context = payload.get("context") if isinstance(payload, dict) else None
+        if not isinstance(context, dict):
+            return default
+        value = context.get(key, default)
+        return str(value).strip() if value is not None else default
 
     def _format_knowledge_context(self, docs: List[Dict[str, Any]]) -> str:
         """Inject display_text plus a policy-metadata block (audit §6.1.6 三)."""

@@ -80,6 +80,27 @@ RAG_CONFIG = {
     "top_k": _int_env("HOMMEY_RAG_TOP_K", 3),
     "vector_top_k": _int_env("HOMMEY_RAG_VECTOR_TOP_K", 10),
     "bm25_top_k": _int_env("HOMMEY_RAG_BM25_TOP_K", 10),
+    "hyde_enabled": _bool_env("HOMMEY_RAG_HYDE_ENABLED", True),
+    "hyde_timeout_sec": _float_env("HOMMEY_RAG_HYDE_TIMEOUT_SEC", 12.0),
+    "hyde_max_chars": _int_env("HOMMEY_RAG_HYDE_MAX_CHARS", 600),
+    "hyde_candidate_top_k": _int_env("HOMMEY_RAG_HYDE_CANDIDATE_TOP_K", 10),
+    "hyde_rrf_weight": _float_env("HOMMEY_RAG_HYDE_RRF_WEIGHT", 0.6),
+    "hyde_prompt_version": os.getenv("HOMMEY_RAG_HYDE_PROMPT_VERSION", "hyde-policy-v1"),
+    "hyde_trace_file": os.getenv(
+        "HOMMEY_RAG_HYDE_TRACE_FILE",
+        "data/rag_knowledge/hyde_traces.jsonl",
+    ),
+}
+
+
+TRAIN_QUERY_CONFIG = {
+    "backend": os.getenv("HOMMEY_TRAIN_QUERY_BACKEND", "12306").lower(),
+    "juhe_train_key": _optional_env("HOMMEY_JUHE_TRAIN_KEY"),
+    "timeout_sec": _float_env("HOMMEY_TRAIN_QUERY_TIMEOUT_SEC", 10.0),
+    "max_retries": _int_env("HOMMEY_TRAIN_QUERY_MAX_RETRIES", 2),
+    "retry_base_delay_sec": _float_env("HOMMEY_TRAIN_QUERY_RETRY_BASE_DELAY_SEC", 1.0),
+    "retry_max_delay_sec": _float_env("HOMMEY_TRAIN_QUERY_RETRY_MAX_DELAY_SEC", 10.0),
+    "station_cache_ttl_sec": _int_env("HOMMEY_TRAIN_STATION_CACHE_TTL_SEC", 604800),
 }
 
 

@@ -48,12 +48,14 @@
     const knowledgeExitLabel = document.getElementById('knowledgeExitLabel');
     const attachmentsLayer = document.getElementById('attachmentsLayer');
     const attachmentsList = document.getElementById('attachmentsList');
+    const retrievalModeControls = Array.from(document.querySelectorAll('[data-retrieval-mode-control]'));
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
     const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
     const USER_ID_KEY = 'hommey.user_id';
     const THEME_KEY = 'hommey.theme';
     const MOTION_KEY = 'hommey.motion';
+    const RETRIEVAL_MODE_KEY_PREFIX = 'hommey.retrieval_mode';
     const defaultPlaceholder = '继续问 Hommey';
 
     let isProcessing = false;
@@ -79,6 +81,7 @@
     let knowledgeRefreshPollFailures = 0;
     let isKnowledgeAdmin = false;
     let knowledgeReturnView = 'home';
+    let retrievalMode = 'standard';
     let routeMotionController = null;
 
     const progressMessages = {
@@ -86,6 +89,7 @@
         tasks_decomposing: '正在拆分差旅标准与外部信息',
         policy_searching: '正在检索适用的差旅制度',
         travel_info_searching: '正在查询目的地天气与出行信息',
+        train_query_searching: '正在查询高铁车次与余票',
         memory_searching: '正在查找相关差旅记录',
         preference_updating: '正在更新你的差旅偏好',
         trip_details_collecting: '正在整理行程信息',
@@ -103,6 +107,7 @@
     const progressAgentLabels = {
         rag_knowledge: '差旅标准',
         information_query: '天气与出行',
+        train_query: '高铁车次',
         memory_query: '差旅记录',
         preference: '偏好',
         event_collection: '行程信息',
@@ -423,6 +428,35 @@
             submitHomeInput();
         });
 
+        retrievalModeControls.forEach((control) => {
+            const trigger = control.querySelector('[data-retrieval-mode-trigger]');
+            const menu = control.querySelector('[data-retrieval-mode-menu]');
+            trigger?.addEventListener('click', (event) => {
+                event.stopPropagation();
+                if (trigger.disabled) return;
+                const opening = !menu.classList.contains('is-open');
+                closeRetrievalModeMenus();
+                if (opening) {
+                    clearTimeout(menu._retrievalCloseTimer);
+                    menu.hidden = false;
+                    menu.setAttribute('aria-hidden', 'false');
+                    trigger.setAttribute('aria-expanded', 'true');
+                    requestAnimationFrame(() => {
+                        menu.classList.add('is-open');
+                        menu.querySelector(`[data-retrieval-mode-option="${retrievalMode}"]`)?.focus({ preventScroll: true });
+                    });
+                }
+            });
+            control.querySelectorAll('[data-retrieval-mode-option]').forEach((option) => {
+                option.addEventListener('click', (event) => {
+                    event.stopPropagation();
+                    setRetrievalMode(option.dataset.retrievalModeOption, { persist: true });
+                    closeRetrievalModeMenus();
+                    trigger?.focus({ preventScroll: true });
+                });
+            });
+        });
+
         // 附件入口：每个 composer 的 .attach-button 内含一个隐藏 file input。
         document.querySelectorAll('.attach-button').forEach((label) => {
             const input = label.querySelector('input[type="file"]');
@@ -510,11 +544,87 @@
         chatMessages.addEventListener('scroll', markConversationScrolling, { passive: true });
 
         document.addEventListener('click', (event) => {
+            if (!event.target.closest('[data-retrieval-mode-control]')) closeRetrievalModeMenus();
             if (!sessionPopover.contains(event.target) && !event.target.closest('.session-more')) {
                 sessionPopover.hidden = true;
             }
         });
         document.addEventListener('keydown', handleKnowledgeShortcut);
+        document.addEventListener('keydown', (event) => {
+            if (event.key === 'Escape') closeRetrievalModeMenus();
+        });
+    }
+
+    function retrievalModeStorageKey(sessionId = activeSessionId) {
+        return `${RETRIEVAL_MODE_KEY_PREFIX}.${userId}.${sessionId || 'pending'}`;
+    }
+
+    function restoreRetrievalMode() {
+        let stored = 'standard';
+        try {
+            stored = localStorage.getItem(retrievalModeStorageKey()) || 'standard';
+        } catch (err) {
+            stored = 'standard';
+        }
+        setRetrievalMode(stored, { persist: false });
+    }
+
+    function setRetrievalMode(mode, { persist = false } = {}) {
+        retrievalMode = mode === 'enhanced' ? 'enhanced' : 'standard';
+        retrievalModeControls.forEach((control) => {
+            const trigger = control.querySelector('[data-retrieval-mode-trigger]');
+            const label = control.querySelector('[data-retrieval-mode-label]');
+            if (label) label.textContent = retrievalMode === 'enhanced' ? '增强检索' : '标准检索';
+            trigger?.classList.toggle('is-enhanced', retrievalMode === 'enhanced');
+            trigger?.setAttribute(
+                'aria-label',
+                retrievalMode === 'enhanced'
+                    ? '当前为增强检索，点击切换检索模式'
+                    : '当前为标准检索，点击切换检索模式'
+            );
+            control.querySelectorAll('[data-retrieval-mode-option]').forEach((option) => {
+                option.setAttribute(
+                    'aria-checked',
+                    String(option.dataset.retrievalModeOption === retrievalMode)
+                );
+            });
+            if (persist && retrievalMode === 'enhanced') {
+                trigger?.classList.remove('is-newly-enhanced');
+                requestAnimationFrame(() => trigger?.classList.add('is-newly-enhanced'));
+                setTimeout(() => trigger?.classList.remove('is-newly-enhanced'), 520);
+            }
+        });
+        if (persist) {
+            try {
+                localStorage.setItem(retrievalModeStorageKey(), retrievalMode);
+            } catch (err) {
+                // Current-page state remains usable when storage is unavailable.
+            }
+        }
+    }
+
+    function closeRetrievalModeMenus() {
+        retrievalModeControls.forEach((control) => {
+            const trigger = control.querySelector('[data-retrieval-mode-trigger]');
+            const menu = control.querySelector('[data-retrieval-mode-menu]');
+            if (menu) {
+                clearTimeout(menu._retrievalCloseTimer);
+                menu.classList.remove('is-open');
+                menu.setAttribute('aria-hidden', 'true');
+                menu._retrievalCloseTimer = setTimeout(() => {
+                    if (!menu.classList.contains('is-open')) menu.hidden = true;
+                }, 240);
+            }
+            trigger?.setAttribute('aria-expanded', 'false');
+        });
+    }
+
+    function setRetrievalModeControlsDisabled(disabled) {
+        retrievalModeControls.forEach((control) => {
+            const trigger = control.querySelector('[data-retrieval-mode-trigger]');
+            if (trigger) trigger.disabled = !!disabled;
+        });
+        if (disabled) closeRetrievalModeMenus();
     }
 
     function markConversationScrolling() {
@@ -747,7 +857,7 @@
         try {
             const status = await fetchJson('/api/knowledge/refresh/status');
             renderKnowledgeRefreshStatus(status);
-            if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+            if (status.status === 'running' || status.status === 'queued') scheduleKnowledgeRefreshPoll();
         } catch (err) {
             // The document library remains usable even if status polling is unavailable.
         }
@@ -761,7 +871,7 @@
                 const status = await fetchJson('/api/knowledge/refresh/status');
                 knowledgeRefreshPollFailures = 0;
                 renderKnowledgeRefreshStatus(status);
-                if (status.status === 'running') scheduleKnowledgeRefreshPoll();
+                if (status.status === 'running' || status.status === 'queued') scheduleKnowledgeRefreshPoll();
                 else {
                     knowledgeLoaded = false;
                     await loadKnowledgeDocuments(true);
@@ -790,7 +900,7 @@
             return;
         }
 
-        const running = state === 'running';
+        const running = state === 'running' || state === 'queued';
         const success = state === 'success';
         const partial = state === 'partial_success';
         const report = status?.report || {};
@@ -800,7 +910,8 @@
         document.getElementById('knowledgeSyncProgress').style.width = `${Math.max(0, Math.min(100, Number(status?.progress || 0)))}%`;
 
         let detail = status?.message || '';
-        if (running) detail = `${Number(status?.progress || 0)}% · 文档会在后台完成解析与向量化`;
+        if (state === 'queued') detail = '任务已持久化，正在等待刷新 worker 认领';
+        else if (running) detail = `${Number(status?.progress || 0)}% · 文档会在后台完成解析与向量化`;
         else if (success || partial) {
             detail = `${report.documents_loaded || 0} 份文档 · ${report.chunks_loaded || 0} 个检索片段${partial ? ` · ${report.errors?.length || 0} 项失败` : ''}`;
         } else if (!detail && status?.finished_at) {
@@ -1036,6 +1147,7 @@
         sendBtn.disabled = !enabled;
         homeInput.disabled = !enabled;
         homeSendBtn.disabled = !enabled;
+        setRetrievalModeControlsDisabled(!enabled);
     }
 
     function hideInitOverlay() {
@@ -1138,6 +1250,7 @@
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`);
             activeSessionId = data.active_session_id || '';
+            restoreRetrievalMode();
             renderSessions(Array.isArray(data.sessions) ? data.sessions : []);
         } catch (err) {
             renderSessions([]);
@@ -1184,6 +1297,7 @@
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
             activeSessionId = data.session_id || '';
+            setRetrievalMode('standard', { persist: true });
             chatMessages.replaceChildren();
             setComposerContext('');
             showHome();
@@ -1201,6 +1315,7 @@
                 { method: 'POST' }
             );
             activeSessionId = sessionId;
+            restoreRetrievalMode();
             chatMessages.replaceChildren();
             const messages = data.messages || [];
             messages.forEach((message) => {
@@ -1748,6 +1863,7 @@
             renderPendingAttachments();
         }
         isProcessing = true;
+        setRetrievalModeControlsDisabled(true);
         interruptPending = false;
         sendBtn.disabled = false;
         chatInput.placeholder = 'Hommey 正在整理…';
@@ -1765,6 +1881,7 @@
                     message: text,
                     attachment_ids: sendingAttachmentIds,
                     client_request_id: currentRequestId,
+                    retrieval_mode: retrievalMode,
                 }),
             });
             if (!response.ok) {
@@ -1885,6 +2002,7 @@
             if (!options.preserveComposer) resizeInput(chatInput);
         } finally {
             isProcessing = false;
+            setRetrievalModeControlsDisabled(false);
             interruptPending = false;
             sendBtn.disabled = false;
             setSendLoading(false);

@@ -1,0 +1,7 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 120 64" role="img" aria-labelledby="title desc">
+  <title id="title">Hommey 标志方案 B：柔和弧线</title>
+  <desc id="desc">两个同尺寸圆点由一条舒展、连续的宽弧曲线连接</desc>
+  <path d="M24 46C47 47 49 39 57 29C66 18 77 14 94 15" fill="none" stroke="#252521" stroke-width="5.25" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="15" cy="46" r="9" fill="none" stroke="#252521" stroke-width="5.25"/>
+  <circle cx="103" cy="15" r="9" fill="none" stroke="#B56B52" stroke-width="5.25"/>
+</svg>

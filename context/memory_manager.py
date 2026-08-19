@@ -2,12 +2,12 @@
 记忆管理器 (Memory Manager)
 统一管理两层记忆，提供简单的API
 """
-import asyncio
 from typing import Dict, Any, List, Optional
 import uuid
 from .memory_service import MemoryService
 from settings import LLM_CONFIG, MEMORY_CONFIG
 from utils.memory_safety import filter_safe_memory_mapping, redact_sensitive_text, wrap_untrusted_memory
+from utils.io_executor import run_blocking
 import logging
 
 logger = logging.getLogger(__name__)
@@ -403,7 +403,7 @@ class MemoryManager:
         chars = max(int(max_chars or cfg.get("max_chars", 6000)), 1)
         prompt_version = str(cfg.get("prompt_version", "segment-v1"))
 
-        claimed = await asyncio.to_thread(
+        claimed = await run_blocking(
             repo.claim_summary_range,
             self.user_id,
             self.session_id,
@@ -414,7 +414,7 @@ class MemoryManager:
             prompt = self._build_segment_prompt(claimed)
             summary_text = await self._call_llm_text(prompt)
             if summary_text:
-                await asyncio.to_thread(
+                await run_blocking(
                     repo.insert_session_summary,
                     user_id=self.user_id,
                     summary_id=claimed.summary_id,
@@ -447,7 +447,7 @@ class MemoryManager:
         repo = self.memory_service.repository
         if repo is None:
             return []
-        return await asyncio.to_thread(
+        return await run_blocking(
             repo.get_session_summaries,
             self.user_id,
             session_id,

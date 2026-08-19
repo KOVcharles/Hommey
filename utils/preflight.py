@@ -11,6 +11,7 @@ from typing import Awaitable, Callable
 
 from settings import LLM_CONFIG, MCP_CONFIG, MEMORY_CONFIG, RAG_CONFIG, RESILIENCE_CONFIG
 from utils.llm_resilience import run_health_check
+from utils.io_executor import run_blocking
 from utils.observability import (
     COMPONENT_LLM,
     COMPONENT_MCP,
@@ -36,17 +37,27 @@ async def run_preflight(include_network: bool = False) -> dict:
     checks: list[Callable[[], Awaitable[CheckResult]]] = [
         check_api_key,
         check_rag_embedding_config,
-        check_milvus_data_dir,
         check_runtime_topology,
         check_mcp_config,
     ]
+    vector_backend = str(RAG_CONFIG.get("vector_backend") or "milvus_lite").lower()
+    if vector_backend in {"milvus", "milvus_lite"}:
+        checks.append(check_milvus_data_dir)
 
     if include_network:
         checks.append(check_model_service)
-    if MEMORY_CONFIG.get("short_term", {}).get("backend") == "redis":
-        checks.append(check_redis)
-    if MEMORY_CONFIG.get("long_term", {}).get("backend") == "postgres":
+    # Redis 协调层（锁/信号量/熔断）是聊天路径的硬依赖，与 short_term 后端无关，
+    # 因此始终探测，保证 Redis 不可用时 readiness 失败（§3.3 fail closed）。
+    checks.append(check_redis)
+    if (
+        MEMORY_CONFIG.get("long_term", {}).get("backend") == "postgres"
+        or vector_backend == "postgres"
+    ):
         checks.append(check_postgres)
+    if vector_backend == "postgres":
+        checks.append(check_pgvector)
+        if str(RAG_CONFIG.get("refresh_backend") or "postgres").lower() == "postgres":
+            checks.append(check_rag_refresh_control_plane)
 
     results = [await check() for check in checks]
     return {
@@ -81,16 +92,19 @@ async def check_redis() -> CheckResult:
     try:
         import redis
 
-        client = redis.Redis(
-            host=conf.get("redis_host", "127.0.0.1"),
-            port=conf.get("redis_port", 6379),
-            db=conf.get("redis_db", 0),
-            password=conf.get("redis_password"),
-            socket_connect_timeout=2,
-            socket_timeout=2,
-            decode_responses=True,
-        )
-        client.ping()
+        def _ping() -> None:
+            client = redis.Redis(
+                host=conf.get("redis_host", "127.0.0.1"),
+                port=conf.get("redis_port", 6379),
+                db=conf.get("redis_db", 0),
+                password=conf.get("redis_password"),
+                socket_connect_timeout=2,
+                socket_timeout=2,
+                decode_responses=True,
+            )
+            client.ping()
+
+        await run_blocking(_ping)
         return _result("redis_ping", COMPONENT_REDIS, True, "ok", start)
     except Exception as exc:
         record_upstream_error(COMPONENT_REDIS, exc, retryable=True)
@@ -99,20 +113,139 @@ async def check_redis() -> CheckResult:
 
 async def check_postgres() -> CheckResult:
     start = time.perf_counter()
-    dsn = MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
+    dsn = RAG_CONFIG.get("postgres_dsn") or MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
     if not dsn:
         return _result("postgres_connect", COMPONENT_POSTGRES, False, "HOMMEY_POSTGRES_DSN is missing", start)
     try:
         import psycopg
 
-        with psycopg.connect(dsn, connect_timeout=2) as conn:
-            with conn.cursor() as cur:
-                cur.execute("SELECT 1")
-                cur.fetchone()
+        def _query() -> None:
+            with psycopg.connect(dsn, connect_timeout=2) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT 1")
+                    cur.fetchone()
+
+        await run_blocking(_query)
         return _result("postgres_connect", COMPONENT_POSTGRES, True, "ok", start)
     except Exception as exc:
         record_upstream_error(COMPONENT_POSTGRES, exc, retryable=True)
         return _result("postgres_connect", COMPONENT_POSTGRES, False, "postgres unavailable", start)
+
+
+async def check_pgvector() -> CheckResult:
+    """Verify pgvector schema and one queryable active RAG version."""
+    start = time.perf_counter()
+    dsn = RAG_CONFIG.get("postgres_dsn") or MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
+    collection = str(RAG_CONFIG.get("collection_name") or "business_travel_knowledge")
+    expected_model = str(RAG_CONFIG.get("embedding_model") or "")
+    expected_dimension = int(RAG_CONFIG.get("embedding_dimension") or 0)
+    if not dsn:
+        return _result("pgvector", COMPONENT_RAG, False, "PostgreSQL RAG DSN is missing", start)
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        def _query() -> dict:
+            with psycopg.connect(dsn, connect_timeout=2, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute("SELECT extversion FROM pg_extension WHERE extname='vector'")
+                    extension = cur.fetchone()
+                    cur.execute(
+                        """
+                        SELECT active_version, embedding_model, embedding_dimension,
+                               index_fingerprint, schema_version
+                        FROM rag_collections WHERE collection_name=%s
+                        """,
+                        (collection,),
+                    )
+                    state = cur.fetchone()
+                    return {"extension": extension, "state": state}
+
+        result = await run_blocking(_query)
+        extension = result["extension"]
+        state = result["state"]
+        ok = bool(
+            extension
+            and state
+            and state.get("active_version")
+            and state.get("index_fingerprint")
+            and state.get("embedding_model") == expected_model
+            and int(state.get("embedding_dimension") or 0) == expected_dimension
+        )
+        return _result(
+            "pgvector",
+            COMPONENT_RAG,
+            ok,
+            "pgvector active version ready" if ok else "pgvector schema, active version, or embedding config mismatch",
+            start,
+            {
+                "collection": collection,
+                "active_version": state.get("active_version") if state else None,
+                "extension_version": extension.get("extversion") if extension else None,
+            },
+        )
+    except Exception as exc:
+        record_upstream_error(COMPONENT_RAG, exc, retryable=True)
+        return _result("pgvector", COMPONENT_RAG, False, "pgvector unavailable or schema missing", start)
+
+
+async def check_rag_refresh_control_plane() -> CheckResult:
+    """Verify durable refresh tables and a recently alive independent worker."""
+    start = time.perf_counter()
+    dsn = RAG_CONFIG.get("postgres_dsn") or MEMORY_CONFIG.get("long_term", {}).get("postgres_dsn", "")
+    collection = str(RAG_CONFIG.get("collection_name") or "business_travel_knowledge")
+    stale_seconds = max(10, int(RAG_CONFIG.get("refresh_worker_stale_seconds") or 45))
+    if not dsn:
+        return _result("rag_refresh_worker", COMPONENT_RAG, False, "PostgreSQL RAG DSN is missing", start)
+    try:
+        import psycopg
+        from psycopg.rows import dict_row
+
+        def _query() -> dict:
+            with psycopg.connect(dsn, connect_timeout=2, row_factory=dict_row) as conn:
+                with conn.cursor() as cur:
+                    cur.execute(
+                        """
+                        SELECT to_regclass('rag_refresh_jobs') AS jobs,
+                               to_regclass('rag_source_generations') AS sources,
+                               to_regclass('rag_worker_heartbeats') AS workers
+                        """
+                    )
+                    tables = cur.fetchone()
+                    if not all(tables.values()):
+                        return {"tables": tables, "worker": None}
+                    cur.execute(
+                        """
+                        SELECT worker_id, last_seen_at,
+                               EXTRACT(EPOCH FROM (NOW() - last_seen_at)) AS age_seconds
+                        FROM rag_worker_heartbeats
+                        WHERE collection_name=%s
+                        ORDER BY last_seen_at DESC LIMIT 1
+                        """,
+                        (collection,),
+                    )
+                    return {"tables": tables, "worker": cur.fetchone()}
+
+        result = await run_blocking(_query)
+        worker = result["worker"]
+        age = float(worker["age_seconds"]) if worker else None
+        ok = bool(all(result["tables"].values()) and worker and age is not None and age <= stale_seconds)
+        return _result(
+            "rag_refresh_worker",
+            COMPONENT_RAG,
+            ok,
+            "persistent RAG refresh worker ready" if ok else "RAG refresh worker missing or stale",
+            start,
+            {
+                "collection": collection,
+                "worker_id": worker.get("worker_id") if worker else None,
+                "heartbeat_age_seconds": round(age, 3) if age is not None else None,
+                "stale_after_seconds": stale_seconds,
+            },
+        )
+    except Exception as exc:
+        record_upstream_error(COMPONENT_RAG, exc, retryable=True)
+        return _result("rag_refresh_worker", COMPONENT_RAG, False, "RAG refresh control plane unavailable", start)
 
 
 async def check_rag_embedding_config() -> CheckResult:
@@ -163,21 +296,43 @@ async def check_milvus_data_dir() -> CheckResult:
 
 
 async def check_runtime_topology() -> CheckResult:
-    """Milvus Lite and process-local Web instances require one worker."""
+    """Reject unsafe worker counts until every required shared backend exists."""
     start = time.perf_counter()
     try:
         workers = int(os.getenv("UVICORN_WORKERS", "1"))
     except ValueError:
         workers = 0
-    ok = workers == 1
+    vector_backend = str(RAG_CONFIG.get("vector_backend") or "milvus_lite").lower()
+    long_backend = str(MEMORY_CONFIG.get("long_term", {}).get("backend") or "file").lower()
+    short_backend = str(MEMORY_CONFIG.get("short_term", {}).get("backend") or "memory").lower()
+    refresh_backend = str(RAG_CONFIG.get("refresh_backend") or "postgres").lower()
+    source_storage = str(RAG_CONFIG.get("source_storage") or "shared_filesystem").lower()
+    shared_data = vector_backend == "postgres" and long_backend == "postgres" and short_backend == "redis"
+    persistent_refresh = refresh_backend == "postgres"
+    shared_files = source_storage in {"shared_filesystem", "object_storage"}
+    ok = workers >= 1 and (workers == 1 or (shared_data and persistent_refresh and shared_files))
+    if workers > 1 and ok:
+        message = "multi-worker shared-state topology ready"
+    elif workers > 1:
+        message = "multi-worker requires Redis, PostgreSQL RAG/memory, persistent refresh jobs, and shared files"
+    elif workers < 1:
+        message = "UVICORN_WORKERS must be at least 1"
+    else:
+        message = "single-worker topology"
     return _result(
         "runtime_topology",
         COMPONENT_RAG,
         ok,
-        "single-worker Milvus Lite topology"
-        if ok else "Milvus Lite and process-local sessions require UVICORN_WORKERS=1",
+        message,
         start,
-        {"uvicorn_workers": workers},
+        {
+            "uvicorn_workers": workers,
+            "vector_backend": vector_backend,
+            "long_term_backend": long_backend,
+            "short_term_backend": short_backend,
+            "refresh_backend": refresh_backend,
+            "source_storage": source_storage,
+        },
     )
 
 

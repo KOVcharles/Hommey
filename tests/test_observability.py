@@ -79,6 +79,7 @@ async def test_preflight_is_componentized_and_does_not_require_network(monkeypat
     monkeypatch.setitem(preflight.RAG_CONFIG, "embedding_api_key", "")
     monkeypatch.setitem(preflight.RAG_CONFIG, "embedding_base_url", "https://api.siliconflow.cn/v1")
     monkeypatch.setitem(preflight.RAG_CONFIG, "knowledge_base_path", str(tmp_path / "rag-store"))
+    monkeypatch.setitem(preflight.RAG_CONFIG, "vector_backend", "milvus_lite")
     monkeypatch.setitem(preflight.MEMORY_CONFIG["short_term"], "backend", "memory")
     monkeypatch.setitem(preflight.MEMORY_CONFIG["long_term"], "backend", "file")
     monkeypatch.setenv("UVICORN_WORKERS", "1")
@@ -107,9 +108,23 @@ async def test_observability_endpoints(monkeypatch):
         ready = await client.get("/readyz")
         metrics = await client.get("/metrics")
 
-    assert health.json() == {"ok": True}
+    assert health.json()["ok"] is True
+    assert isinstance(health.json()["worker_pid"], int)
     assert ready.json()["ok"] is True
     assert "hommey_http_requests_total" in metrics.text
+
+
+@pytest.mark.anyio
+async def test_readyz_returns_503_when_a_required_check_fails(monkeypatch):
+    async def fake_preflight(include_network=False):
+        return {"ok": False, "checks": [{"name": "redis_ping", "ok": False}]}
+
+    monkeypatch.setattr("webui_new.server.run_preflight", fake_preflight)
+    async with AsyncClient(transport=ASGITransport(app=app), base_url="http://testserver") as client:
+        response = await client.get("/readyz")
+
+    assert response.status_code == 503
+    assert response.json()["ok"] is False
 
 
 @pytest.mark.anyio

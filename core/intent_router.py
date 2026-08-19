@@ -24,6 +24,7 @@ from core.guard_rules import (
     POLICY_KEYWORDS,
     PREFERENCE_KEYWORDS,
     SEARCH_KEYWORDS,
+    TRAIN_KEYWORDS,
     TRIP_KEYWORDS,
     WEATHER_KEYWORDS,
 )
@@ -145,6 +146,7 @@ class FastIntentRouter:
         has_weather = any(keyword in q for keyword in WEATHER_KEYWORDS)
         has_search = any(keyword in q for keyword in SEARCH_KEYWORDS)
         has_compliance = any(keyword in q for keyword in COMPLIANCE_KEYWORDS)
+        has_train = any(keyword in q for keyword in TRAIN_KEYWORDS)
 
         if any(keyword in q for keyword in MEMORY_KEYWORDS):
             candidates.append(IntentCandidate("memory_query", 0.9, "询问用户自己的历史或偏好记忆"))
@@ -157,6 +159,11 @@ class FastIntentRouter:
 
         if has_compliance:
             candidates.append(IntentCandidate("trip_compliance", 0.9, "依据公司制度检查差旅行程合规性"))
+
+        # 车次/高铁/火车 → train_query。can_call_information_query 对车次句
+        # 提前返回 unclear，因此这里不会与 information_query 候选同时出现。
+        if has_train and has_business_travel_context(q) and not has_policy and not has_compliance:
+            candidates.append(IntentCandidate("train_query", 0.9, "查询高铁/火车车次、时刻与余票"))
 
         if has_weather:
             info_guard = can_call_information_query(q, 0.9)

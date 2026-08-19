@@ -39,6 +39,17 @@ TRANSACTION_KEYWORDS: Tuple[str, ...] = (
     "直接支付", "帮我支付", "替我支付", "帮我转账", "执行转账",
 )
 
+# 预订/购票/付款等交易语言（黑名单）。guard 在无 ticket_purchase/payment skill
+# （transaction_supported()=False）时确定性拒绝 —— 产品边界「仅建议、不交易」；
+# 目录出现 TRANSACTION_INTENTS 对应 skill 后 transaction_supported() 变 True，
+# 同一批词自动放行（纯声明式扩展，零 Python 改动）。
+BOOKING_KEYWORDS: Tuple[str, ...] = (
+    "帮我订", "帮我预订", "帮我预定", "帮我买", "帮我购",
+    "预订", "预定", "买票", "购票", "抢票", "订票", "下单",
+    "帮我付款", "替我付款", "帮我支付", "替我支付", "代付",
+    "直接支付", "帮我转账", "执行转账",
+)
+
 # 消费交易语言、可被放行的意图名。新增车票 skill 时把其 intent 加进该集合，
 # 或者直接复用其中一个名称 —— 一旦目录中出现，transaction_supported() 变 True。
 # （纯声明式扩展探测点：tests/test_skill_catalog_derived.py 验证闭环。）
@@ -68,6 +79,7 @@ BUSINESS_TRAVEL_KEYWORDS: Tuple[str, ...] = (
 
 TRAVEL_TRANSPORT_KEYWORDS: Tuple[str, ...] = (
     "航班", "机票", "机场", "高铁", "火车", "车次", "动车", "铁路",
+    "车票", "火车票", "高铁票", "动车票",
     "酒店", "住宿", "地铁", "打车", "交通路线", "出行路线", "换乘",
 )
 
@@ -79,6 +91,12 @@ POLICY_KEYWORDS: Tuple[str, ...] = (
 )
 GENERIC_POLICY_KEYWORDS: Tuple[str, ...] = ("标准", "流程")
 WEATHER_KEYWORDS: Tuple[str, ...] = ("天气", "气温", "下雨", "预报")
+# 车次/高铁/火车/铁路 → train_query（与信息查询划界；TRAVEL_TRANSPORT_KEYWORDS
+# 保留原样供 has_business_travel_context 识别，二者职责不同）。
+TRAIN_KEYWORDS: Tuple[str, ...] = (
+    "车次", "高铁", "火车", "动车", "铁路", "班次", "时刻表", "坐高铁", "坐火车",
+    "车票", "火车票", "高铁票", "动车票",
+)
 SEARCH_KEYWORDS: Tuple[str, ...] = ("查一下", "搜索", "查询", "了解一下")
 COMPLIANCE_KEYWORDS: Tuple[str, ...] = ("合规", "符合标准", "检查行程", "行程检查", "是否超标")
 MEMORY_KEYWORDS: Tuple[str, ...] = (

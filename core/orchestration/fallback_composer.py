@@ -45,6 +45,7 @@ _LABEL_BY_KIND = {
     "preference": "偏好设置",
     "trip": "行程安排",
     "notice": "合规提示",
+    "train": "车次信息",
     "general": "处理结果",
 }
 
@@ -248,6 +249,7 @@ class FallbackComposer:
             "preference": cls._preference_section,
             "trip": cls._trip_sections,
             "notice": cls._notice_section,
+            "train": cls._train_section,
             "general": cls._general_section,
         }.get(kind)
         if renderer is None:
@@ -295,6 +297,48 @@ class FallbackComposer:
             body="" if items or days else summary,
             items=items,
             days=days,
+        )
+
+    @staticmethod
+    def _train_section(result: TaskResult) -> AnswerSection:
+        payload = _nested(result.data)
+        if "results" in payload and isinstance(payload.get("results"), dict):
+            payload = payload["results"]
+        summary = str(payload.get("summary") or payload.get("message") or "已取得车次信息。")
+        note = _clean(payload.get("note"), 600)
+        items = []
+        for train in payload.get("trains") or []:
+            if not isinstance(train, dict):
+                continue
+            route = " ".join(filter(None, [
+                _clean(train.get("depart_time")),
+                _clean(train.get("from_station")),
+                "→",
+                _clean(train.get("to_station")),
+                _clean(train.get("arrive_time")),
+                _clean(train.get("duration")),
+            ]))
+            seats = train.get("seats") or {}
+            if isinstance(seats, dict):
+                seat_detail = " · ".join(
+                    f"{_clean(name, 20)} {_clean(value, 20)}"
+                    for name, value in seats.items() if value
+                )
+            else:
+                seat_detail = _clean(seats, 120)
+            item = _item(train.get("train_no"), route, seat_detail)
+            if item:
+                items.append(item)
+        body_parts = []
+        if not items:
+            body_parts.append(summary)
+        if note:
+            body_parts.append(note)
+        return AnswerSection(
+            kind="train",
+            title="车次信息",
+            body=" ".join(body_parts),
+            items=items,
         )
 
     @staticmethod

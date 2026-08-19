@@ -4,6 +4,8 @@ WebUI API 请求体模型。
 这里只放入站 request body 的 Pydantic schema，避免路由文件里散落模型定义。
 响应结构暂时保持现状，没有在这里建 response schema。
 """
+from typing import Literal
+
 from pydantic import BaseModel, Field
 
 
@@ -16,6 +18,9 @@ class ChatRequest(BaseModel):
     message: str = ""
     attachment_ids: list[str] = Field(default_factory=list)
     client_request_id: str | None = None
+    # Per-session selection is owned by the client and sent on every turn.
+    # Old clients remain on the stable retrieval path.
+    retrieval_mode: Literal["standard", "enhanced"] = "standard"
 
 
 class SessionRenameRequest(BaseModel):

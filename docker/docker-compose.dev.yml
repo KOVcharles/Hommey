@@ -9,7 +9,8 @@
 # ✅ 必须和 base 文件「合并」使用（顺序：先 base，再 dev）：
 #    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 #
-#    改完代码无需 rebuild，只需重启进程（dev 模式已挂载源码）：
+#    改完代码无需 rebuild：dev 模式已挂载源码，且追加了 uvicorn --reload，
+#    保存 .py 后进程自动重启（无需手动 restart）。若 --reload 未生效可手动：
 #    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart hommey
 #
 # Windows 注意：第一行 ..:/app 会把整个仓库挂进容器，需在 Docker Desktop
@@ -17,6 +18,18 @@
 # ============================================================
 services:
   hommey:
+    # 多 worker 验收模式不使用 --reload；修改代码后显式 restart。
+    command: ["sh", "-c", "uvicorn webui_new.server:app --host 0.0.0.0 --port 8000 --workers ${UVICORN_WORKERS:-2}"]
+    volumes:
+      - ..:/app
+      - /app/.venv
+      - /app/venv
+      - /app/env
+      - /app/node_modules
+      - ../data/documents:/app/data/documents
+      - ../data/rag_knowledge:/app/data/rag_knowledge
+
+  rag-worker:
     volumes:
       - ..:/app
       - /app/.venv

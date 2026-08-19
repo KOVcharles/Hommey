@@ -119,6 +119,7 @@ def test_plan_workflow_is_declarative_and_ends_with_compliance():
         ("event_collection", 1),
         ("rag_knowledge", 2),
         ("information_query", 2),
+        ("train_query", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]
@@ -150,6 +151,7 @@ def test_completed_plan_hides_workflow_intermediates():
         _res("event_collection", {"destination": "广州"}),
         _res("rag_knowledge", {"answer": "不应展示的中间制度回答"}),
         _res("information_query", {"results": {"summary": "不应展示的中间外部信息"}}),
+        _res("train_query", {"results": {"summary": "不应展示的中间车次信息", "trains": []}}),
         _res("itinerary_planning", {"itinerary": {"title": "广州两天出差", "daily_plans": []}}),
         _res("trip_compliance", {"verdict": "unknown", "summary": "制度证据不足"}),
     ]
@@ -162,6 +164,7 @@ def test_completed_plan_hides_workflow_intermediates():
     assert "广州两天出差" in joined
     assert "不应展示的中间制度回答" not in joined
     assert "不应展示的中间外部信息" not in joined
+    assert "不应展示的中间车次信息" not in joined
     # 合规结论以 notice 浮出（不在 trip 主 section 中隐藏）。
     assert document.notices
 

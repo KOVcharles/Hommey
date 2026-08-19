@@ -104,6 +104,27 @@ def test_trip_and_weather_multi_intent_routes_to_information_and_trip():
     assert ("itinerary_planning", 3) in _execution_plan(data)
 
 
+def test_train_query_routes_to_train_query_not_information_query():
+    data = _reply("帮我查一下这周四上海到北京的高铁车次")
+
+    assert _intent_types(data) == {"train_query"}
+    assert data["routing"]["intent"] == "train_query"
+    assert data["routing"]["mode"] == "single"
+    assert data["routing"]["should_call_skill"] is True
+    # 车次句必须走 train_query，不得落到 information_query。
+    assert "information_query" not in _intent_types(data)
+    assert _execution_plan(data) == [("train_query", 1)]
+
+
+def test_trip_and_train_multi_intent_routes_to_train_and_trip():
+    data = _reply("帮我规划一下去南京的路线，顺便查一下去南京的高铁车次")
+
+    assert {"itinerary_planning", "train_query"} <= _intent_types(data)
+    assert ("event_collection", 1) in _execution_plan(data)
+    assert any(agent == "train_query" for agent, _ in _execution_plan(data))
+    assert ("itinerary_planning", 3) in _execution_plan(data)
+
+
 def test_preference_and_trip_multi_intent_routes_to_preference_and_trip():
     data = _reply("我喜欢住汉庭，帮我规划下周去南京出差")
 
@@ -128,6 +149,7 @@ def test_trip_only_routes_to_event_collection_then_itinerary_planning():
         ("event_collection", 1),
         ("rag_knowledge", 2),
         ("information_query", 2),
+        ("train_query", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]
@@ -175,6 +197,7 @@ def test_low_confidence_intent_is_filtered_per_intent():
         ("event_collection", 1),
         ("rag_knowledge", 2),
         ("information_query", 2),
+        ("train_query", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]

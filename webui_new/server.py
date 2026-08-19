@@ -16,7 +16,7 @@ from contextlib import asynccontextmanager
 from pathlib import Path
 
 from fastapi import FastAPI
-from fastapi.responses import HTMLResponse, PlainTextResponse
+from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from jinja2 import Environment, FileSystemLoader
 
@@ -39,19 +39,27 @@ from webui_new.routes.users import create_users_router
 from webui_new.auth.migrations import apply_all_migrations
 from webui_new.routes.skill_admin import create_skill_admin_router
 from webui_new.routes.knowledge_base import create_knowledge_base_router
+from webui_new.knowledge_base_service import KnowledgeBaseManagementService
 from webui_new.skill_platform import SkillPlatformService
 from context.postgres_pool import close_all_postgres_pools
+from evaluation.sink import close_evaluation_sink
+from utils.io_executor import shutdown_io_executor
 
 
 configure_logging()
 
 @asynccontextmanager
 async def lifespan(_app):
-    if MEMORY_CONFIG.get("long_term", {}).get("backend") == "postgres":
+    if (
+        MEMORY_CONFIG.get("long_term", {}).get("backend") == "postgres"
+        or RAG_CONFIG.get("vector_backend") == "postgres"
+    ):
         apply_all_migrations()
     try:
         yield
     finally:
+        await close_evaluation_sink()
+        await shutdown_io_executor()
         close_all_postgres_pools()
 
 
@@ -95,18 +103,45 @@ if not documents_dir.is_absolute():
 knowledge_base_path = Path(RAG_CONFIG["knowledge_base_path"])
 if not knowledge_base_path.is_absolute():
     knowledge_base_path = Path(project_root) / knowledge_base_path
-app.include_router(create_knowledge_base_router(documents_dir, knowledge_base_path))
+knowledge_management = None
+if (
+    RAG_CONFIG.get("vector_backend") == "postgres"
+    and RAG_CONFIG.get("refresh_backend") == "postgres"
+    and RAG_CONFIG.get("postgres_dsn")
+):
+    from rag.refresh_jobs import PostgresRAGRefreshJobRepository
+
+    refresh_repository = PostgresRAGRefreshJobRepository(
+        str(RAG_CONFIG.get("postgres_dsn") or ""),
+        str(RAG_CONFIG.get("collection_name") or "business_travel_knowledge"),
+        lease_seconds=int(RAG_CONFIG.get("refresh_lease_seconds", 90)),
+        max_attempts=int(RAG_CONFIG.get("refresh_max_attempts", 3)),
+        retry_delay_seconds=int(RAG_CONFIG.get("refresh_retry_delay_seconds", 5)),
+    )
+    knowledge_management = KnowledgeBaseManagementService(
+        documents_dir,
+        knowledge_base_path,
+        job_repository=refresh_repository,
+    )
+app.include_router(
+    create_knowledge_base_router(
+        documents_dir,
+        knowledge_base_path,
+        management_service=knowledge_management,
+    )
+)
 
 
 @app.get("/healthz")
 async def healthz():
-    return {"ok": True}
+    return {"ok": True, "worker_pid": os.getpid()}
 
 
 @app.get("/readyz")
 async def readyz():
     include_network = bool(SYSTEM_CONFIG.get("preflight_include_network", False))
-    return await run_preflight(include_network=include_network)
+    result = await run_preflight(include_network=include_network)
+    return JSONResponse(status_code=200 if result.get("ok") else 503, content=result)
 
 
 @app.get("/metrics", response_class=PlainTextResponse)

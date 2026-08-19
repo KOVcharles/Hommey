@@ -204,7 +204,7 @@ def test_executor_runs_independent_tasks_concurrently():
     assert results[0].data["query"] != results[1].data["query"]
 
 
-def test_plan_trip_expands_to_five_step_dag():
+def test_plan_trip_expands_to_six_step_dag():
     plan_query = "我明天去上海出差3天，帮我规划一下行程"
     plan_intention = {
         "intents": [{"type": "itinerary_planning", "confidence": 0.9, "should_call_skill": True}],
@@ -218,17 +218,17 @@ def test_plan_trip_expands_to_five_step_dag():
     execution_tasks = TaskGraphBuilder().compile(tasks)
 
     assert [task.agent_name for task in execution_tasks] == [
-        "event_collection", "rag_knowledge", "information_query",
+        "event_collection", "rag_knowledge", "information_query", "train_query",
         "itinerary_planning", "trip_compliance",
     ]
-    assert [task.priority for task in execution_tasks] == [1, 2, 2, 3, 4]
+    assert [task.priority for task in execution_tasks] == [1, 2, 2, 2, 3, 4]
     assert [task.failure_policy for task in execution_tasks] == [
-        "abort", "abort", "continue", "abort", "continue",
+        "abort", "abort", "continue", "continue", "abort", "continue",
     ]
     batches = TaskGraphBuilder.batches(execution_tasks)
     assert [[task.agent_name for task in batch] for batch in batches] == [
         ["event_collection"],
-        ["rag_knowledge", "information_query"],
+        ["rag_knowledge", "information_query", "train_query"],
         ["itinerary_planning"],
         ["trip_compliance"],
     ]
@@ -258,13 +258,16 @@ def test_plan_trip_absorbs_overlapping_independent_intents():
 
     # 独立 Goal 保留所有权，同时作为 workflow 的显式依赖，不重复执行。
     assert sorted(task.agent_name for task in execution_tasks) == sorted([
-        "event_collection", "rag_knowledge", "information_query",
+        "event_collection", "rag_knowledge", "information_query", "train_query",
         "itinerary_planning", "trip_compliance",
     ])
     by_agent = {task.agent_name: task for task in execution_tasks}
     assert "标准" in by_agent["rag_knowledge"].query
     assert "天气" in by_agent["information_query"].query
     assert "天气" not in by_agent["rag_knowledge"].query
+    # train-query 步骤带 scoped 车次 query，不污染其他意图词域。
+    assert "车次" in by_agent["train_query"].query
+    assert "标准" not in by_agent["train_query"].query
 
 
 def test_abort_halt_skips_downstream_steps():
@@ -286,6 +289,8 @@ def test_abort_halt_skips_downstream_steps():
             return {"status": "success", "data": {"answer": "住宿标准400元。"}}
         if agent == "information_query":
             return {"status": "success", "data": {"results": {"summary": "晴"}}, "query_success": True}
+        if agent == "train_query":
+            return {"status": "success", "data": {"results": {"trains": []}}, "query_success": True}
         if agent == "itinerary_planning":
             return {"status": "error", "data": {}, "error_code": "PLAN_FAILED", "error_message": "无法生成行程"}
         if agent == "trip_compliance":
@@ -363,7 +368,8 @@ def test_pause_gate_halts_workflow_and_builds_intake_presentation():
     assert output.paused is True
     assert output.pause_info.pause_agent == "event_collection"
     assert [step["agent_name"] for step in output.pause_info.steps_remaining] == [
-        "rag_knowledge", "information_query", "itinerary_planning", "trip_compliance",
+        "rag_knowledge", "information_query", "train_query",
+        "itinerary_planning", "trip_compliance",
     ]
     assert output.presentation_document.type == "trip_intake"
     assert output.presentation_document.status == "collecting_required"

@@ -133,7 +133,8 @@ Run       一次可暂停、可恢复的完整工作流
 | --- | --- |
 | `event-collection` | 增量收集当前公司出差事项 |
 | `ask-question` | 基于内部知识库回答差旅制度问题 |
-| `query-info` | 查询与当前差旅直接相关的天气和公共交通信息 |
+| `query-info` | 查询天气和公共交通信息（无需完整差旅上下文） |
+| `train-query` | 查询真实车票/车次、时刻、历时与余票（无需完整差旅上下文） |
 | `plan-trip` | 组合事项、制度与外部信息生成行程 |
 | `check-trip-compliance` | 根据已检索的制度证据检查合规性 |
 | `memory-query` | 查询当前用户自己的差旅记录 |
@@ -150,7 +151,7 @@ Skill 可以独立声明输入输出、风险、依赖和执行步骤，并由�
 | Web | FastAPI、Uvicorn、Jinja2、原生 JavaScript 与 CSS |
 | Agent | AgentScope、自研多意图编排流水线、声明式 Skill |
 | 状态与记忆 | PostgreSQL 16、Redis 7 |
-| 检索 | Milvus Lite、BM25、RRF、BGE Embedding |
+| 检索 | PostgreSQL + pgvector、BM25、RRF、BGE Embedding（Milvus Lite 仅保留本地迁移兼容） |
 | 传输 | NDJSON 流式响应 |
 | 部署 | Docker Compose |
 
@@ -194,6 +195,8 @@ curl http://127.0.0.1:8000/readyz
 ```
 
 打开 `http://127.0.0.1:8000`，注册账号后即可开始对话。管理员邮箱可通过 `HOMMEY_ADMIN_EMAILS` 配置。
+
+Compose 默认启动两个 Uvicorn worker，并另启 `rag-worker` 处理 PostgreSQL 中的持久化知识库刷新任务。当前知识库和附件目录通过同一主机的持久卷共享；部署到多台主机或多个云实例前，需要实现对象存储适配并将 `HOMMEY_RAG_SOURCE_STORAGE` 切换为 `object_storage`。
 
 > Docker 容器中的 `localhost` 指向容器本身。PostgreSQL 和 Redis 地址应使用 Compose 服务名；默认配置已经处理这一点。
 

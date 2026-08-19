@@ -13,6 +13,7 @@ from typing import Any, Dict, Optional, Tuple
 
 from core.guard_rules import (
     AMBIGUOUS_POLICY_KEYWORDS,
+    BOOKING_KEYWORDS,
     BUSINESS_TRAVEL_KEYWORDS,
     COMPLIANCE_KEYWORDS,
     FORBIDDEN_ACTIONS,
@@ -25,12 +26,14 @@ from core.guard_rules import (
     POLICY_KEYWORDS,
     PREFERENCE_KEYWORDS,
     SEARCH_KEYWORDS,
+    TRAIN_KEYWORDS,
     TRAVEL_TRANSPORT_KEYWORDS,
     TRIP_KEYWORDS,
     TRAVEL_SPECIFIC_POLICY_KEYWORDS,
     UNCLEAR_EXACT,
     WEATHER_KEYWORDS,
 )
+from core.guard_rules import transaction_supported
 from core.intent_catalog import (
     CHITCHAT_EXACT,
     CHITCHAT_KEYWORDS,
@@ -111,8 +114,11 @@ def guard_user_input(user_query: str, conversation_context: str = "") -> Optiona
     if any(keyword in q for keyword in FORBIDDEN_ACTIONS):
         return _unsupported("用户请求包含系统不应执行的高风险操作")
 
-    # 交易/订票语言不在此短路：放行给 LLM，由产品边界 prompt 判定 unsupported。
-    # 目录中出现 ticket 类 skill 后，同一批关键词自然成为可识别意图（纯声明式）。
+    # 预订/购票/付款等交易语言：无 ticket_purchase/payment skill 时确定性拒绝
+    # （产品边界「仅建议、不交易」）；目录出现对应 skill 后 transaction_supported()
+    # 变 True，同一批词自动放行（纯声明式）。
+    if has_booking_intent(q) and not transaction_supported():
+        return _unsupported("预订、购票或付款等交易请求不属于本助手范围，本助手仅提供查询与规划建议。")
 
     if any(keyword in q_lower for keyword in OUT_OF_SCOPE_KEYWORDS):
         return _unsupported("用户请求与公司差旅规划或报销无关")
@@ -141,6 +147,21 @@ def passes_confidence_gate(intent: str, confidence: float) -> bool:
     return confidence >= threshold
 
 
+def has_train_intent(query: str) -> bool:
+    """车次/高铁/火车/铁路/车票语言 → train_query（单一收口点）。"""
+    return any(keyword in normalize_query(query) for keyword in TRAIN_KEYWORDS)
+
+
+def has_weather_intent(query: str) -> bool:
+    """天气/气温/下雨/预报语言 → 可脱离差旅上下文直接查询的公共信息。"""
+    return any(keyword in normalize_query(query) for keyword in WEATHER_KEYWORDS)
+
+
+def has_booking_intent(query: str) -> bool:
+    """预订/购票/付款等交易语言 → 产品边界「仅建议、不交易」，拒绝为 unsupported。"""
+    return any(keyword in normalize_query(query) for keyword in BOOKING_KEYWORDS)
+
+
 def can_call_information_query(
     user_query: str,
     confidence: float,
@@ -148,6 +169,12 @@ def can_call_information_query(
 ) -> GuardResult:
     q = normalize_query(user_query)
     length = meaningful_length(q)
+
+    # 车次/高铁/火车查询归 train_query，不允许被 information_query（天气+搜索）
+    # 截胡。此处在 guard 单一收口：detect() 的 search 分支与 LLM _should_call_intent
+    # 都据此拒绝把车次句授权给 information_query。
+    if has_train_intent(q):
+        return _unclear("车次/高铁/火车查询应由 train_query 处理")
 
     if confidence < INFORMATION_QUERY_THRESHOLD:
         return _unclear(
@@ -160,7 +187,7 @@ def can_call_information_query(
     if not has_clear_information_target(q):
         return _unclear("缺少明确的信息查询对象")
 
-    if not has_travel_information_context(q, conversation_context):
+    if not (has_weather_intent(q) or has_travel_information_context(q, conversation_context)):
         return GuardResult(
             intent="unclear",
             confidence=0.9,

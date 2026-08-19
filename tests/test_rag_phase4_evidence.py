@@ -197,7 +197,10 @@ def _make_agent(module, docs=None):
     agent._instance_post_reply_hooks = OrderedDict()
     agent._instance_pre_print_hooks = OrderedDict()
     agent._instance_post_print_hooks = OrderedDict()
-    agent._retrieve_for_question = lambda q: docs or []
+    async def retrieve(_query, **_kwargs):
+        return docs or [], None
+
+    agent._retrieve_for_question = retrieve
     agent.get_stats = lambda: {"status": "success", "total_documents": 3}
     return agent
 
