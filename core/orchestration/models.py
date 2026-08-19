@@ -6,6 +6,15 @@ from typing import Any, Dict, List, Literal, Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class CapabilitySelection(BaseModel):
+    """Per-request overrides for declarative workflow capabilities."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    include: List[str] = Field(default_factory=list)
+    exclude: List[str] = Field(default_factory=list)
+
+
 class IntentTask(BaseModel):
     """A user-facing semantic task. It never names an executable implementation."""
 
@@ -20,6 +29,7 @@ class IntentTask(BaseModel):
     side_effect: bool = False
     failure_policy: Literal["abort", "continue"] = "continue"
     display_order: int = Field(default=0, ge=0)
+    capability_selection: CapabilitySelection = Field(default_factory=CapabilitySelection)
 
 
 class ExecutionTask(IntentTask):
@@ -39,6 +49,9 @@ class ExecutionTask(IntentTask):
     max_retries: int = Field(default=0, ge=0, le=2)
     # 步骤级结果判定规则（来自 skill 声明），取代按 intent 硬编码的特殊状态分支。
     result_rules: Dict[str, Any] = Field(default_factory=dict)
+    # The exact capability facets selected for this node. Empty means the
+    # execution step is mandatory or does not expose user-controllable facets.
+    capabilities: List[str] = Field(default_factory=list)
 
 
 class TaskResult(BaseModel):

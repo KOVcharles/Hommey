@@ -96,12 +96,14 @@ class InformationQueryAgent(AgentBase):
 
         payload = {}
         destination_hint = ""
+        selected_capabilities = []
         if isinstance(content, str):
             try:
                 payload = json.loads(content)
                 context = payload.get("context", {})
                 active_task = context.get("active_task") or {}
                 entities = active_task.get("entities") or {}
+                selected_capabilities = list(active_task.get("capabilities") or [])
                 destination_hint = str(entities.get("destination") or "").strip()
                 user_query = (
                     active_task.get("query")
@@ -116,7 +118,9 @@ class InformationQueryAgent(AgentBase):
 
         trip = self._trip_from_previous_results(payload.get("previous_results") or [])
         if trip:
-            result = await self._trip_information_query(trip)
+            result = await self._trip_information_query(
+                trip, capabilities=selected_capabilities or None,
+            )
             return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
 
         # 天气类问题优先走 wttr.in，避免通用搜索返回低质结果
@@ -161,46 +165,73 @@ class InformationQueryAgent(AgentBase):
                 return data
         return None
 
-    async def _trip_information_query(self, trip: Dict[str, Any]) -> Dict[str, Any]:
-        """Fetch weather and route-level public transport context for a complete trip."""
+    async def _trip_information_query(
+        self,
+        trip: Dict[str, Any],
+        capabilities: Optional[List[str]] = None,
+    ) -> Dict[str, Any]:
+        """Fetch only the workflow-selected external-information facets."""
         origin, destination = trip["origin"], trip["destination"]
         start_date = trip.get("start_date", "")
         end_date = trip.get("end_date") or f"约{trip.get('duration_days')}天"
+        selected = set(capabilities or ["weather", "local_transport"])
         weather_query = f"{destination} {start_date} 天气"
         # 车次/高铁/火车时刻归 train-query，此处只保留航班与机场/车站接驳。
         transport_query = (
             f"{origin}到{destination} {start_date} 商务出行 航班 交通方式 "
             "机场或车站接驳"
         )
-        weather, transport = await asyncio.gather(
+        requests = []
+        labels = []
+        if "weather" in selected:
+            labels.append("weather")
             # The collected trip is the authority for the destination. Passing
             # it explicitly keeps this branch city-agnostic as well; otherwise
             # international cities would fall back to heuristic name parsing.
-            self._weather_query(weather_query, city_hint=destination),
-            self._web_search(transport_query),
-            return_exceptions=True,
-        )
-        for value in (weather, transport):
+            requests.append(self._weather_query(weather_query, city_hint=destination))
+        if "local_transport" in selected:
+            labels.append("local_transport")
+            requests.append(self._web_search(transport_query))
+        values = await asyncio.gather(*requests, return_exceptions=True)
+        for value in values:
             if isinstance(value, ExecutionLimitExceeded):
                 raise value
-        weather_data = weather if isinstance(weather, dict) else {"query_success": False, "results": {"message": str(weather)}}
-        transport_data = transport if isinstance(transport, dict) else {"query_success": False, "results": {"message": str(transport)}}
-        weather_summary = (weather_data.get("results") or {}).get("summary") or (weather_data.get("results") or {}).get("message")
-        transport_summary = (transport_data.get("results") or {}).get("summary") or (transport_data.get("results") or {}).get("message")
+        fetched = dict(zip(labels, values))
+
+        def normalized(name: str) -> Dict[str, Any]:
+            value = fetched.get(name)
+            if isinstance(value, dict):
+                return value
+            return {
+                "query_success": False,
+                "results": {"message": str(value)},
+            }
+
         summary_parts = [f"行程外部信息：{origin} → {destination}（{start_date} 至 {end_date}）。"]
-        if weather_summary:
-            summary_parts.append(f"天气：{weather_summary}")
-        if transport_summary:
-            summary_parts.append(f"交通：{transport_summary}")
+        result_data: Dict[str, Any] = {}
+        successes = []
+        if "weather" in selected:
+            weather_data = normalized("weather")
+            weather_results = weather_data.get("results") or {}
+            weather_summary = weather_results.get("summary") or weather_results.get("message")
+            if weather_summary:
+                summary_parts.append(f"天气：{weather_summary}")
+            result_data["weather"] = weather_results
+            successes.append(bool(weather_data.get("query_success")))
+        if "local_transport" in selected:
+            transport_data = normalized("local_transport")
+            transport_results = transport_data.get("results") or {}
+            transport_summary = transport_results.get("summary") or transport_results.get("message")
+            if transport_summary:
+                summary_parts.append(f"交通：{transport_summary}")
+            result_data["transport"] = transport_results
+            successes.append(bool(transport_data.get("query_success")))
         summary_parts.append("公开信息仅供行程建议，请通过铁路、航司或授权差旅渠道核验时刻、票价和可订状态。")
+        result_data["summary"] = "\n".join(summary_parts)
         return {
             "query_type": "行程外部信息",
-            "query_success": bool(weather_data.get("query_success") or transport_data.get("query_success")),
-            "results": {
-                "summary": "\n".join(summary_parts),
-                "weather": weather_data.get("results") or {},
-                "transport": transport_data.get("results") or {},
-            },
+            "query_success": any(successes),
+            "results": result_data,
         }
 
     def _is_weather_query(self, query: str) -> bool:

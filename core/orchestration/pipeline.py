@@ -10,6 +10,7 @@ from typing import Any, Callable, Dict, List, Optional
 from core.presentation import AnswerDocument
 
 from .composer import AnswerComposer
+from .capabilities import apply_capability_selection
 from .decomposer import TaskDecomposer
 from .events import phase_event
 from .executor import ProgressCallback, TaskExecutor
@@ -88,6 +89,11 @@ class MultiIntentPipeline:
                 intention_data.get("key_entities") or {},
             )
             tasks = self.validator.validate(raw_tasks, intention_data)
+
+        # Explicit user opt-outs are deterministic request constraints, not
+        # new intents. Applying them after validation keeps the recognition
+        # authority boundary unchanged and persists them with semantic tasks.
+        tasks = apply_capability_selection(tasks, original_query)
 
         if existing_state is not None:
             tasks = self._namespace_new_goals(tasks, existing_state, request_id or original_query)
@@ -398,6 +404,7 @@ class MultiIntentPipeline:
             {
                 "id": task.task_id, "agent": task.agent_name,
                 "goal_id": task.goal_id,
+                "capabilities": task.capabilities,
                 "priority": task.priority, "depends_on": task.depends_on,
                 "failure_policy": task.failure_policy,
                 "max_retries": task.max_retries,

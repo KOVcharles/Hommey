@@ -71,15 +71,16 @@ def test_alert_signals_are_rendered_as_metrics():
 
 
 @pytest.mark.anyio
-async def test_preflight_is_componentized_and_does_not_require_network(monkeypatch, tmp_path):
+async def test_preflight_is_componentized_and_does_not_require_network(monkeypatch):
     import utils.preflight as preflight
 
     monkeypatch.setitem(preflight.LLM_CONFIG, "api_key", "")
     monkeypatch.setitem(preflight.RAG_CONFIG, "embedding_backend", "siliconflow")
     monkeypatch.setitem(preflight.RAG_CONFIG, "embedding_api_key", "")
     monkeypatch.setitem(preflight.RAG_CONFIG, "embedding_base_url", "https://api.siliconflow.cn/v1")
-    monkeypatch.setitem(preflight.RAG_CONFIG, "knowledge_base_path", str(tmp_path / "rag-store"))
-    monkeypatch.setitem(preflight.RAG_CONFIG, "vector_backend", "milvus_lite")
+    monkeypatch.setitem(preflight.RAG_CONFIG, "vector_backend", "memory")
+    monkeypatch.setitem(preflight.OCR_CONFIG, "enabled", True)
+    monkeypatch.setitem(preflight.OCR_CONFIG, "api_key", "")
     monkeypatch.setitem(preflight.MEMORY_CONFIG["short_term"], "backend", "memory")
     monkeypatch.setitem(preflight.MEMORY_CONFIG["long_term"], "backend", "file")
     monkeypatch.setenv("UVICORN_WORKERS", "1")
@@ -90,7 +91,9 @@ async def test_preflight_is_componentized_and_does_not_require_network(monkeypat
     assert result["ok"] is False
     assert checks["api_key"]["ok"] is False
     assert checks["rag_embedding"]["ok"] is False
-    assert checks["milvus_data_dir"]["ok"] is True
+    assert checks["document_ocr"]["ok"] is False
+    assert "postgres_connect" not in checks
+    assert "pgvector" not in checks
     assert checks["runtime_topology"]["ok"] is True
     assert all("duration_ms" in item for item in result["checks"])
 

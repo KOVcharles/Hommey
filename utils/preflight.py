@@ -3,13 +3,12 @@ from __future__ import annotations
 
 import asyncio
 import os
-import tempfile
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from settings import LLM_CONFIG, MCP_CONFIG, MEMORY_CONFIG, RAG_CONFIG, RESILIENCE_CONFIG
+from settings import LLM_CONFIG, MCP_CONFIG, MEMORY_CONFIG, OCR_CONFIG, RAG_CONFIG, RESILIENCE_CONFIG
 from utils.llm_resilience import run_health_check
 from utils.io_executor import run_blocking
 from utils.observability import (
@@ -37,12 +36,11 @@ async def run_preflight(include_network: bool = False) -> dict:
     checks: list[Callable[[], Awaitable[CheckResult]]] = [
         check_api_key,
         check_rag_embedding_config,
+        check_ocr_config,
         check_runtime_topology,
         check_mcp_config,
     ]
-    vector_backend = str(RAG_CONFIG.get("vector_backend") or "milvus_lite").lower()
-    if vector_backend in {"milvus", "milvus_lite"}:
-        checks.append(check_milvus_data_dir)
+    vector_backend = str(RAG_CONFIG.get("vector_backend") or "postgres").lower()
 
     if include_network:
         checks.append(check_model_service)
@@ -84,6 +82,37 @@ async def check_model_service() -> CheckResult:
     if not ok:
         record_upstream_error(COMPONENT_LLM, message, retryable=True)
     return _result("model_service", COMPONENT_LLM, ok, message, start, {"model": LLM_CONFIG.get("model_name")})
+
+
+async def check_ocr_config() -> CheckResult:
+    """Validate local document-OCR settings without making a paid/network call."""
+    start = time.perf_counter()
+    if not OCR_CONFIG.get("enabled"):
+        return _result(
+            "document_ocr",
+            COMPONENT_RAG,
+            True,
+            "disabled",
+            start,
+            {"enabled": False},
+        )
+    model = str(OCR_CONFIG.get("model") or "").strip()
+    base_url = str(OCR_CONFIG.get("base_url") or "").strip()
+    api_key = str(OCR_CONFIG.get("api_key") or "").strip()
+    max_pages = int(OCR_CONFIG.get("query_pdf_max_pages") or 0)
+    ok = bool(model and base_url and api_key and max_pages > 0)
+    return _result(
+        "document_ocr",
+        COMPONENT_RAG,
+        ok,
+        "configured" if ok else "document OCR configuration is incomplete",
+        start,
+        {
+            "enabled": True,
+            "model": model,
+            "query_pdf_max_pages": max_pages,
+        },
+    )
 
 
 async def check_redis() -> CheckResult:
@@ -275,26 +304,6 @@ async def check_rag_embedding_config() -> CheckResult:
     )
 
 
-async def check_milvus_data_dir() -> CheckResult:
-    start = time.perf_counter()
-    path = Path(RAG_CONFIG.get("knowledge_base_path", "")).expanduser()
-    try:
-        path.mkdir(parents=True, exist_ok=True)
-        with tempfile.NamedTemporaryFile(dir=path, prefix=".preflight-", delete=True):
-            pass
-        ok = os.access(path, os.R_OK | os.W_OK)
-        return _result(
-            "milvus_data_dir",
-            COMPONENT_RAG,
-            ok,
-            "milvus data directory writable" if ok else "milvus data directory not writable",
-            start,
-            {"path": str(path)},
-        )
-    except Exception:
-        return _result("milvus_data_dir", COMPONENT_RAG, False, "milvus data directory unavailable", start, {"path": str(path)})
-
-
 async def check_runtime_topology() -> CheckResult:
     """Reject unsafe worker counts until every required shared backend exists."""
     start = time.perf_counter()
@@ -302,7 +311,7 @@ async def check_runtime_topology() -> CheckResult:
         workers = int(os.getenv("UVICORN_WORKERS", "1"))
     except ValueError:
         workers = 0
-    vector_backend = str(RAG_CONFIG.get("vector_backend") or "milvus_lite").lower()
+    vector_backend = str(RAG_CONFIG.get("vector_backend") or "postgres").lower()
     long_backend = str(MEMORY_CONFIG.get("long_term", {}).get("backend") or "file").lower()
     short_backend = str(MEMORY_CONFIG.get("short_term", {}).get("backend") or "memory").lower()
     refresh_backend = str(RAG_CONFIG.get("refresh_backend") or "postgres").lower()

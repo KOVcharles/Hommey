@@ -6,7 +6,6 @@ from typing import Any, Awaitable, Callable, Dict, Iterable, List, Optional
 
 from core.intent_catalog import (
     pause_spec_for_intent,
-    execution_steps_for_intent,
     intent_to_skill,
 )
 
@@ -36,6 +35,7 @@ class TaskExecutor:
     ) -> tuple[List[TaskResult], List[PauseInfo]]:
         task_list = list(tasks)
         task_by_id = {task.task_id: task for task in task_list}
+        dependency_ids = self._dependency_ancestors(task_list)
         results: List[TaskResult] = list(previous_results or [])
         completed_ids = {
             item.task_id for item in results if item.status in {"success", "skipped"}
@@ -62,7 +62,16 @@ class TaskExecutor:
             for task in active:
                 await self._emit(progress, task_event("queued", task.task_id, task.intent))
             batch_results = await asyncio.gather(*[
-                self._run_one(task, base_context, results, progress, lifecycle)
+                self._run_one(
+                    task,
+                    base_context,
+                    [
+                        result for result in results
+                        if result.task_id in dependency_ids[task.task_id]
+                    ],
+                    progress,
+                    lifecycle,
+                )
                 for task in active
             ])
             results.extend(batch_results)
@@ -82,7 +91,7 @@ class TaskExecutor:
 
             # pause gate：声明 pause 的步骤在 pause_field 为 False 时等待用户。
             for result in batch_results:
-                info = self._pause_info(result, task_by_id)
+                info = self._pause_info(result, task_by_id, task_list)
                 if info is not None:
                     if not any(item.goal_id == info.goal_id for item in pauses):
                         pauses.append(info)
@@ -92,6 +101,28 @@ class TaskExecutor:
                     )
 
         return sorted(results, key=lambda item: item.display_order), pauses
+
+    @staticmethod
+    def _dependency_ancestors(tasks: List[ExecutionTask]) -> Dict[str, set[str]]:
+        """Return the declared dependency closure for every execution node."""
+        parents = {task.task_id: set(task.depends_on) for task in tasks}
+        memo: Dict[str, set[str]] = {}
+
+        def visit(task_id: str, visiting: set[str]) -> set[str]:
+            if task_id in memo:
+                return memo[task_id]
+            if task_id in visiting:
+                raise ValueError(f"task dependency graph contains a cycle at {task_id}")
+            visiting.add(task_id)
+            ancestors: set[str] = set()
+            for parent_id in parents.get(task_id, set()):
+                ancestors.add(parent_id)
+                ancestors.update(visit(parent_id, visiting))
+            visiting.remove(task_id)
+            memo[task_id] = ancestors
+            return ancestors
+
+        return {task_id: visit(task_id, set()) for task_id in parents}
 
     @staticmethod
     def _block_waiting_goal(
@@ -142,6 +173,7 @@ class TaskExecutor:
             "intent": task.intent,
             "query": task.query,
             "entities": task.entities,
+            "capabilities": task.capabilities,
         }
         previous_results = [self._legacy_result(item) for item in previous]
         operation_id = (
@@ -225,7 +257,11 @@ class TaskExecutor:
         return result
 
     @staticmethod
-    def _pause_info(result: TaskResult, task_by_id: Dict[str, ExecutionTask]) -> Optional[PauseInfo]:
+    def _pause_info(
+        result: TaskResult,
+        task_by_id: Dict[str, ExecutionTask],
+        task_list: List[ExecutionTask],
+    ) -> Optional[PauseInfo]:
         task = task_by_id.get(result.task_id)
         if task is None:
             return None
@@ -237,9 +273,10 @@ class TaskExecutor:
         data = _nested(result.data)
         if data.get(spec.pause_field) is not False:
             return None
-        steps = execution_steps_for_intent(task.intent)
         remaining = [
-            step.model_dump(mode="json") for step in steps if step.priority > task.priority
+            step.model_dump(mode="json")
+            for step in task_list
+            if step.goal_id == task.goal_id and step.priority > task.priority
         ]
         return PauseInfo(
             intent=task.intent,
@@ -308,6 +345,9 @@ class TaskExecutor:
     @staticmethod
     def _legacy_result(result: TaskResult) -> Dict[str, Any]:
         return {
+            "task_id": result.task_id,
+            "goal_id": result.goal_id,
+            "intent": result.intent,
             "agent_name": result.agent_name,
             "priority": result.display_order + 1,
             "result": {

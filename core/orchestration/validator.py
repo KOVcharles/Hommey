@@ -137,6 +137,7 @@ class TaskValidator:
         query = first.query if len(first.query) >= len(second.query) else second.query
         return IntentTask(
             task_id=first.task_id,
+            group_id=first.group_id or second.group_id,
             intent=first.intent,
             query=query,
             entities={**second.entities, **first.entities},
@@ -144,6 +145,16 @@ class TaskValidator:
             side_effect=first.side_effect or second.side_effect,
             failure_policy=first.failure_policy,
             display_order=min(first.display_order, second.display_order),
+            capability_selection={
+                "include": list(dict.fromkeys([
+                    *first.capability_selection.include,
+                    *second.capability_selection.include,
+                ])),
+                "exclude": list(dict.fromkeys([
+                    *first.capability_selection.exclude,
+                    *second.capability_selection.exclude,
+                ])),
+            },
         )
 
     @staticmethod

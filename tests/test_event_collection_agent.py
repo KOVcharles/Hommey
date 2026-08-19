@@ -1,7 +1,9 @@
 import asyncio
 import importlib.util
 import json
+from datetime import datetime
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 from agentscope.message import Msg
 
@@ -158,6 +160,44 @@ def test_event_collection_preserves_confirmed_active_fields_when_model_omits_the
     assert result["destination"] == "南京"
     assert result["planning_ready"] is True
     assert result["missing_required"] == []
+
+
+def test_event_collection_defaults_missing_start_date_to_beijing_today():
+    script_path = Path(".agents/skills/event-collection/script/agent.py")
+    spec = importlib.util.spec_from_file_location("event_collection_default_date_test", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def model(_messages):
+        return {"content": json.dumps({
+            "origin": "北京",
+            "destination": "南京",
+            "start_date": None,
+            "end_date": None,
+            "duration_days": None,
+            "return_location": None,
+            "trip_purpose": None,
+            "work_location": None,
+            "work_schedule": None,
+        }, ensure_ascii=False)}
+
+    agent = module.EventCollectionAgent(model=model)
+    request = Msg(
+        name="orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {
+                "rewritten_query": "安排去南京出差",
+                "active_trip": {},
+                "recent_dialogue": [],
+            }
+        }, ensure_ascii=False),
+    )
+
+    result = json.loads(asyncio.run(agent.reply(request)).content)
+
+    assert result["start_date"] == datetime.now(ZoneInfo("Asia/Shanghai")).date().isoformat()
+    assert "start_date" not in result["missing_required"]
 
 
 def test_explicit_history_reference_produces_candidates_not_confirmed_facts():

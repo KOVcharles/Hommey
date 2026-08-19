@@ -8,8 +8,9 @@ description: Build a company business-trip itinerary from the current trip, inte
 ## 流程
 
 1. 调用 `event-collection` 获取结构化出差事项；缺少出发地、目的地、出发日期、行程天数/返程日期或出差目的时，只追问缺失信息，不生成行程。
-2. 信息完整后，调用 `ask-question` 检索适用的公司差旅制度，并调用 `query-info` 查询目的地天气和公开交通信息、`train-query` 查询真实车次。
+2. 信息完整后，调用 `ask-question` 检索适用的公司差旅制度；默认调用 `query-info` 查询目的地天气和公开交通信息、调用 `train-query` 查询真实车次。用户明确排除天气、普通交通或车次时，只跳过对应可选能力；制度检索和合规检查不得跳过。
 3. 按工作时间可靠性、门到门耗时、换乘、成本、天气和制度约束比较交通方式；`transport_recommendation.preferred` 优先引用 `all_info.train_query.results.trains` 中的真实车次（含时刻与历时）。
+   同一 Agent 返回多个能力结果时，以 `all_info.agent_results` 为完整记录，并使用已合并的 `all_info.<agent_name>`，不得只采用最后一个结果。
 4. 生成工作优先的日程、交通缓冲和住宿区域建议。
 5. 输出报销材料清单和缺失信息；外部信息不可用时提供路线级建议，并提醒通过官方渠道核验。
 6. 调用 `check-trip-compliance` 检查拟定方案；没有适用制度证据时，仅提示需要人工确认，不输出确定的合规结论。

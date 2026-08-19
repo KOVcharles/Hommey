@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 display_name: 合规差旅行程规划
 category: workflow
 intent: itinerary_planning
@@ -60,6 +60,15 @@ execution:
     reason: 基于已收集的出差事项查询目的地天气和公开交通信息
     expected_output: 带官方核验提醒的天气和路线级交通建议
     query: 查询 {destination} 在 {start_date} 起 {duration} 天的天气和交通信息
+    capabilities:
+      - name: weather
+        default_enabled: true
+        aliases: [天气, 天气信息, 气温, 降雨, 下雨, 天气预报]
+        query: 查询 {destination} 在 {start_date} 起 {duration} 天的天气信息
+      - name: local_transport
+        default_enabled: true
+        aliases: [普通交通, 市内交通, 当地交通, 接驳, 交通路线]
+        query: 查询 {origin}→{destination} 在 {start_date} 的航班、机场或车站接驳及市内交通信息
     result_rules:
       error_when_field: query_success
       error_code: INFORMATION_QUERY_UNAVAILABLE
@@ -71,6 +80,11 @@ execution:
     reason: 基于已收集的出差事项查询真实高铁/火车车次与余票
     expected_output: 带核验提醒的真实车次、时刻、历时、票价和余票
     query: 查询 {origin}→{destination} 在 {start_date} 的火车车次与余票
+    capabilities:
+      - name: train
+        default_enabled: true
+        aliases: [车次, 火车, 高铁, 动车, 铁路]
+        query: 查询 {origin}→{destination} 在 {start_date} 的火车车次与余票
     result_rules:
       error_when_field: query_success
       error_code: TRAIN_QUERY_UNAVAILABLE

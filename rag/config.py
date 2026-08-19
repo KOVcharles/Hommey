@@ -4,7 +4,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any, Dict, Iterable, Optional, Tuple
 
-from settings import RAG_CONFIG
+from settings import OCR_CONFIG, RAG_CONFIG
 
 
 @dataclass(frozen=True)
@@ -39,10 +39,11 @@ class RAGPipelineConfig:
     bm25_top_k: int = 10
     supported_file_types: Tuple[str, ...] = field(default_factory=lambda: ("txt", "md", "pdf"))
     # Phase 3 (audit §11): OCR fallback for text-less PDF pages, flag-gated.
-    # Reuses the multimodal VisionClient; off by default so ingestion never
-    # calls an external vision API unless explicitly enabled.
+    # Reuses the shared document OCR client; off by default so ingestion never
+    # calls an external OCR API unless explicitly enabled.
     ocr_enabled: bool = False
     ocr_confidence_threshold: float = 0.5
+    ocr_model: str = "deepseek-ai/DeepSeek-OCR"
 
     @classmethod
     def from_settings(cls, overrides: Optional[Dict[str, Any]] = None) -> "RAGPipelineConfig":
@@ -85,6 +86,7 @@ class RAGPipelineConfig:
             "ocr_confidence_threshold": RAG_CONFIG.get(
                 "ocr_confidence_threshold", cls.ocr_confidence_threshold
             ),
+            "ocr_model": OCR_CONFIG.get("model", cls.ocr_model),
         }
         if overrides:
             data.update({key: value for key, value in overrides.items() if value is not None})

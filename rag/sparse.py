@@ -4,10 +4,9 @@ The roadmap scopes BM25 work as "按触发条件评估，非排期": a full-scan
 BM25 is fine until the corpus grows large enough that per-query Python
 tokenization/scoring becomes the bottleneck.  That trigger is not reached yet,
 so no native backend is implemented here — but the seam is: ``SparseIndex`` is
-the extension point a precomputed / native-sparse backend (e.g. Milvus
-SparseVector, a persisted inverted index) implements later, and
-``MilvusVectorStore`` routes through it via ``create_sparse_index``.  Switching
-backends is then a config value, not a rewrite of ``hybrid_search``/RRF fusion.
+the extension point a precomputed or persisted inverted-index backend can
+implement later. Switching backends is then a config value, not a rewrite of
+``hybrid_search``/RRF fusion.
 """
 from __future__ import annotations
 
@@ -41,7 +40,7 @@ class SparseIndex(ABC):
 
 class PythonBM25SparseIndex(SparseIndex):
     """The current full-scan Python BM25, kept score-identical to the previous
-    inline implementation in ``MilvusVectorStore.bm25_search`` (audit §4.9)."""
+    inline BM25 implementation (audit §4.9)."""
 
     def __init__(self) -> None:
         self._docs: List[Dict[str, Any]] = []

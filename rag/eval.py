@@ -7,7 +7,7 @@ this harness produces instead of relying on subjective feel.
 The harness runs the exact production path — loader → parser → normalizer →
 chunker → vector store → retriever — so the baseline reflects what agents will
 actually see.  It defaults to :class:`InMemoryVectorStore` so the whole run is
-deterministic and needs no embedding API keys or Milvus.  PDFs are skipped in
+deterministic and needs no embedding service or vector database. PDFs are skipped in
 this mode (their parser requires the optional ``pypdf`` package); every skipped
 file is reported so the baseline always states its coverage.
 

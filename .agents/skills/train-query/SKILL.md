@@ -9,6 +9,8 @@ Return structured train rows (train number, departure/arrival station and time, 
 
 - Public train-schedule lookups do not require a company-trip context.
 - Use origin, destination and travel date from the trip card when present.
+- When a complete company-trip card provides an end date or duration, query both the outbound and return legs. Calculate an inclusive return date as `start_date + duration_days - 1` when only duration is available, and use `return_location` or the original origin as the return destination.
+- Keep the compatible `results.trains` list and tag each round-trip row with `direction` and `travel_date`; also return `results.outbound` and `results.return_trip` segments. Never fabricate the missing leg when only one query succeeds.
 - If the travel date is missing, use today's date in the Asia/Shanghai timezone and query immediately; do not ask a follow-up question just for the date.
 - Prefer the official railway 12306 source over third-party snippets.
 - Treat a successful 12306 response with an empty result list as “no direct/remaining trains found”, not as an upstream outage.

@@ -1,13 +1,14 @@
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
 from rag.chunker import split_text
 from rag.document_loader import load_text_documents
 from rag.embedder import SiliconFlowEmbedder
-from rag.milvus_store import MilvusKnowledgeStore, _tokenize, fuse_results, rerank_results
+from rag.ranking import _tokenize, fuse_results, rerank_results
 from rag.retriever import expand_query
-from rag.schemas import DocumentChunk
+from rag.vector_store import InMemoryVectorStore, create_vector_store
 
 
 def test_load_text_documents_reads_txt_files(tmp_path: Path):
@@ -55,6 +56,15 @@ def test_split_text_keeps_faq_questions_as_separate_topics():
     assert len(chunks) == 3
     assert chunks[-1].startswith("Q12")
     assert "Q9" not in chunks[-1]
+
+
+def test_vector_store_factory_has_one_production_backend_and_memory_for_tests():
+    assert isinstance(
+        create_vector_store(SimpleNamespace(vector_backend="memory")),
+        InMemoryVectorStore,
+    )
+    with pytest.raises(ValueError, match="Use postgres or memory"):
+        create_vector_store(SimpleNamespace(vector_backend="legacy_local"))
 
 
 def test_fuse_results_prefers_docs_seen_by_both_retrievers():
@@ -148,171 +158,3 @@ def test_siliconflow_embedder_posts_openai_compatible_payload():
         "encoding_format": "float",
     }
     assert session.calls[0]["timeout"] == 12
-
-
-class _FakeEmbedder:
-    def embed_texts(self, texts):
-        return [[float(index), 0.5] for index, _text in enumerate(texts, start=1)]
-
-
-class _FakeMilvusClient:
-    def __init__(self, *, fail_promotion=False):
-        self.collections = {"knowledge": [{"id": 1, "content": "old"}]}
-        self.fail_promotion = fail_promotion
-
-    def create_collection(self, collection_name, **_kwargs):
-        self.collections[collection_name] = []
-
-    def insert(self, collection_name, data):
-        self.collections[collection_name].extend(data)
-
-    def get_collection_stats(self, collection_name):
-        return {"row_count": len(self.collections[collection_name])}
-
-    def has_collection(self, collection_name):
-        return collection_name in self.collections
-
-    def rename_collection(self, old_name, new_name):
-        if self.fail_promotion and "__staging_" in old_name and new_name == "knowledge":
-            self.fail_promotion = False
-            raise RuntimeError("promotion failed")
-        self.collections[new_name] = self.collections.pop(old_name)
-
-    def drop_collection(self, collection_name):
-        self.collections.pop(collection_name)
-
-    def load_collection(self, _collection_name):
-        return None
-
-
-def _atomic_store(client):
-    store = object.__new__(MilvusKnowledgeStore)
-    store.client = client
-    store.collection_name = "knowledge"
-    store.embedding_dim = 2
-    store.embedding_model = _FakeEmbedder()
-    return store
-
-
-def _chunk(content):
-    return DocumentChunk(
-        content=content,
-        source_path=f"/{content}.txt",
-        filename=f"{content}.txt",
-        file_type="txt",
-        page_number=None,
-        chunk_index=1,
-        content_type="text",
-        hash=content,
-    )
-
-
-def test_atomic_milvus_refresh_promotes_complete_staging_collection():
-    client = _FakeMilvusClient()
-
-    result = _atomic_store(client).replace_chunks_atomically([_chunk("new-1"), _chunk("new-2")])
-
-    assert result["total_count"] == 2
-    assert [row["content"] for row in client.collections["knowledge"]] == ["new-1", "new-2"]
-    assert set(client.collections) == {"knowledge"}
-
-
-def test_atomic_milvus_refresh_restores_live_collection_when_promotion_fails():
-    client = _FakeMilvusClient(fail_promotion=True)
-
-    with pytest.raises(RuntimeError, match="promotion failed"):
-        _atomic_store(client).replace_chunks_atomically([_chunk("new")])
-
-    assert client.collections["knowledge"] == [{"id": 1, "content": "old"}]
-    assert set(client.collections) == {"knowledge"}
-
-
-def test_rebuild_collection_recovers_from_windows_manifest_replace_error(tmp_path: Path):
-    collection_name = "business_travel_knowledge"
-    collection_dir = tmp_path / "collections" / collection_name
-    collection_dir.mkdir(parents=True)
-    (collection_dir / "manifest.json").write_text("old", encoding="utf-8")
-    (collection_dir / "manifest.json.tmp").write_text("tmp", encoding="utf-8")
-
-    class DropFailingClient:
-        def has_collection(self, name):
-            return True
-
-        def drop_collection(self, name):
-            raise RuntimeError(
-                "[WinError 183] Cannot create a file when that file already exists: "
-                "'manifest.json.tmp' -> 'manifest.json'"
-            )
-
-        def close(self):
-            pass
-
-    class ResetClient:
-        def __init__(self):
-            self.created = False
-
-        def has_collection(self, name):
-            return False
-
-        def create_collection(self, **kwargs):
-            self.created = True
-
-        def load_collection(self, name):
-            pass
-
-        def close(self):
-            pass
-
-    store = object.__new__(MilvusKnowledgeStore)
-    store.client = DropFailingClient()
-    store.collection_name = collection_name
-    store.embedding_dim = 384
-    store.milvus_uri = str(tmp_path)
-    reset_client = ResetClient()
-    store._reset_client = lambda: setattr(store, "client", reset_client)
-
-    store.rebuild_collection()
-
-    assert not collection_dir.exists()
-    assert reset_client.created is True
-
-
-def test_rebuild_collection_prepares_windows_manifest_before_drop(tmp_path: Path, monkeypatch):
-    collection_name = "business_travel_knowledge"
-    collection_dir = tmp_path / "collections" / collection_name
-    collection_dir.mkdir(parents=True)
-    manifest_path = collection_dir / "manifest.json"
-    manifest_path.write_text("old", encoding="utf-8")
-
-    class DropSucceedsClient:
-        def __init__(self):
-            self.saw_manifest_at_drop = None
-            self.created = False
-
-        def has_collection(self, name):
-            return True
-
-        def drop_collection(self, name):
-            self.saw_manifest_at_drop = manifest_path.exists()
-
-        def create_collection(self, **kwargs):
-            self.created = True
-
-        def load_collection(self, name):
-            pass
-
-        def close(self):
-            pass
-
-    monkeypatch.setattr("rag.milvus_store.os.name", "nt")
-    client = DropSucceedsClient()
-    store = object.__new__(MilvusKnowledgeStore)
-    store.client = client
-    store.collection_name = collection_name
-    store.embedding_dim = 384
-    store.milvus_uri = str(tmp_path)
-
-    store.rebuild_collection()
-
-    assert client.saw_manifest_at_drop is False
-    assert client.created is True

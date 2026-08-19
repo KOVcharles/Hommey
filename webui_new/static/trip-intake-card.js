@@ -258,6 +258,10 @@
     function create(documentData) {
         const data = documentData || {};
         const card = element('article', `trip-intake-card is-${data.status || 'collecting_required'}`);
+        const missingKeys = new Set((data.missing_required || []).map((field) => field.key));
+        const standaloneConflicts = (data.conflicts || []).filter(
+            (conflict) => !missingKeys.has(conflict.key),
+        );
         const state = {
             values: new Map(),
             controls: new Map(),
@@ -287,8 +291,8 @@
         }
         card.appendChild(header);
 
-        if (Array.isArray(data.conflicts) && data.conflicts.length) {
-            card.appendChild(renderConflicts(data.conflicts, state));
+        if (standaloneConflicts.length) {
+            card.appendChild(renderConflicts(standaloneConflicts, state));
         }
 
         if (Array.isArray(data.missing_required) && data.missing_required.length) {

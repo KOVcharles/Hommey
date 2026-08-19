@@ -1,5 +1,7 @@
 # Hommey RAG V2 现状审计与改造路线图（修订版）
 
+> 历史文档：本文记录 2026-08-09 至 2026-08-12 的阶段性判断，其中关于保留本地向量库的结论已被 2026-08-17 的 PostgreSQL + pgvector 迁移和 2026-08-19 的旧后端清理取代，不作为当前部署或配置要求。
+
 > 审计日期：2026-08-09（修订：2026-08-12）
 >
 > 审计范围：知识库上传、文档解析、OCR、规范化、切块、向量化、混合检索、查询改写、回答生成、引用与运维
@@ -777,12 +779,12 @@ TxtParser/PdfTextParser/... → blocks[](带 type) → TextNormalizer(按 type) 
 ### ~~Phase 3：OCR 与版面解析~~
 
 - ~~原生文字快路径 + 页面级 OCR/layout fallback。~~
-- ~~可复用现有 VisionClient（Qwen2.5-VL）作为图片/扫描页的视觉前端，与聊天附件图片识别共用一套视觉能力。~~
+- ~~扫描页复用独立 `DocumentOcrClient`（默认 DeepSeek-OCR）；用户图片理解继续使用 `VisionClient`，两类模型和提示词分离。~~
 - ~~显式记录空页、低置信度、超时、密码和损坏状态（§7 P8 的终态落到 worker 日志）。~~
 
 ~~完成条件：扫描页要么可检索，要么在管理端显示具体失败原因；不得静默消失。~~
 
-~~落地记录（2026-08-12）：新增 `rag/ocr.py` 的 `PageOcrFallback`，flag 门控（`HOMMEY_RAG_OCR_ENABLED`，默认关），复用 `multimodal/vision_client.py`；无文字 PDF 页经 pymupdf 渲染后走视觉模型，成功且置信度达标 → `ocr_text`，低置信度/空 OCR → `intentionally_skipped` 并记录原因，渲染或调用失败 → `error` 并记录原因；OCR 开关与置信度阈值进入索引指纹。测试见 `tests/test_rag_phase3_ocr.py`。~~
+~~落地记录（2026-08-12，2026-08-19 解耦 OCR 客户端）：`rag/ocr.py` 的 `PageOcrFallback` 由 `HOMMEY_RAG_OCR_ENABLED` 门控，无文字 PDF 页经 PyMuPDF 渲染后调用共享的 `multimodal/document_ocr_client.py`；成功 → `ocr_text`，提供置信度时才应用阈值，空 OCR → `intentionally_skipped`，渲染或调用失败 → `error`。OCR 开关、阈值和模型均进入索引指纹。测试见 `tests/test_rag_phase3_ocr.py`。~~
 
 ~~延后项（明确不排期）：独立 document worker 与任务状态表、PaddleOCR PP-StructureV3 / Docling PoC、页眉页脚/多栏/旋转/印章/水印/无框表格回归集——后续按需以扩展点补入。~~
 

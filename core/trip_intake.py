@@ -2,8 +2,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, datetime
 from typing import Any, Dict, Iterable, List
+from zoneinfo import ZoneInfo
+
+
+BEIJING_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
 @dataclass(frozen=True)
@@ -49,6 +53,29 @@ FIELD_SPECS: Dict[str, TripFieldSpec] = {
 
 REQUIRED_KEYS = ("origin", "destination", "start_date", "trip_length", "trip_purpose")
 OPTIONAL_KEYS = ("work_location", "work_schedule")
+
+
+def beijing_today(now: datetime | None = None) -> str:
+    """Return the calendar date in Beijing as an ISO date string."""
+    if now is None:
+        current = datetime.now(BEIJING_TIMEZONE)
+    elif now.tzinfo is None:
+        current = now.replace(tzinfo=BEIJING_TIMEZONE)
+    else:
+        current = now.astimezone(BEIJING_TIMEZONE)
+    return current.date().isoformat()
+
+
+def apply_trip_intake_defaults(
+    raw: Dict[str, Any],
+    *,
+    now: datetime | None = None,
+) -> Dict[str, Any]:
+    """Fill deterministic intake defaults without replacing explicit facts."""
+    data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    if not str(data.get("start_date") or "").strip():
+        data["start_date"] = beijing_today(now)
+    return raw
 
 
 def remove_ungrounded_trip_locations(
@@ -144,8 +171,8 @@ def evaluate_trip_intake(raw: Dict[str, Any]) -> Dict[str, Any]:
     if origin and destination and origin == destination:
         conflicts.append({
             "key": "destination",
-            "message": "出发地和目的地相同，请确认本次出差目的地。",
-            "values": [origin, destination],
+            "message": "出发地和目的地相同，请填写本次出差的实际目的地。",
+            "values": [],
         })
 
     invalid_keys = {item["key"] for item in invalid_fields}

@@ -12,6 +12,7 @@ from fastapi.params import File
 from fastapi.responses import Response
 
 from settings import ATTACHMENT_CONFIG
+from utils.io_executor import run_blocking
 from utils.logging_safety import sanitize_for_log
 from webui_new.auth import User, require_path_user
 from webui_new.core.errors import AppError, BusinessError, InternalError, request_id
@@ -50,12 +51,14 @@ def create_attachments_router(attachment_service):
         content = await _read_limited(file)
         filename = file.filename or "upload"
         try:
-            return attachment_service.upload(
+            result = await run_blocking(
+                attachment_service.upload,
                 user_id=str(current_user.id),
                 filename=filename,
                 content=content,
                 request_id=request_id(request) or None,
-            ).model_dump()
+            )
+            return result.model_dump()
         except AppError:
             raise
         except Exception as e:

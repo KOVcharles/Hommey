@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.0.1
 display_name: 出差事项收集
 category: business
 intent: event_collection
