@@ -29,7 +29,7 @@ import pytest
 from agentscope.message import Msg
 
 from rag.evidence import EvidenceVerdict, evaluate_evidence
-from rag.milvus_store import _focus_terms, _query_ngrams, rerank_results
+from rag.ranking import _focus_terms, _query_ngrams, rerank_results
 
 
 def _doc(content: str, *, fusion: float = 0.5, rerank: float = 0.5, **metadata) -> dict:

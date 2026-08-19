@@ -7,6 +7,7 @@ import logging
 import time
 from abc import ABC, abstractmethod
 from collections import OrderedDict
+from pathlib import Path
 from typing import Any, List, Optional
 
 import requests
@@ -16,6 +17,45 @@ logger = logging.getLogger(__name__)
 # HTTP statuses worth retrying (rate-limited or upstream 5xx); auth/config
 # errors (4xx except 429) are not transient and must fail fast.
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
+_EMBEDDING_MODEL_CACHE: dict[str, Any] = {}
+
+
+def resolve_embedding_model(model_name_or_path: str) -> str:
+    """Resolve an existing local model path while preserving remote model IDs."""
+    path = Path(model_name_or_path).expanduser()
+    if not path.is_absolute():
+        path = Path.cwd() / path
+    if path.exists():
+        return str(path.resolve())
+    return model_name_or_path
+
+
+def _get_embedding_model(model_path: str) -> Any:
+    """Load and cache a sentence-transformers model for the local backend."""
+    cached = _EMBEDDING_MODEL_CACHE.get(model_path)
+    if cached is not None:
+        return cached
+
+    from sentence_transformers import SentenceTransformer
+    from sentence_transformers import models as st_models
+
+    local_path = Path(model_path)
+    if local_path.exists() and not (local_path / "modules.json").exists():
+        transformer = st_models.Transformer(
+            model_path,
+            model_args={"local_files_only": True},
+        )
+        pooling = st_models.Pooling(
+            transformer.get_word_embedding_dimension(),
+            pooling_mode_mean_tokens=True,
+        )
+        model = SentenceTransformer(modules=[transformer, pooling])
+    elif local_path.exists():
+        model = SentenceTransformer(model_path, local_files_only=True)
+    else:
+        model = SentenceTransformer(model_path)
+    _EMBEDDING_MODEL_CACHE[model_path] = model
+    return model
 
 
 def _is_transient_error(exc: Exception) -> bool:
@@ -43,8 +83,6 @@ class TextEmbedder(ABC):
 
 class SentenceTransformerEmbedder(TextEmbedder):
     def __init__(self, model_name_or_path: str):
-        from .milvus_store import _get_embedding_model, resolve_embedding_model
-
         self.model = _get_embedding_model(resolve_embedding_model(model_name_or_path))
 
     def dimension(self) -> int:

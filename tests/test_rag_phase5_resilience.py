@@ -216,15 +216,15 @@ def test_embedder_cache_evicts_lru():
 
 
 def _tokenize(text):
-    # Must be the SAME tokenizer the SparseIndex uses (rag.milvus_store._tokenize
-    # adds domain phrase tokens) — otherwise scores can't match bit-for-bit.
-    from rag.milvus_store import _tokenize as _real_tokenize
+    # Must be the SAME tokenizer the SparseIndex uses (domain phrase tokens are
+    # included) — otherwise scores can't match bit-for-bit.
+    from rag.ranking import _tokenize as _real_tokenize
 
     return _real_tokenize(text)
 
 
 def _legacy_bm25(docs, query):
-    """Pre-refactor inline BM25 from MilvusVectorStore.bm25_search (audit §4.9)."""
+    """Pre-refactor inline BM25 baseline (audit §4.9)."""
     tokenized = [_tokenize(doc["content"]) for doc in docs]
     query_tokens = _tokenize(query)
     n_docs = len(tokenized)
@@ -259,7 +259,7 @@ def _legacy_bm25(docs, query):
     ]
 
 
-def test_sparse_bm25_matches_legacy_algorithm():
+def test_sparse_bm25_matches_inline_baseline():
     docs = [
         {"content": "一线城市住宿标准每晚600元，含税", "metadata": {"chunk_id": "a"}},
         {"content": "出差交通：高铁二等座实报实销", "metadata": {"chunk_id": "b"}},
@@ -294,7 +294,7 @@ def test_sparse_unknown_backend_raises():
     with pytest.raises(ValueError, match="Unsupported BM25/sparse backend"):
         create_sparse_index("native_sparse")
     with pytest.raises(ValueError, match="Unsupported"):
-        create_sparse_index("milvus_sparse")
+        create_sparse_index("external_sparse")
 
 
 def test_sparse_index_refresh_changes_corpus():
@@ -331,31 +331,3 @@ def test_config_threads_phase5_knobs():
     assert overridden.embedding_max_retries == 5
     assert overridden.embedding_retry_base_delay_sec == 0.5
     assert overridden.embedding_cache_size == 64
-
-
-def test_milvus_adapter_forwards_phase5_knobs(monkeypatch):
-    from rag.vector_store import MilvusVectorStore
-
-    captured = {}
-
-    class _Store:
-        def __init__(self, **kwargs):
-            captured.update(kwargs)
-
-    monkeypatch.setattr("rag.milvus_store.MilvusKnowledgeStore", _Store)
-    MilvusVectorStore(
-        knowledge_base_path="/tmp/kb",
-        collection_name="knowledge",
-        embedding_model="model",
-        embedding_max_retries=5,
-        embedding_retry_base_delay_sec=0.25,
-        embedding_retry_max_delay_sec=4.0,
-        embedding_cache_size=64,
-        sparse_backend="python",
-    )
-
-    assert captured["embedding_max_retries"] == 5
-    assert captured["embedding_retry_base_delay_sec"] == 0.25
-    assert captured["embedding_retry_max_delay_sec"] == 4.0
-    assert captured["embedding_cache_size"] == 64
-    assert captured["sparse_backend"] == "python"

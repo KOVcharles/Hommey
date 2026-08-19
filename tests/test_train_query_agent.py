@@ -100,6 +100,118 @@ def test_train_query_consumes_trip_card_from_previous_results():
     assert seen == {"origin": "上海", "destination": "南京", "date": "2026-08-20"}
 
 
+def test_train_query_queries_both_legs_for_complete_company_trip():
+    module = _load_module()
+    agent = module.TrainQueryAgent(model=None)
+    seen = []
+
+    class FakeBackend:
+        async def query_trains(self, origin, destination, date):
+            seen.append((origin, destination, date))
+            return [{
+                "train_no": "G49" if origin == "北京" else "G38",
+                "from_station": f"{origin}南站",
+                "to_station": f"{destination}南站",
+                "depart_time": "19:04" if origin == "北京" else "18:30",
+                "arrive_time": "22:18" if origin == "北京" else "22:05",
+                "duration": "3:14" if origin == "北京" else "3:35",
+                "seats": {"二等座": "有"},
+                "prices": {},
+            }]
+
+    agent._backend = FakeBackend()
+    message = Msg(
+        name="Orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {"agent_query": "查询本次出差车次", "active_task": {"entities": {}}},
+            "previous_results": [{
+                "agent_name": "event_collection",
+                "result": {"data": {
+                    "planning_ready": True,
+                    "origin": "北京",
+                    "destination": "南京",
+                    "start_date": "2026-08-19",
+                    "duration_days": 2,
+                }},
+            }],
+        }, ensure_ascii=False),
+    )
+
+    data = json.loads(asyncio.run(agent.reply(message)).content)
+
+    assert seen == [
+        ("北京", "南京", "2026-08-19"),
+        ("南京", "北京", "2026-08-20"),
+    ]
+    assert data["query_success"] is True
+    assert data["results"]["round_trip_complete"] is True
+    assert data["results"]["outbound"]["trains"][0]["train_no"] == "G49"
+    assert data["results"]["return_trip"]["trains"][0]["train_no"] == "G38"
+    assert [row["direction"] for row in data["results"]["trains"]] == ["去程", "返程"]
+    assert [row["travel_date"] for row in data["results"]["trains"]] == [
+        "2026-08-19", "2026-08-20",
+    ]
+
+
+def test_train_query_uses_explicit_end_date_and_return_location():
+    module = _load_module()
+    agent = module.TrainQueryAgent(model=None)
+
+    assert agent._resolve_return_query(
+        {
+            "end_date": "2026-08-25",
+            "duration_days": 2,
+            "return_location": "天津",
+        },
+        "北京",
+        "南京",
+        "2026-08-19",
+    ) == ("南京", "天津", "2026-08-25")
+
+
+def test_return_query_failure_keeps_real_outbound_results():
+    module = _load_module()
+    agent = module.TrainQueryAgent(model=None)
+
+    class PartialBackend:
+        async def query_trains(self, origin, destination, date):
+            if origin == "南京":
+                raise RuntimeError("return unavailable")
+            return [{
+                "train_no": "G49", "from_station": "北京南", "to_station": "南京南",
+                "depart_time": "19:04", "arrive_time": "22:18", "duration": "3:14",
+                "seats": {}, "prices": {},
+            }]
+
+    agent._backend = PartialBackend()
+    message = Msg(
+        name="Orchestrator",
+        role="user",
+        content=json.dumps({
+            "context": {"agent_query": "查询本次出差车次", "active_task": {"entities": {}}},
+            "previous_results": [{
+                "agent_name": "event_collection",
+                "result": {"data": {
+                    "planning_ready": True,
+                    "origin": "北京",
+                    "destination": "南京",
+                    "start_date": "2026-08-19",
+                    "duration_days": 2,
+                }},
+            }],
+        }, ensure_ascii=False),
+    )
+
+    data = json.loads(asyncio.run(agent.reply(message)).content)
+
+    assert data["query_success"] is True
+    assert data["results"]["round_trip_complete"] is False
+    assert data["results"]["trains"][0]["direction"] == "去程"
+    assert data["results"]["return_trip"]["query_success"] is False
+    assert "返程车次查询暂时不可用" in data["results"]["return_trip"]["message"]
+
+
 def test_train_query_parses_route_and_date_without_trip_card():
     module = _load_module()
     agent = module.TrainQueryAgent(model=None)

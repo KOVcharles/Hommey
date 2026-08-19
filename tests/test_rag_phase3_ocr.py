@@ -1,7 +1,7 @@
 """Phase 3 regression tests (audit §11 Phase 3: OCR 与版面解析, 轻量交付).
 
 Scope delivered: native-text fast path stays first; text-less PDF pages fall
-back to the multimodal VisionClient (flag-gated), and every outcome lands in an
+back to the shared DocumentOcrClient (flag-gated), and every outcome lands in an
 explicit terminal state (P8) — nothing vanishes silently.  No PaddleOCR/Docling
 PoC; the standalone worker/task-table is left as an extension point.
 
@@ -29,20 +29,20 @@ from rag.schemas import (
 )
 
 
-class _FakeVision:
-    """Minimal fake for the multimodal VisionClient used by OCR tests."""
+class _FakeOcr:
+    """Minimal fake for the shared document OCR client."""
 
     def __init__(self, ocr="第一行 | 第二行", confidence=0.9, error=None):
         self.ocr = ocr
         self.confidence = confidence
         self.error = error
 
-    def describe_image(self, data, ext, filename):
+    def ocr_page(self, data, ext, *, filename, page_number):
         if self.error:
             raise self.error
         return SimpleNamespace(
-            structured={"ocr": self.ocr},
-            content_text=f"[图片 {filename}]\n文字：{self.ocr}",
+            text=self.ocr,
+            model="fake-ocr",
             confidence=self.confidence,
         )
 
@@ -71,7 +71,7 @@ def _apply(fallback, page):
 
 def test_disabled_passes_pages_through(monkeypatch):
     page = _skipped_pdf_page()
-    fallback = PageOcrFallback(enabled=False, vision_client=_FakeVision())
+    fallback = PageOcrFallback(enabled=False, ocr_client=_FakeOcr())
     result = _apply(fallback, page)
     assert result is page  # untouched object, no OCR attempted
 
@@ -79,20 +79,21 @@ def test_disabled_passes_pages_through(monkeypatch):
 def test_ocr_success_marks_page_ocr_text(monkeypatch):
     monkeypatch.setattr("rag.ocr._render_page_png", lambda *_: b"png-bytes")
     page = _skipped_pdf_page()
-    fallback = PageOcrFallback(enabled=True, confidence_threshold=0.5, vision_client=_FakeVision())
+    fallback = PageOcrFallback(enabled=True, confidence_threshold=0.5, ocr_client=_FakeOcr())
     result = _apply(fallback, page)
     assert result.page_terminal_state == PAGE_STATE_OCR_TEXT
     assert result.blocks
     assert "第一行" in result.text
     assert "第二行" in result.text
     assert result.metadata["ocr_confidence"] == 0.9
-    assert result.metadata["ocr_source"] == "vision"
+    assert result.metadata["ocr_source"] == "document_ocr"
+    assert result.metadata["ocr_model"] == "fake-ocr"
 
 
 def test_low_confidence_page_skipped_with_reason(monkeypatch):
     monkeypatch.setattr("rag.ocr._render_page_png", lambda *_: b"png-bytes")
     page = _skipped_pdf_page()
-    fallback = PageOcrFallback(enabled=True, confidence_threshold=0.8, vision_client=_FakeVision(confidence=0.4))
+    fallback = PageOcrFallback(enabled=True, confidence_threshold=0.8, ocr_client=_FakeOcr(confidence=0.4))
     result = _apply(fallback, page)
     assert result.page_terminal_state == PAGE_STATE_INTENTIONALLY_SKIPPED
     assert result.metadata["ocr_skipped_reason"] == "low_confidence"
@@ -103,11 +104,11 @@ def test_vision_failure_marks_page_error(monkeypatch):
     page = _skipped_pdf_page()
     fallback = PageOcrFallback(
         enabled=True,
-        vision_client=_FakeVision(error=RuntimeError("vision api down")),
+        ocr_client=_FakeOcr(error=RuntimeError("ocr api down")),
     )
     result = _apply(fallback, page)
     assert result.page_terminal_state == PAGE_STATE_ERROR
-    assert "vision api down" in result.metadata["ocr_error"]
+    assert "ocr api down" in result.metadata["ocr_error"]
 
 
 def test_render_failure_marks_page_error(monkeypatch):
@@ -116,7 +117,7 @@ def test_render_failure_marks_page_error(monkeypatch):
 
     monkeypatch.setattr("rag.ocr._render_page_png", _boom)
     page = _skipped_pdf_page()
-    fallback = PageOcrFallback(enabled=True, vision_client=_FakeVision())
+    fallback = PageOcrFallback(enabled=True, ocr_client=_FakeOcr())
     result = _apply(fallback, page)
     assert result.page_terminal_state == PAGE_STATE_ERROR
     assert "render_failed" in result.metadata["ocr_error"]
@@ -128,7 +129,7 @@ def test_native_text_page_untouched(monkeypatch):
         text="有原生文本的页面",
         page_terminal_state=PAGE_STATE_NATIVE_TEXT,
     )
-    fallback = PageOcrFallback(enabled=True, vision_client=_FakeVision())
+    fallback = PageOcrFallback(enabled=True, ocr_client=_FakeOcr())
     result = _apply(fallback, page)
     assert result.page_terminal_state == PAGE_STATE_NATIVE_TEXT
     assert result.text == "有原生文本的页面"
@@ -148,8 +149,18 @@ def test_ocr_flag_changes_index_fingerprint():
     off = compute_index_fingerprint(**common, ocr_enabled=False)
     on = compute_index_fingerprint(**common, ocr_enabled=True)
     assert off != on
+    assert off == compute_index_fingerprint(
+        **common,
+        ocr_enabled=False,
+        ocr_model="unused-while-disabled",
+    )
     # Threshold changes are also part of the fingerprint.
     assert on != compute_index_fingerprint(**common, ocr_enabled=True, ocr_confidence_threshold=0.9)
+    assert on != compute_index_fingerprint(
+        **common,
+        ocr_enabled=True,
+        ocr_model="deepseek-ai/DeepSeek-OCR",
+    )
 
 
 # ---- pipeline integration ---------------------------------------------------
@@ -172,7 +183,7 @@ def test_pipeline_ocr_recovers_scanned_pdf(tmp_path):
     from rag.pipeline import RAGPipeline
     from rag.vector_store import InMemoryVectorStore
 
-    vision = _FakeVision(ocr="差旅报销标准：市内交通实报实销", confidence=0.95)
+    ocr = _FakeOcr(ocr="差旅报销标准：市内交通实报实销", confidence=0.95)
     config = RAGPipelineConfig(
         ocr_enabled=True,
         ocr_confidence_threshold=0.5,
@@ -183,7 +194,7 @@ def test_pipeline_ocr_recovers_scanned_pdf(tmp_path):
         config=config,
         vector_store=store,
         ocr_fallback=PageOcrFallback(
-            enabled=True, confidence_threshold=0.5, vision_client=vision
+                enabled=True, confidence_threshold=0.5, ocr_client=ocr
         ),
     )
     try:

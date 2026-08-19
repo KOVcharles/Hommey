@@ -151,7 +151,7 @@ Skill 可以独立声明输入输出、风险、依赖和执行步骤，并由�
 | Web | FastAPI、Uvicorn、Jinja2、原生 JavaScript 与 CSS |
 | Agent | AgentScope、自研多意图编排流水线、声明式 Skill |
 | 状态与记忆 | PostgreSQL 16、Redis 7 |
-| 检索 | PostgreSQL + pgvector、BM25、RRF、BGE Embedding（Milvus Lite 仅保留本地迁移兼容） |
+| 检索 | PostgreSQL + pgvector、BM25、RRF、BGE Embedding |
 | 传输 | NDJSON 流式响应 |
 | 部署 | Docker Compose |
 

@@ -18,7 +18,7 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.responses import HTMLResponse, JSONResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
-from jinja2 import Environment, FileSystemLoader
+from jinja2 import Environment, FileSystemLoader, select_autoescape
 
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
@@ -78,7 +78,11 @@ os.makedirs(static_dir, exist_ok=True)
 os.makedirs(templates_dir, exist_ok=True)
 
 app.mount("/static", StaticFiles(directory=static_dir), name="static")
-jinja_env = Environment(loader=FileSystemLoader(templates_dir), enable_async=False)
+jinja_env = Environment(
+    loader=FileSystemLoader(templates_dir),
+    autoescape=select_autoescape(("html", "xml")),
+    enable_async=False,
+)
 
 
 def _render(template_name: str, **context) -> HTMLResponse:

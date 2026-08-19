@@ -262,7 +262,10 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "has-collapsible-body" in answer_card
     assert "answer-details-content" in answer_card
     assert "answer-details-icon" in answer_card
-    assert "20260813-footer-motion-v4" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert "parseTransportLegs" in answer_card
+    assert "leadingService" in answer_card
+    assert "routeSource.slice(route[0].length)" in answer_card
+    assert "20260819-transport-layout-v1" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -279,8 +282,7 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260813-footer-motion-v4" in template
-    assert template.count("20260813-footer-motion-v4") >= 2
+    assert template.count("20260819-transport-layout-v1") == 2
     assert "route-hit-area" in template
     assert "route-progress-gradient" in template
     assert template.count("M20 59 C105 59, 150 13, 250 43 S395 27, 480 27") == 3

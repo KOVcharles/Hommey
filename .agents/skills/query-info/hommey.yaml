@@ -1,4 +1,4 @@
-version: 1.0.0
+version: 1.1.0
 display_name: 差旅外部信息
 category: capability
 intent: information_query

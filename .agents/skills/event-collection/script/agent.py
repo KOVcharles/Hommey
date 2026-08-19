@@ -9,8 +9,14 @@
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
 from core.execution_budget import ExecutionLimitExceeded
-from core.trip_intake import evaluate_trip_intake, remove_ungrounded_trip_locations
+from core.trip_intake import (
+    BEIJING_TIMEZONE,
+    apply_trip_intake_defaults,
+    evaluate_trip_intake,
+    remove_ungrounded_trip_locations,
+)
 from typing import Optional, Union, List
+from datetime import datetime
 import json
 import logging
 import sys
@@ -85,10 +91,10 @@ class EventCollectionAgent(AgentBase):
             background_info += "【当前会话最近提供的行程信息】（仅用于补齐当前任务）\n"
             background_info += "\n".join(dialogue_lines) + "\n\n"
 
-        # 获取当前时间
-        from datetime import datetime
-        current_date = datetime.now().strftime("%Y年%m月%d日")
-        weekday = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][datetime.now().weekday()]
+        # 日期解析与默认值统一使用北京时间，避免服务器时区影响结果。
+        current_time = datetime.now(BEIJING_TIMEZONE)
+        current_date = current_time.strftime("%Y年%m月%d日")
+        weekday = ["星期一", "星期二", "星期三", "星期四", "星期五", "星期六", "星期日"][current_time.weekday()]
 
         prompt = f"""你是企业差旅事项收集专家，负责提取公司出差的基础信息。
 
@@ -114,6 +120,7 @@ class EventCollectionAgent(AgentBase):
 - 当前时间是{current_date}
 - 用户说"2月27日"或"2.27"等相对时间，请根据当前时间推断完整日期（年月日）
 - 用户说"明天"、"后天"、"下周"等相对时间，请根据当前时间计算具体日期
+- 用户和当前任务均未指定出发日期时，start_date 保持null；系统会确定性地默认成北京时间今天
 - 所有日期必须输出完整的YYYY-MM-DD格式
 
 【特殊处理】
@@ -218,6 +225,8 @@ class EventCollectionAgent(AgentBase):
         ):
             if not result.get(key) and active_trip.get(key):
                 result[key] = active_trip[key]
+
+        apply_trip_intake_defaults(result, now=current_time)
 
         suggestions = dict(result.get("suggested_fields") or {})
         if not result.get("origin") and user_preferences.get("home_location"):

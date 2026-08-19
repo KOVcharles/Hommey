@@ -7,6 +7,7 @@ description: Retrieve weather and general transport context. Use for weather, ro
 
 Use `weather` for destination forecasts and `web_search` for public transport context.
 
+- In a workflow, execute only the capabilities listed in `active_task.capabilities`; do not fetch an omitted facet.
 - Weather and public-transport lookups do not require a company-trip context.
 - Prefer authoritative transport operators and official sources.
 - Treat search snippets as advisory, not proof of availability or price.

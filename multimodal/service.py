@@ -15,6 +15,7 @@ from settings import ATTACHMENT_CONFIG, MEMORY_CONFIG, VISION_CONFIG
 from webui_new.core.errors import BusinessError
 
 from . import context_builder, validation
+from .document_ocr_client import DocumentOcrError
 from .processors import ProcessorRegistry
 from .quota import DailyQuota, redis_config_from_settings
 from .repository import AttachmentRepository
@@ -48,6 +49,8 @@ def get_vision_quota() -> DailyQuota:
 
 def _parse_error_code(exc: Exception, kind: str) -> str:
     """解析失败时选择对外的错误码；图片走视觉专用错误码。"""
+    if isinstance(exc, DocumentOcrError):
+        return exc.code
     if kind == "image":
         message = str(exc)
         if message in ("VISION_FAILED", "VISION_TIMEOUT", "VISION_NOT_CONFIGURED", "VISION_DISABLED"):

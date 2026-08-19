@@ -1,10 +1,11 @@
 import asyncio
+from datetime import datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
 
 from context.long_term_memory import FileLongTermMemory
 from core.presentation import build_trip_intake_document, recover_trip_intake_document
-from core.trip_intake import evaluate_trip_intake
+from core.trip_intake import apply_trip_intake_defaults, evaluate_trip_intake
 from webui_new.manager import HommeyWebInstance
 
 
@@ -18,6 +19,22 @@ BASE_TRIP = {
     "work_location": None,
     "work_schedule": None,
 }
+
+
+def test_missing_start_date_defaults_to_beijing_today_without_overwriting_explicit_date():
+    utc_time = datetime(2026, 8, 18, 16, 30, tzinfo=timezone.utc)
+    missing = {**BASE_TRIP}
+    blank = {**BASE_TRIP, "start_date": "  "}
+    explicit = {**BASE_TRIP, "start_date": "2026-09-01"}
+
+    apply_trip_intake_defaults(missing, now=utc_time)
+    apply_trip_intake_defaults(blank, now=utc_time)
+    apply_trip_intake_defaults(explicit, now=utc_time)
+
+    assert missing["start_date"] == "2026-08-19"
+    assert blank["start_date"] == "2026-08-19"
+    assert explicit["start_date"] == "2026-09-01"
+    assert evaluate_trip_intake(missing)["missing_required"] == ["trip_length", "trip_purpose"]
 
 
 def test_trip_intake_calculates_logical_required_progress():
@@ -69,6 +86,22 @@ def test_invalid_and_conflicting_trip_fields_block_planning():
     assert conflict["conflicts"][0]["key"] == "trip_length"
     assert "5 天" in conflict["conflicts"][0]["message"]
     assert conflict["planning_ready"] is False
+
+
+def test_same_origin_and_destination_uses_one_editable_destination_prompt():
+    document = build_trip_intake_document({
+        **BASE_TRIP,
+        "destination": "北京",
+        "start_date": "2026-08-19",
+        "duration_days": 2,
+        "trip_purpose": "参加会议",
+    })
+
+    assert document.status == "needs_clarification"
+    assert [field.key for field in document.missing_required] == ["destination"]
+    assert document.missing_required[0].error == "出发地和目的地相同，请填写本次出差的实际目的地。"
+    assert document.conflicts[0].key == "destination"
+    assert document.conflicts[0].values == []
 
 
 def test_trip_intake_document_is_structured_and_has_plain_text_fallback():
@@ -250,12 +283,15 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     assert "buildReply" in card
     assert "field.suggested_value" in card
     assert "确认 ${field.suggested_value}" in card
+    assert "standaloneConflicts" in card
+    assert "!missingKeys.has(conflict.key)" in card
     assert "hommey:submit-message" in card
     assert "hommey:fill-composer" not in card
     template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
     assert "renderDisclosure" in card
     assert "trip-intake-disclosure-icon" in card
-    assert template.count("20260813-disclosure-motion-v7") == 2
+    assert template.count("20260813-disclosure-motion-v7") == 1
+    assert template.count("20260819-conflict-dedup-v1") == 1
     assert template.count("20260813-interactive-route-v4") == 2
     assert 'id="knowledgeAdminActions"' in template
     assert 'aria-label="知识库管理" hidden' in template

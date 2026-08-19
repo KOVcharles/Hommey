@@ -33,6 +33,17 @@ class SkillDependency(BaseModel):
     purpose: str = ""
 
 
+class SkillStepCapability(BaseModel):
+    """One user-controllable facet provided by an execution step."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str = Field(pattern=r"^[a-z][a-z0-9_]{1,63}$")
+    query: str = Field(min_length=1, max_length=600)
+    aliases: List[str] = Field(default_factory=list)
+    default_enabled: bool = True
+
+
 class SkillExecutionStep(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -49,6 +60,9 @@ class SkillExecutionStep(BaseModel):
     # 结果判定规则，例如 {"error_when_field": "query_success", "error_code": "..."}。
     # 取代 executor 中按 intent 硬编码的特殊状态分支。
     result_rules: Optional[Dict[str, Any]] = None
+    # 一个 Agent 可以提供多个可独立开关的能力。例如 query-info 同时提供
+    # weather 与 local_transport；构图时只保留本次请求启用的能力及其 query。
+    capabilities: List[SkillStepCapability] = Field(default_factory=list)
 
 
 class SkillScope(BaseModel):
@@ -141,6 +155,13 @@ class HommeySkillConfig(BaseModel):
             raise ValueError("intent-backed skills require agent_name")
         if self.intent and not self.execution:
             raise ValueError("intent-backed skills require an execution plan")
+        capability_names = [
+            capability.name
+            for step in self.execution
+            for capability in step.capabilities
+        ]
+        if len(capability_names) != len(set(capability_names)):
+            raise ValueError("execution capability names must be unique within a skill")
         return self
 
 

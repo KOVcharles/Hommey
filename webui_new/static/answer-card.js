@@ -372,11 +372,26 @@
                 const direction = part.match(/^(去程|返程)\s*[:：]\s*/);
                 if (!direction) return null;
                 const description = part.slice(direction[0].length).replace(/[；;\s]+$/, '').trim();
-                const wrapped = description.match(/^([^（(]+?)\s*[（(]([\s\S]+)[）)]$/);
-                const service = (wrapped?.[1] || '').trim();
-                const details = (wrapped?.[2] || description).trim();
-                const parts = details.split(/[，,]/).map((item) => item.trim()).filter(Boolean);
-                const route = (parts.shift() || '').match(/^(.+?)\s+(\d{1,2}:\d{2})\s*[→–—-]\s*(.+?)\s+(\d{1,2}:\d{2})$/);
+                let routeSource = description;
+                let service = '';
+                const leadingService = routeSource.match(
+                    /^([^，,]{1,32})[，,]\s*(?=[^，,（）()]+?\s*\d{1,2}:\d{2}\s*[→–—-])/,
+                );
+                if (leadingService) {
+                    service = leadingService[1].trim();
+                    routeSource = routeSource.slice(leadingService[0].length).trim();
+                }
+                const route = routeSource.match(
+                    /^([^，,（）()]+?)\s*(\d{1,2}:\d{2})\s*[→–—-]\s*([^，,（）()]+?)\s*(\d{1,2}:\d{2})/,
+                );
+                const metadata = route
+                    ? routeSource.slice(route[0].length)
+                        .replace(/[（(]/g, '，')
+                        .replace(/[）)]/g, '')
+                        .split(/[，,]/)
+                        .map((item) => item.trim())
+                        .filter(Boolean)
+                    : [];
                 return {
                     direction: direction[1],
                     service,
@@ -385,7 +400,7 @@
                     departure: route?.[2] || '',
                     destination: route?.[3] || '',
                     arrival: route?.[4] || '',
-                    metadata: route ? parts : [],
+                    metadata,
                 };
             })
             .filter(Boolean);
@@ -400,9 +415,10 @@
 
         const routes = element('div', 'answer-transport-routes');
         legs.forEach((leg) => {
-            const card = element('div', 'answer-transport-leg');
+            const returning = leg.direction === '返程';
+            const card = element('div', `answer-transport-leg${returning ? ' is-return' : ''}`);
             const head = element('div', 'answer-transport-head');
-            head.appendChild(element('span', `answer-transport-direction is-${leg.direction === '返程' ? 'return' : 'outbound'}`, leg.direction));
+            head.appendChild(element('span', `answer-transport-direction is-${returning ? 'return' : 'outbound'}`, leg.direction));
             if (leg.service) head.appendChild(element('strong', 'answer-transport-service', leg.service));
             card.appendChild(head);
 

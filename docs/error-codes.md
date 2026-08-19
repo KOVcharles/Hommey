@@ -64,7 +64,7 @@ Every structured error log should include:
 | Endpoint | Purpose |
 | --- | --- |
 | `/healthz` | Liveness check. Returns `{"ok": true}` when the ASGI app can respond. |
-| `/readyz` | Readiness check. Runs componentized preflight checks for API key, optional model service, Redis, Postgres, RAG model path, Milvus data directory, and MCP config. |
+| `/readyz` | Readiness check. Runs componentized preflight checks for API key, optional model service, Redis, PostgreSQL/pgvector, RAG model configuration, refresh worker, OCR, and MCP config. |
 | `/metrics` | Dependency-free Prometheus-style text metrics. This can be scraped directly or replaced later by a Prometheus/OpenTelemetry sink. |
 
 `/readyz` does not probe the model service by default. Set
