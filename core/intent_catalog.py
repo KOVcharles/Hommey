@@ -15,13 +15,13 @@ Hommey intent 的 Skill；只有标准 `SKILL.md`、没有意图扩展的包不�
 """
 from __future__ import annotations
 
-from typing import Dict, FrozenSet, List, Optional, Tuple
+from typing import Any, Dict, FrozenSet, List, Optional, Tuple
 
 from utils.skill_loader import SkillLoader
 
 # skill-backed 意图：intent_name -> 元信息
 # 顺序即 prompt 中展示的顺序；description 为面向意图分类的简洁中文说明。
-def _load_skill_intents() -> Dict[str, Dict[str, str]]:
+def _load_skill_intents() -> Dict[str, Dict[str, Any]]:
     definitions = SkillLoader().load_definitions()
     ordered = sorted(definitions.values(), key=lambda item: (item.catalog_order, item.name))
     return {
@@ -29,13 +29,14 @@ def _load_skill_intents() -> Dict[str, Dict[str, str]]:
             "skill": definition.name,
             "description": definition.description,
             "display": definition.display_name,
+            "intent_exposed": definition.intent_exposed,
         }
         for definition in ordered
         if definition.intent
     }
 
 
-SKILL_INTENTS: Dict[str, Dict[str, str]] = _load_skill_intents()
+SKILL_INTENTS: Dict[str, Dict[str, Any]] = _load_skill_intents()
 
 # 非 skill 意图：不调用任何 skill，由主流程直接处理
 NON_SKILL_INTENTS: Dict[str, Dict[str, str]] = {
@@ -50,7 +51,7 @@ NON_SKILL_INTENTS: Dict[str, Dict[str, str]] = {
 }
 
 
-def all_intents() -> Dict[str, Dict[str, str]]:
+def all_intents() -> Dict[str, Dict[str, Any]]:
     """全部意图（skill-backed + 非 skill）。"""
     return {**SKILL_INTENTS, **NON_SKILL_INTENTS}
 
@@ -74,6 +75,12 @@ def skill_to_intent(skill: str) -> Optional[str]:
 
 def is_skill_intent(intent: str) -> bool:
     return intent in SKILL_INTENTS
+
+
+def is_routable_intent(intent: str) -> bool:
+    """Whether IntentionAgent may expose and authorize this intent."""
+    info = SKILL_INTENTS.get(intent)
+    return bool(info and info.get("intent_exposed", True))
 
 
 # 统一中文显示名（含非 skill 意图）
@@ -114,6 +121,8 @@ def build_intent_prompt_section() -> str:
     """渲染 prompt 中的【意图类型】列表（skill-backed + 非 skill）。"""
     lines = []
     for intent, info in SKILL_INTENTS.items():
+        if not info.get("intent_exposed", True):
+            continue
         lines.append(f"- {intent}: {info['description']}")
     for intent, info in NON_SKILL_INTENTS.items():
         lines.append(f"- {intent}: {info['description']}（should_call_skill 必须为 false）")
@@ -243,4 +252,11 @@ def intent_api_payload() -> Dict[str, Dict[str, str]]:
             "skill": info["skill"],
         }
         for intent, info in SKILL_INTENTS.items()
+        if info.get("intent_exposed", True)
     }
+
+
+def memory_hooks_for_agent(agent_name: str) -> List[object]:
+    """Return hooks owned by an internal agent, independent of its parent Goal."""
+    definition = definition_for_agent(agent_name)
+    return list(getattr(definition, "memory_hooks", []) or []) if definition else []

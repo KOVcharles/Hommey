@@ -1,7 +1,7 @@
 """Semantic answer document rendered as cards, text, or other client surfaces."""
 from __future__ import annotations
 
-from typing import List, Literal
+from typing import Dict, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -11,12 +11,32 @@ ANSWER_SECTION_CAP = 60
 ANSWER_SOURCE_CAP = 30
 
 
+class TransportLeg(BaseModel):
+    """Machine-readable transport facts used by rich ticket/route cards."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    mode: Literal["train", "flight", "other"] = "train"
+    direction: str = Field(default="", max_length=20)
+    service: str = Field(min_length=1, max_length=40)
+    origin: str = Field(min_length=1, max_length=80)
+    departure_time: str = Field(min_length=1, max_length=40)
+    destination: str = Field(min_length=1, max_length=80)
+    arrival_time: str = Field(min_length=1, max_length=40)
+    duration: str = Field(default="", max_length=40)
+    travel_date: str = Field(default="", max_length=40)
+    availability: Dict[str, str] = Field(default_factory=dict)
+
+
 class AnswerItem(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     label: str = Field(min_length=1, max_length=60)
     value: str = Field(min_length=1, max_length=300)
     detail: str = Field(default="", max_length=600)
+    # Additive field: old clients keep rendering value/detail, while rich
+    # clients can avoid reparsing model-authored punctuation.
+    transport_legs: List[TransportLeg] = Field(default_factory=list, max_length=4)
 
 
 class WeatherDay(BaseModel):

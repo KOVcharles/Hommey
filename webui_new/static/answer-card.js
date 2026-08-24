@@ -362,6 +362,51 @@
         return '';
     }
 
+    const TRANSPORT_AVAILABILITY_ORDER = Object.freeze([
+        '商务座', '优选一等座', '一等座', '二等座', '软卧', '硬卧', '软座', '硬座', '无座',
+    ]);
+
+    function formatAvailability(label, value) {
+        const raw = String(value || '').trim();
+        if (!raw) return '';
+        if (/^\d+$/.test(raw)) return `${label}余${raw}张`;
+        if (raw === '有') return `${label}有票`;
+        if (raw === '无') return `${label}无票`;
+        return `${label}${raw}`;
+    }
+
+    function structuredTransportLegs(item) {
+        const source = Array.isArray(item?.transport_legs) ? item.transport_legs : [];
+        return source.map((leg) => {
+            const availability = leg?.availability && typeof leg.availability === 'object'
+                ? Object.entries(leg.availability)
+                : [];
+            availability.sort(([left], [right]) => {
+                const leftIndex = TRANSPORT_AVAILABILITY_ORDER.indexOf(left);
+                const rightIndex = TRANSPORT_AVAILABILITY_ORDER.indexOf(right);
+                return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex);
+            });
+            const seatMetadata = availability
+                .map(([label, value]) => formatAvailability(label, value))
+                .filter(Boolean)
+                .slice(0, 4);
+            return {
+                direction: String(leg?.direction || '行程'),
+                service: String(leg?.service || ''),
+                origin: String(leg?.origin || ''),
+                departure: String(leg?.departure_time || ''),
+                destination: String(leg?.destination || ''),
+                arrival: String(leg?.arrival_time || ''),
+                description: '',
+                metadata: [
+                    leg?.travel_date ? String(leg.travel_date) : '',
+                    leg?.duration ? `历时 ${leg.duration}` : '',
+                    ...seatMetadata,
+                ].filter(Boolean),
+            };
+        }).filter((leg) => leg.service && leg.origin && leg.departure && leg.destination && leg.arrival);
+    }
+
     function parseTransportLegs(value) {
         const source = String(value || '').trim();
         if (!source) return [];
@@ -374,10 +419,14 @@
                 const description = part.slice(direction[0].length).replace(/[；;\s]+$/, '').trim();
                 let routeSource = description;
                 let service = '';
-                const leadingService = routeSource.match(
+                const wrappedService = routeSource.match(/^([^，,（）()]{1,32})[（(]\s*(.+)[）)]$/);
+                const leadingService = wrappedService ? null : routeSource.match(
                     /^([^，,]{1,32})[，,]\s*(?=[^，,（）()]+?\s*\d{1,2}:\d{2}\s*[→–—-])/,
                 );
-                if (leadingService) {
+                if (wrappedService) {
+                    service = wrappedService[1].trim();
+                    routeSource = wrappedService[2].trim();
+                } else if (leadingService) {
                     service = leadingService[1].trim();
                     routeSource = routeSource.slice(leadingService[0].length).trim();
                 }
@@ -407,7 +456,8 @@
     }
 
     function renderTransportValue(item, fact) {
-        const legs = parseTransportLegs(item.value);
+        const legs = structuredTransportLegs(item);
+        if (!legs.length) legs.push(...parseTransportLegs(item.value));
         if (!legs.length) {
             fact.appendChild(element('strong', 'answer-fact-value', item.value));
             return;
@@ -464,11 +514,13 @@
         const grid = element('div', `answer-fact-grid${isOverview ? ' answer-overview-grid' : ''}`);
         section.items.forEach((item) => {
             const fact = element('div', `answer-fact${isOverview ? overviewFactClass(item.label) : ''}`);
+            const hasStructuredTransport = Array.isArray(item?.transport_legs) && item.transport_legs.length > 0;
+            if (hasStructuredTransport) fact.classList.add('is-transport', 'is-wide');
             if (String(item.value || '').length + String(item.detail || '').length > 110) {
                 fact.classList.add('is-wide');
             }
             fact.appendChild(element('span', 'answer-fact-label', item.label));
-            if (isOverview && fact.classList.contains('is-transport')) {
+            if (hasStructuredTransport || (isOverview && fact.classList.contains('is-transport'))) {
                 renderTransportValue(item, fact);
             } else {
                 fact.appendChild(element('strong', 'answer-fact-value', item.value));

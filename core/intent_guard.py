@@ -239,6 +239,8 @@ def has_business_travel_context(query: str, conversation_context: str = "") -> b
         return True
     if re.search(r"(规划|安排).{0,8}(路线|行程)", combined):
         return True
+    if re.search(r"(安排|规划)(?:一下)?(?:去|到|前往).{2,20}", combined):
+        return True
     return False
 
 

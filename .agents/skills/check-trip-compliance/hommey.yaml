@@ -7,6 +7,10 @@ user_facing: true
 risk_level: high
 catalog_order: 40
 progress_key: compliance_checking
+pause:
+  enabled: true
+  pause_agent: event_collection
+  pause_field: planning_ready
 answer:
   section_kind: notice
   suppress_agents: [event_collection, rag_knowledge]

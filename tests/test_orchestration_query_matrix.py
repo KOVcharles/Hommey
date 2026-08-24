@@ -51,6 +51,22 @@ def test_waiting_query_matrix(query, expected):
     assert TurnResolver.resolve(query, _state("WAITING_USER")).kind == expected
 
 
+def test_waiting_run_requires_matching_goal_and_wait_record():
+    state = _state("WAITING_USER")
+    assert state.has_consistent_waiting_state is True
+    assert TurnResolver.is_valid_active_run(state) is True
+
+    state.waits = []
+    assert state.has_consistent_waiting_state is False
+    assert TurnResolver.is_valid_active_run(state) is False
+
+
+def test_legacy_internal_only_run_is_not_a_current_user_task():
+    state = _state("INTERRUPTED", "event_collection")
+
+    assert TurnResolver.is_valid_active_run(state) is False
+
+
 @pytest.mark.parametrize(("intent", "query", "expected"), [
     ("itinerary_planning", "继续", "resume"),
     ("itinerary_planning", "改成后天去广州", "resume"),

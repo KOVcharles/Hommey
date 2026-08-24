@@ -10,6 +10,7 @@ from core.intent_catalog import (
     display_name,
     intent_to_skill,
     is_skill_intent,
+    is_routable_intent,
     skill_to_intent,
 )
 
@@ -68,11 +69,18 @@ def test_catalog_matches_discovered_skills():
 def test_build_intent_prompt_section_lists_intents():
     section = build_intent_prompt_section()
     assert "chitchat" in section
+    assert "event_collection" not in section
     assert "unclear" in section
     assert "unsupported" in section
     assert "smalltalk" not in section
     # 非 skill 意图必须带"不调用 skill"标记
     assert "不调用 skill" in section
+
+
+def test_event_collection_is_internal_but_still_skill_backed():
+    assert is_skill_intent("event_collection") is True
+    assert is_routable_intent("event_collection") is False
+    assert is_routable_intent("itinerary_planning") is True
 
 
 def test_chitchat_exact_covers_short_greetings():

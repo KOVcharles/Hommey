@@ -128,6 +128,9 @@ class HommeySkillConfig(BaseModel):
     agent_name: Optional[str] = None
     entrypoint: str = "script/agent.py"
     user_facing: bool = True
+    # 是否允许 IntentionAgent 把该 Skill 作为用户业务意图输出。内部工作流能力
+    # 可以保留 intent 元数据用于编排兼容，同时关闭意图暴露。
+    intent_exposed: bool = True
     enabled_by_default: bool = True
     risk_level: Literal["low", "medium", "high"] = "low"
     catalog_order: int = 100
