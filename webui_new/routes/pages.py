@@ -18,9 +18,9 @@ def create_pages_router(render):
         return render("login.html")
 
     @router.get("/chat/{user_id}", response_class=HTMLResponse)
-    async def chat_page(user_id: str):
+    async def chat_page(user_id: int):
         """聊天主页面"""
-        return render("chat.html", user_id=user_id)
+        return render("chat.html", user_id=str(user_id))
 
     @router.get("/admin/skills", response_class=HTMLResponse)
     async def skill_admin_page():

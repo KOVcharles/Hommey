@@ -6,8 +6,8 @@ no-knowledge), or only partially covering it (``partial`` → hedged answer).
 The gate applies to every query — not just negation ones — replacing the old
 "some docs were returned ⇒ answer confidently" behavior.
 
-Signals (chosen to be backend-agnostic: the same thresholds hold for Milvus
-RRF fusion scores and the in-memory store's character-count scores):
+Signals (chosen to be backend-agnostic: the same thresholds hold for
+PostgreSQL RRF fusion scores and the in-memory store's character-count scores):
 
   * ``coverage``      — fraction of query tokens (CJK bigrams + latin words +
                         domain rerank terms) present in the top-N chunk
@@ -39,9 +39,8 @@ import re
 from dataclasses import dataclass, field
 from typing import Any, Dict, List, Optional
 
-# Reuse the project's domain-term vocabulary rather than duplicating it; the
-# module has no heavy imports (pymilvus is lazy), so this stays dependency-free.
-from .milvus_store import _rerank_terms
+# Reuse the project's domain-term vocabulary rather than duplicating it.
+from .ranking import _rerank_terms
 
 INSUFFICIENT_COVERAGE = 0.05  # below this, no meaningful evidence overlap
 SUFFICIENT_COVERAGE = 0.40  # strong lexical overlap ⇒ direct answer

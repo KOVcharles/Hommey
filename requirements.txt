@@ -1,9 +1,6 @@
 # 环境变量加载
 python-dotenv==1.0.1
 
-# 基础（milvus_lite 依赖 pkg_resources，需 setuptools<82）
-setuptools>=69.0.0,<82
-
 # 多智能体框架
 agentscope==1.0.16
 # AgentScope 1.0.16 仍使用 MCP 1.x 的 streamablehttp_client API。
@@ -13,9 +10,7 @@ mcp>=1.13,<2.0
 requests==2.32.3
 httpx==0.28.1
 
-# RAG 与向量库（embedding 默认走 SiliconFlow 云端；本地模型依赖见下方可选项）
-pymilvus==2.6.9
-milvus-lite
+# RAG 与向量库（PostgreSQL + pgvector；embedding 默认走 SiliconFlow 云端）
 pypdf==6.4.1
 # 聊天附件 DOCX 解析（import 名 docx）
 python-docx>=1.1.0

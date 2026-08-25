@@ -11,6 +11,7 @@ from .answer_document import (
     DepartureWeather,
     PreDepartureChecklist,
     RetrievalPresentation,
+    TransportLeg,
     WeatherDay,
     render_plain_text,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "DepartureWeather",
     "PreDepartureChecklist",
     "RetrievalPresentation",
+    "TransportLeg",
     "WeatherDay",
     "render_plain_text",
     "TripIntakeDocument",

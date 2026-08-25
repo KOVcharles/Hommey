@@ -89,7 +89,7 @@ def classify_upstream_error(exc: BaseException) -> str:
         return ERROR_CONNECTION_FAILED
     if "not installed" in text or "no module named" in text:
         return ERROR_DEPENDENCY_MISSING
-    if "postgres" in text or "redis" in text or "milvus" in text or "storage" in text:
+    if "postgres" in text or "redis" in text or "storage" in text:
         return ERROR_STORAGE_UNAVAILABLE
     if "500" in text or "502" in text or "503" in text or "504" in text or "bad response" in text:
         return ERROR_BAD_RESPONSE

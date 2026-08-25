@@ -72,6 +72,14 @@ def test_plan_trip_declares_pause_and_side_effect():
     ]
 
 
+def test_all_event_collection_entrypoints_pause_when_trip_is_incomplete():
+    for intent in ("event_collection", "itinerary_planning", "trip_compliance"):
+        spec = pause_spec_for_intent(intent)
+        assert spec is not None and spec.enabled is True
+        assert spec.pause_agent == "event_collection"
+        assert spec.pause_field == "planning_ready"
+
+
 def test_plan_trip_execution_template_matches_declared_steps():
     steps = execution_steps_for_intent("itinerary_planning")
     assert [(s.agent_name, s.priority, s.on_failure) for s in steps] == [
@@ -150,10 +158,12 @@ def test_transaction_keywords_are_catalog_derived():
 
 
 def test_intent_api_payload_is_declarative():
-    from core.intent_catalog import intent_api_payload
+    from core.intent_catalog import intent_api_payload, is_routable_intent
 
     payload = intent_api_payload()
-    assert set(payload) == set(SKILL_INTENTS)
+    assert set(payload) == {
+        intent for intent in SKILL_INTENTS if is_routable_intent(intent)
+    }
     for intent, meta in payload.items():
         assert meta["display"]
         assert meta["progress_key"]

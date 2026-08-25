@@ -23,10 +23,11 @@ class TaskGraphBuilder:
         task_list = list(tasks)
         plans = []
         for task in task_list:
-            steps = execution_steps_for_intent(task.intent)
+            steps = self._selected_steps(task)
             if not steps:
                 raise ValueError(f"no execution template for intent: {task.intent}")
             plans.append((task, steps))
+        steps_by_goal = {task.task_id: steps for task, steps in plans}
 
         # A user-requested single-step Goal can satisfy the same capability
         # inside a workflow.  Compile it once under its own Goal; workflow
@@ -53,7 +54,7 @@ class TaskGraphBuilder:
             existing = by_id.get(node_id)
             if existing is not None:
                 return existing
-            owner_steps = execution_steps_for_intent(owner.intent)
+            owner_steps = steps_by_goal[owner.task_id]
             first_priority = min(item.priority for item in owner_steps)
             if len(owner_steps) == 1 or step.priority == first_priority:
                 # Intake must see the complete scoped planning Goal so it can
@@ -61,7 +62,7 @@ class TaskGraphBuilder:
                 # declared query plus upstream structured results.
                 query = owner.query
             else:
-                query = self._render_query(step.query, owner.entities) or step.reason
+                query = self._step_query(step, owner.entities) or step.reason
             node = ExecutionTask(
                 **owner.model_dump(exclude={
                     "task_id", "query", "entities", "depends_on",
@@ -79,6 +80,7 @@ class TaskGraphBuilder:
                     )
                 ),
                 result_rules=dict(step.result_rules or {}), display_order=counter,
+                capabilities=[item.name for item in step.capabilities],
             )
             counter += 1
             execution.append(node)
@@ -100,9 +102,8 @@ class TaskGraphBuilder:
                 continue
             refs_by_priority: Dict[int, List[str]] = {}
             for step in steps:
-                substitutes = standalone_by_agent.get(step.agent_name, [])
-                substitute = next((
-                    item for item in substitutes
+                substitutes = [
+                    item for item in standalone_by_agent.get(step.agent_name, [])
                     if item[0].task_id != task.task_id
                     # Capability sharing is valid only inside the same
                     # decomposition cohort.  A Goal added in a later Turn must
@@ -111,12 +112,32 @@ class TaskGraphBuilder:
                         item[0].group_id == task.group_id
                         and (bool(task.group_id) or not item[0].group_id)
                     )
-                ), None)
-                if substitute is not None:
-                    ref_id = f"{substitute[0].task_id}-{step.agent_name}"
+                    and self._same_scope(task, item[0])
+                ]
+                refs = []
+                if not step.capabilities:
+                    substitute = substitutes[0] if substitutes else None
+                    if substitute is not None:
+                        refs.append(f"{substitute[0].task_id}-{step.agent_name}")
+                    else:
+                        refs.append(add_node(task, step).task_id)
                 else:
-                    ref_id = add_node(task, step).task_id
-                refs_by_priority.setdefault(step.priority, []).append(ref_id)
+                    remaining = list(step.capabilities)
+                    for substitute in substitutes:
+                        covered = self._covered_capabilities(substitute[0], remaining)
+                        if not covered:
+                            continue
+                        refs.append(f"{substitute[0].task_id}-{step.agent_name}")
+                        covered_names = {item.name for item in covered}
+                        remaining = [
+                            item for item in remaining if item.name not in covered_names
+                        ]
+                        if not remaining:
+                            break
+                    if remaining:
+                        own_step = step.model_copy(update={"capabilities": remaining})
+                        refs.append(add_node(task, own_step).task_id)
+                refs_by_priority.setdefault(step.priority, []).extend(refs)
             ordered_prior: List[str] = []
             for priority in sorted(refs_by_priority):
                 current = refs_by_priority[priority]
@@ -146,6 +167,73 @@ class TaskGraphBuilder:
 
         self.batches(execution)
         return execution
+
+    @staticmethod
+    def _selected_steps(task: IntentTask) -> List[object]:
+        """Apply per-request overrides to optional steps from skill metadata."""
+        included = set(task.capability_selection.include)
+        excluded = set(task.capability_selection.exclude) - included
+        selected = []
+        for step in execution_steps_for_intent(task.intent):
+            if not step.capabilities:
+                selected.append(step)
+                continue
+            active = [
+                capability for capability in step.capabilities
+                if capability.name in included
+                or (capability.default_enabled and capability.name not in excluded)
+            ]
+            if active:
+                selected.append(step.model_copy(update={"capabilities": active}))
+        return selected
+
+    @classmethod
+    def _step_query(cls, step, entities: Dict[str, object]) -> str:
+        templates = [item.query for item in step.capabilities] or [step.query]
+        rendered = [cls._render_query(template, entities) for template in templates]
+        return "；".join(dict.fromkeys(value for value in rendered if value))
+
+    @staticmethod
+    def _same_scope(workflow: IntentTask, standalone: IntentTask) -> bool:
+        """Share a standalone result only when both Goals identify one trip."""
+        left_locations = TaskGraphBuilder._query_locations(workflow.query)
+        right_locations = TaskGraphBuilder._query_locations(standalone.query)
+        if left_locations and right_locations and left_locations.isdisjoint(right_locations):
+            return False
+        aliases = {
+            "origin": ("origin",),
+            "destination": ("destination",),
+            "start_date": ("start_date", "date"),
+        }
+        matched = False
+        for keys in aliases.values():
+            left = next((workflow.entities.get(key) for key in keys if workflow.entities.get(key)), None)
+            right = next((standalone.entities.get(key) for key in keys if standalone.entities.get(key)), None)
+            if left is None or right is None:
+                continue
+            if str(left).strip() != str(right).strip():
+                return False
+            matched = True
+        return matched or bool(left_locations & right_locations)
+
+    @staticmethod
+    def _query_locations(query: str) -> set[str]:
+        """Extract explicit location anchors used only for safe result sharing."""
+        pattern = re.compile(
+            r"(?:去|到|前往|查询|查一下|查|规划|安排)"
+            r"([一-鿿]{2,10}?)(?:市)?(?:的)?"
+            r"(?:出差|差旅|天气|行程|路线|标准|车次|高铁|火车)"
+        )
+        return {match.strip() for match in pattern.findall(query or "") if match.strip()}
+
+    @staticmethod
+    def _covered_capabilities(standalone: IntentTask, capabilities: List[object]) -> List[object]:
+        """Return only facets explicitly covered by a standalone scoped query."""
+        query = standalone.query
+        return [
+            capability for capability in capabilities
+            if any(alias in query for alias in (capability.aliases or [capability.name]))
+        ]
 
     @staticmethod
     def _resolve_dep_target(

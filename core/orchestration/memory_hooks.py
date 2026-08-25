@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from typing import Any, Dict, Iterable, List
 
-from core.intent_catalog import memory_hooks_for_intent
+from core.intent_catalog import memory_hooks_for_agent
 from utils.memory_safety import filter_safe_memory_mapping, is_safe_preference_value
 
 from .models import TaskResult
@@ -40,7 +40,7 @@ class MemoryHookExecutor:
         for result in results:
             if result.status != "success":
                 continue
-            hooks = memory_hooks_for_intent(result.intent)
+            hooks = memory_hooks_for_agent(result.agent_name)
             for hook in hooks:
                 if hook.agent != result.agent_name:
                     continue

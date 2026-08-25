@@ -1670,6 +1670,12 @@
             VISION_KEY_MISSING: '图片识别服务未配置',
             VISION_QUOTA_EXCEEDED: '今日图片识别次数已达上限',
             IMAGE_PARSE_FAILED: '图片识别失败',
+            OCR_DISABLED: 'PDF 包含扫描页，但 OCR 服务未开启',
+            OCR_NOT_CONFIGURED: 'PDF OCR 服务未配置',
+            OCR_PAGE_LIMIT_EXCEEDED: 'PDF 扫描页超过 10 页处理上限',
+            OCR_TIMEOUT: 'PDF OCR 超时，请稍后重试',
+            OCR_EMPTY_RESULT: 'PDF 扫描页未识别到文字',
+            OCR_FAILED: 'PDF 扫描页识别失败',
             PARSE_FAILED: '附件解析失败',
             PERSIST_FAILED: '附件处理结果保存失败',
         };

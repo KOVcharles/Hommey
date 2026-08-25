@@ -21,6 +21,22 @@ from utils.json_parser import robust_json_parse, extract_json_from_async_respons
 logger = logging.getLogger(__name__)
 
 
+def merge_upstream_data(existing: Dict[str, Any], incoming: Dict[str, Any]) -> Dict[str, Any]:
+    """Merge repeated capability results without dropping an earlier facet."""
+    merged = dict(existing)
+    for key, value in incoming.items():
+        current = merged.get(key)
+        if isinstance(current, dict) and isinstance(value, dict):
+            merged[key] = merge_upstream_data(current, value)
+        elif key == "summary" and current and value and current != value:
+            merged[key] = f"{current}\n{value}"
+        elif isinstance(current, list) and isinstance(value, list):
+            merged[key] = current + [item for item in value if item not in current]
+        else:
+            merged[key] = value
+    return merged
+
+
 def normalize_planning_result(result: Dict[str, Any]) -> Dict[str, Any]:
     """Normalize common model output variants to the public itinerary contract."""
     if not isinstance(result, dict) or isinstance(result.get("itinerary"), dict):
@@ -137,6 +153,7 @@ class ItineraryPlanningAgent(AgentBase):
         all_info = {
             "user_query": user_query,
             "context": context_info,
+            "agent_results": [],
         }
 
         # 从previous_results中提取其他agent的数据
@@ -144,7 +161,17 @@ class ItineraryPlanningAgent(AgentBase):
             agent_name = prev.get("agent_name", "")
             result_data = prev.get("result", {}).get("data", {})
             if result_data and agent_name:
-                all_info[agent_name] = result_data
+                all_info["agent_results"].append({
+                    "task_id": prev.get("task_id", ""),
+                    "goal_id": prev.get("goal_id", ""),
+                    "agent_name": agent_name,
+                    "data": result_data,
+                })
+                existing = all_info.get(agent_name)
+                all_info[agent_name] = (
+                    merge_upstream_data(existing, result_data)
+                    if isinstance(existing, dict) else result_data
+                )
 
         # 构建用户偏好信息
         preferences_info = ""

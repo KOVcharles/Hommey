@@ -1,12 +1,11 @@
 """Flag-gated OCR fallback for text-less PDF pages (audit §11 Phase 3).
 
 Phase 3's lightweight deliverable: keep the native-text fast path as the
-parser's first choice, and when a PDF page has no extractable text layer,
-reuse the multimodal ``VisionClient`` (Qwen2.5-VL) — the same visual front-end
-the chat's image-attachment path uses — to OCR the rendered page.  No page
-silently vanishes (P8): every outcome lands in an explicit terminal state
+parser's first choice, and when a PDF page has no extractable text layer, use
+the shared document-focused ``DocumentOcrClient`` to OCR the rendered page.
+No page silently vanishes (P8): every outcome lands in an explicit terminal state
 
-- OCR success above the confidence threshold  → ``ocr_text``
+- OCR success (and, when supplied, above the confidence threshold) → ``ocr_text``
 - OCR success below the threshold              → ``intentionally_skipped`` with
                                                 ``ocr_skipped_reason``
 - OCR call or page-render failure               → ``error`` with ``ocr_error``
@@ -41,20 +40,20 @@ class PageOcrFallback:
         *,
         enabled: bool = False,
         confidence_threshold: float = 0.5,
-        vision_client: Any = None,
+        ocr_client: Any = None,
     ):
         self.enabled = bool(enabled)
         self.confidence_threshold = float(confidence_threshold)
-        # Injected vision client (tests pass a fake); created lazily on first
+        # Injected OCR client (tests pass a fake); created lazily on first
         # OCR so importing this module never touches the network.
-        self._vision = vision_client
+        self._ocr_client = ocr_client
 
     def _client(self) -> Any:
-        if self._vision is None:
-            from multimodal.vision_client import VisionClient
+        if self._ocr_client is None:
+            from multimodal.document_ocr_client import DocumentOcrClient
 
-            self._vision = VisionClient()
-        return self._vision
+            self._ocr_client = DocumentOcrClient()
+        return self._ocr_client
 
     def apply(self, documents: List[ParsedDocument]) -> List[ParsedDocument]:
         """Replace text-less PDF pages with OCR'd pages; others pass through."""
@@ -87,7 +86,12 @@ class PageOcrFallback:
             )
 
         try:
-            result = self._client().describe_image(image_bytes, "png", document.filename)
+            result = self._client().ocr_page(
+                image_bytes,
+                "png",
+                filename=document.filename,
+                page_number=page,
+            )
         except Exception as exc:  # noqa: BLE001 — VisionError or transport.
             logger.warning("OCR failed for %s page %d: %s", document.filename, page, exc)
             return replace(
@@ -97,19 +101,24 @@ class PageOcrFallback:
             )
 
         ocr_text = _ocr_text(result)
-        confidence = float(getattr(result, "confidence", 0.0) or 0.0)
+        raw_confidence = getattr(result, "confidence", None)
+        confidence = float(raw_confidence) if raw_confidence is not None else None
         base_metadata = {
             **document.metadata,
-            "ocr_source": "vision",
-            "ocr_confidence": round(confidence, 3),
+            "ocr_source": "document_ocr",
         }
+        model = getattr(result, "model", None)
+        if model:
+            base_metadata["ocr_model"] = str(model)
+        if confidence is not None:
+            base_metadata["ocr_confidence"] = round(confidence, 3)
         if not ocr_text.strip():
             return replace(
                 document,
                 page_terminal_state=PAGE_STATE_INTENTIONALLY_SKIPPED,
                 metadata={**base_metadata, "ocr_skipped_reason": "empty_ocr"},
             )
-        if confidence < self.confidence_threshold:
+        if confidence is not None and confidence < self.confidence_threshold:
             return replace(
                 document,
                 page_terminal_state=PAGE_STATE_INTENTIONALLY_SKIPPED,
@@ -128,22 +137,22 @@ class PageOcrFallback:
 
 def _render_page_png(source_path: str, page_number: int) -> bytes:
     """Rasterize PDF ``page_number`` (1-based) to PNG bytes via pymupdf."""
-    import fitz  # PyMuPDF
+    import pymupdf
 
-    with fitz.open(source_path) as pdf:
+    with pymupdf.open(source_path) as pdf:
         if not 1 <= page_number <= pdf.page_count:
             raise IndexError(f"PDF page {page_number} out of range")
-        pix = pdf.load_page(page_number - 1).get_pixmap(matrix=fitz.Matrix(2, 2), alpha=False)
+        pix = pdf.load_page(page_number - 1).get_pixmap(
+            matrix=pymupdf.Matrix(2, 2), alpha=False
+        )
         return pix.tobytes("png")
 
 
 def _ocr_text(result: Any) -> str:
-    """Extract the raw OCR lines from a VisionResult.
-
-    The vision prompt emits OCR text as ``line1 | line2 | …``; prefer that raw
-    reading over the wrapper ``content_text`` (which prefixes filename and
-    description) so the page blocks stay clean for retrieval.
-    """
+    """Extract OCR Markdown, with compatibility for legacy VisionResult fakes."""
+    text = getattr(result, "text", None)
+    if isinstance(text, str) and text.strip():
+        return text.strip()
     structured = getattr(result, "structured", None)
     if isinstance(structured, dict):
         raw = structured.get("ocr")

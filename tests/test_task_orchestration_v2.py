@@ -256,14 +256,22 @@ def test_plan_trip_absorbs_overlapping_independent_intents():
     tasks = TaskValidator().validate(raw, plan_intention)
     execution_tasks = TaskGraphBuilder().compile(tasks)
 
-    # 独立 Goal 保留所有权，同时作为 workflow 的显式依赖，不重复执行。
+    # 独立天气 Goal 只复用 weather 能力；plan-trip 仍单独查询普通交通，
+    # 避免用一个更窄的天气结果顶替整个天气+交通步骤。
     assert sorted(task.agent_name for task in execution_tasks) == sorted([
-        "event_collection", "rag_knowledge", "information_query", "train_query",
-        "itinerary_planning", "trip_compliance",
+        "event_collection", "rag_knowledge", "information_query", "information_query",
+        "train_query", "itinerary_planning", "trip_compliance",
     ])
     by_agent = {task.agent_name: task for task in execution_tasks}
+    info_tasks = [
+        task for task in execution_tasks if task.agent_name == "information_query"
+    ]
     assert "标准" in by_agent["rag_knowledge"].query
-    assert "天气" in by_agent["information_query"].query
+    assert any("天气" in task.query for task in info_tasks)
+    assert any(
+        task.capabilities == ["local_transport"] and "天气" not in task.query
+        for task in info_tasks
+    )
     assert "天气" not in by_agent["rag_knowledge"].query
     # train-query 步骤带 scoped 车次 query，不污染其他意图词域。
     assert "车次" in by_agent["train_query"].query

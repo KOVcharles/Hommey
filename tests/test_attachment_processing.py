@@ -1,6 +1,7 @@
 """多模态附件 P0：解析器与上传校验的纯单元测试（不连数据库）。"""
 import io
 import zipfile
+from types import SimpleNamespace
 
 import pytest
 
@@ -12,6 +13,7 @@ from multimodal.document_processor import (
     PdfProcessor,
     TxtProcessor,
 )
+from multimodal.document_ocr_client import DocumentOcrError
 from multimodal.processors import ProcessorRegistry
 from multimodal.service import AttachmentService, get_vision_quota
 from multimodal.storage import LocalAttachmentStore
@@ -55,20 +57,130 @@ def test_docx_processor_extracts_headings_paragraphs_and_tables():
     assert validation.detect_kind("policy.docx", data)[0] == "docx"
 
 
-def test_pdf_processor_handles_blank_pdf_without_crashing():
+class _FakeDocumentOcr:
+    def __init__(self, text="# OCR 页面", error: Exception | None = None):
+        self.text = text
+        self.error = error
+        self.calls = []
+
+    def ocr_page(self, data, ext, *, filename, page_number):
+        self.calls.append((data, ext, filename, page_number))
+        if self.error:
+            raise self.error
+        return SimpleNamespace(text=self.text, model="fake-ocr", confidence=None)
+
+
+def _blank_pdf_bytes(page_count: int = 1) -> bytes:
     pytest.importorskip("pypdf")
     from pypdf import PdfWriter
 
     writer = PdfWriter()
-    writer.add_blank_page(width=200, height=200)
+    for _ in range(page_count):
+        writer.add_blank_page(width=200, height=200)
     buf = io.BytesIO()
     writer.write(buf)
-    data = buf.getvalue()
+    return buf.getvalue()
 
-    result = PdfProcessor().parse(data, "blank.pdf")
+
+def test_pdf_processor_ocrs_textless_page():
+    ocr = _FakeDocumentOcr("# 扫描页\n\n住宿费 500 元")
+    result = PdfProcessor(ocr_client=ocr, ocr_enabled=True).parse(
+        _blank_pdf_bytes(), "blank.pdf"
+    )
+
     assert result.page_count == 1
-    # 空白页无文本
-    assert result.content_text == ""
+    assert result.content_text == "{第 1 页}\n# 扫描页\n\n住宿费 500 元"
+    assert result.structured["native_text_pages"] == []
+    assert result.structured["ocr_pages"] == [1]
+    assert ocr.calls[0][2:] == ("blank.pdf", 1)
+
+
+def test_pdf_processor_keeps_native_text_without_calling_ocr():
+    pymupdf = pytest.importorskip("pymupdf")
+    document = pymupdf.open()
+    page = document.new_page()
+    page.insert_text((72, 72), "native PDF text")
+    data = document.tobytes()
+    document.close()
+    ocr = _FakeDocumentOcr(error=AssertionError("native page must not use OCR"))
+
+    result = PdfProcessor(ocr_client=ocr, ocr_enabled=True).parse(data, "native.pdf")
+
+    assert "native PDF text" in result.content_text
+    assert result.structured["native_text_pages"] == [1]
+    assert result.structured["ocr_pages"] == []
+    assert ocr.calls == []
+
+
+def test_pdf_processor_merges_native_and_ocr_pages_in_page_order():
+    pymupdf = pytest.importorskip("pymupdf")
+    document = pymupdf.open()
+    native = document.new_page()
+    native.insert_text((72, 72), "first native page")
+    document.new_page()
+    data = document.tobytes()
+    document.close()
+
+    result = PdfProcessor(
+        ocr_client=_FakeDocumentOcr("## second OCR page"),
+        ocr_enabled=True,
+    ).parse(data, "mixed.pdf")
+
+    assert result.content_text.index("{第 1 页}") < result.content_text.index("{第 2 页}")
+    assert "first native page" in result.content_text
+    assert "## second OCR page" in result.content_text
+    assert result.structured["native_text_pages"] == [1]
+    assert result.structured["ocr_pages"] == [2]
+
+
+def test_pdf_processor_rejects_more_than_configured_ocr_pages_before_calling_model():
+    ocr = _FakeDocumentOcr()
+    with pytest.raises(DocumentOcrError) as exc:
+        PdfProcessor(ocr_client=ocr, ocr_enabled=True, max_ocr_pages=10).parse(
+            _blank_pdf_bytes(11), "large-scan.pdf"
+        )
+
+    assert exc.value.code == "OCR_PAGE_LIMIT_EXCEEDED"
+    assert ocr.calls == []
+
+
+@pytest.mark.parametrize(
+    "ocr",
+    [
+        _FakeDocumentOcr(text=""),
+        _FakeDocumentOcr(error=DocumentOcrError("OCR_TIMEOUT", "timeout")),
+    ],
+)
+def test_pdf_processor_fails_whole_document_when_any_ocr_page_fails(ocr):
+    with pytest.raises(DocumentOcrError):
+        PdfProcessor(ocr_client=ocr, ocr_enabled=True).parse(
+            _blank_pdf_bytes(), "failed-scan.pdf"
+        )
+
+
+def test_pdf_upload_surfaces_typed_ocr_error(tmp_path):
+    repository = _UploadRepository()
+    processor = PdfProcessor(
+        ocr_client=_FakeDocumentOcr(
+            error=DocumentOcrError("OCR_TIMEOUT", "timeout")
+        ),
+        ocr_enabled=True,
+    )
+    service = AttachmentService(
+        store=LocalAttachmentStore(str(tmp_path)),
+        repository=repository,
+        processors=ProcessorRegistry(processors=[processor]),
+    )
+
+    result = service.upload(
+        user_id="u1",
+        filename="scan.pdf",
+        content=_blank_pdf_bytes(),
+    )
+
+    assert result.status == "failed"
+    assert result.error_code == "OCR_TIMEOUT"
+    assert repository.status_updates[-1] == ("u1", "failed", "OCR_TIMEOUT")
 
 
 def test_processor_registry_dispatches_by_extension():

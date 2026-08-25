@@ -81,6 +81,22 @@ def test_event_collection_hook_updates_active_trip():
     assert manager.long_term.active_trip["destination"] == "上海"
 
 
+def test_internal_event_collection_hook_uses_agent_ownership():
+    manager = _FakeMemoryManager()
+    executor = MemoryHookExecutor(manager)
+    asyncio.run(executor.apply([
+        _result("event_collection", "itinerary_planning", {
+            "origin": "北京", "destination": "广州",
+            "start_date": "2026-08-20", "duration_days": 2,
+        }),
+    ]))
+
+    assert manager.active_updates == [{
+        "origin": "北京", "destination": "广州",
+        "start_date": "2026-08-20", "duration_days": 2,
+    }]
+
+
 def test_event_collection_hook_persists_all_confirmed_fields_but_not_candidates():
     manager = _FakeMemoryManager()
     executor = MemoryHookExecutor(manager)
@@ -232,5 +248,6 @@ def test_hook_fires_on_pause_turn():
     output = asyncio.run(pipeline.run(plan_query, plan_intention, {}))
 
     assert output.paused is True
+    assert manager.long_term.active_trip["destination"] == "上海"
     # 暂停轮已 SUCCEEDED 的 preference 结果必须回写，而不是被跳过。
     assert manager.long_term.preferences.get("hotel_brand") == "如家"

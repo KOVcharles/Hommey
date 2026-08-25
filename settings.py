@@ -329,6 +329,24 @@ VISION_CONFIG = {
 }
 
 
+OCR_CONFIG = {
+    # 文档 OCR 与用户图片理解解耦。Query PDF 和 RAG 扫描页共用这一后端，
+    # 但各自保留独立的业务开关与失败语义。
+    "enabled": _bool_env("HOMMEY_OCR_ENABLED", False),
+    "api_key": _optional_env("HOMMEY_OCR_API_KEY")
+    or _optional_env("SILICONFLOW_API_KEY")
+    or _optional_env("HOMMEY_VISION_API_KEY"),
+    "base_url": os.getenv("HOMMEY_OCR_BASE_URL", "https://api.siliconflow.cn/v1"),
+    "model": os.getenv("HOMMEY_OCR_MODEL", "deepseek-ai/DeepSeek-OCR"),
+    "timeout_sec": _float_env("HOMMEY_OCR_TIMEOUT_SEC", 30.0),
+    "max_retries": _int_env("HOMMEY_OCR_MAX_RETRIES", 2),
+    # DeepSeek-OCR 总上下文为 8192；需为视觉输入和提示词保留空间。
+    "max_tokens": _int_env("HOMMEY_OCR_MAX_TOKENS", 4096),
+    # 仅约束同步 Query PDF 上传；RAG 入库有自己的任务/状态边界。
+    "query_pdf_max_pages": _int_env("HOMMEY_QUERY_PDF_OCR_MAX_PAGES", 10),
+}
+
+
 ASR_CONFIG = {
     # 语音转写开关（Mode A：转写为文本后以纯文本发送，不落附件表）。
     "enabled": _bool_env("HOMMEY_ASR_ENABLED", False),

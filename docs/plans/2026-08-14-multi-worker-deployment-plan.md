@@ -4,9 +4,9 @@
 > 关联：`docs/superpowers/specs/2026-08-04-global-concurrency-hardening-design.md`。
 > 文档约定：完成项使用删除线并标注日期；不再为每次并发升级新建报告。
 
-## 当前结论（2026-08-17）
+## 当前结论（2026-08-19）
 
-阶段一 Web 并发整改、阶段二 PostgreSQL VectorStore 和精简版阶段三持久化刷新控制面已完成。项目默认配置及当前 Compose 运行配置均已收敛为长期 PostgreSQL、RAG PostgreSQL + pgvector，Compose 的短期协调状态使用 Redis；Milvus Lite 的 164 个 chunk 已迁移并发布为 pgvector active version，仅保留迁移兼容入口。
+阶段一 Web 并发整改、阶段二 PostgreSQL VectorStore 和精简版阶段三持久化刷新控制面已完成。项目默认配置及当前 Compose 运行配置均已收敛为长期 PostgreSQL、RAG PostgreSQL + pgvector，Compose 的短期协调状态使用 Redis。旧向量数据已完成迁移验证；2026-08-19 又删除了旧适配器、迁移入口、依赖和本地数据库，生产代码不再包含双后端切换路径。
 
 当前同一云主机 Compose 已运行 `UVICORN_WORKERS=2`，并由独立 `rag-worker` 执行 PostgreSQL 持久化刷新任务。知识库源文件和附件暂时使用同主机共享持久卷，因此当前结论只覆盖“单主机双 worker”；扩展到跨主机 Web 副本前仍需接入对象存储，并完成阶段四剩余故障注入。
 
@@ -14,7 +14,7 @@
 
 Hommey 当前以单个 uvicorn worker 运行。Redis 分布式协调和 PostgreSQL 持久化能力已经具备，但仍有以下因素阻塞安全的多进程和云端部署：
 
-- ~~RAG 使用 Milvus Lite 单文件库，多个进程不能安全共享。~~（2026-08-17 已迁移到 PostgreSQL + pgvector；Milvus Lite 仅保留迁移兼容）
+- ~~RAG 曾使用本地单文件向量库，多个进程不能安全共享。~~（2026-08-17 已迁移到 PostgreSQL + pgvector；2026-08-19 删除旧兼容入口和数据）
 - ~~Web 层仍依赖进程内热用户实例，部分状态接口未进入统一用户锁。~~（2026-08-17 已完成冷 worker 恢复和用户状态作用域）
 - ~~知识库上传锁、刷新任务和刷新状态仍是进程内状态。~~（2026-08-17 已迁移到 PostgreSQL source generation、任务队列、租约和 worker 心跳）
 - ~~Redis 全局信号量使用单计数器加 TTL，长请求可能跨过 TTL 后突破并发上限。~~（2026-08-17 已改为 token 化 ZSET 租约）
@@ -38,7 +38,7 @@ Hommey 当前以单个 uvicorn worker 运行。Redis 分布式协调和 PostgreS
 
 ### 2.2 非目标
 
-- 当前数据规模下不部署 Milvus Standalone。
+- 不额外部署独立向量数据库；RAG 向量与版本状态统一进入 PostgreSQL。
 - 首期不创建 HNSW 或 IVFFlat 近似向量索引。
 - 不在本阶段把所有 psycopg 同步 repository 重写为 asyncpg。
 - 不依赖负载均衡器 sticky session 保证正确性；sticky session 只能作为性能优化。
@@ -225,11 +225,11 @@ LIMIT %(top_k)s
 
 - 增加 `PostgresVectorStore`。
 - 增加统一 `create_vector_store(config)` 工厂；`RAGPipeline`、`KnowledgeRetriever`、CLI 和 Web 刷新全部通过工厂构造。
-- 配置项 `HOMMEY_RAG_VECTOR_BACKEND` 支持 `postgres`、`milvus_lite` 和 `memory`。
-- 生产和所有多进程环境只允许 `postgres`。
+- 配置项 `HOMMEY_RAG_VECTOR_BACKEND` 支持 `postgres` 和仅供测试使用的 `memory`。
+- 生产和所有多进程环境只允许 `postgres`；未知或已移除的后端值会直接报配置错误。
 - preflight 在 worker 数大于 1 且后端不是 PostgreSQL 时直接失败。
 
-BM25、RRF、rerank、evidence filter 和 HyDE 从 Milvus 适配器中提取到共享检索层：
+BM25、RRF、rerank、evidence filter 和 HyDE 位于共享检索层：
 
 - dense 分支由 VectorStore 返回候选。
 - BM25 首期读取当前 active version 的全部 chunk，在 Python 中计算；当前规模可接受。
@@ -367,6 +367,7 @@ total_connections = web_connections
 - ~~提供 Milvus Lite → PostgreSQL 一次性迁移工具并核对源/目标数量。~~（2026-08-17 完成，164 → 164）
 - ~~Compose 开发/测试数据库固定为 `pgvector/pgvector:0.8.6-pg16-bookworm`。~~（2026-08-17 完成）
 - ~~将代码默认值、`.env.example` 和当前 `.env` 的长期/RAG 后端收敛为 PostgreSQL，Milvus Lite 不再作为隐式默认值。~~（2026-08-17 完成）
+- ~~删除旧向量库适配器、一次性迁移脚本、依赖、readiness 分支和本地数据库。~~（2026-08-19 完成）
 
 阶段二实际验收：迁移重复执行 `applied=0`；pgvector `0.8.6`；active index 维度 1024、chunk 数 164；`/readyz` 全部通过；真实 PostgreSQL dense + BM25/RRF 查询返回预期住宿政策。RAG/可观测性回归 61 passed，隔离 PostgreSQL 集成测试 13 passed、1 skipped，真实 Redis 并发测试 10 passed。切换前数据库备份保存在 `data/backups/pre-pgvector-phase2-20260817.sql`。
 
@@ -396,10 +397,10 @@ total_connections = web_connections
 ### 阶段五：云端灰度上线
 
 1. 部署 PostgreSQL/pgvector 迁移和共享存储。
-2. 从源文档构建 PostgreSQL RAG 新版本并验证，但暂不删除 Milvus Lite 数据。
+2. 从源文档构建 PostgreSQL RAG 新版本并验证；旧本地向量数据已删除，不再提供双写或旧后端回滚。
 3. 先部署一个新版本 Web 副本，运行 smoke test 和 golden queries。
 4. 扩展到两个 Web 副本，每副本一个 worker。
-5. 观察完整回滚窗口后再删除旧 Milvus Lite 文件和依赖。
+5. 需要回滚索引时使用 PostgreSQL active version、数据库备份或从源文档重建。
 6. 完成备份恢复演练后，才将新拓扑标记为稳定生产版本。
 
 ## 11. 验收要求

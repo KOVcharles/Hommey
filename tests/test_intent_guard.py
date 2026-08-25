@@ -217,7 +217,7 @@ def test_date_only_followup_inherits_immediately_previous_train_query():
     assert data["rewritten_query"] == "帮我查一下定南到重庆的车票，明天的"
 
 
-def test_date_only_reply_does_not_inherit_non_train_query():
+def test_dialogue_history_cannot_authorize_internal_event_collection():
     model_calls = []
 
     async def contextual_model(_messages):
@@ -259,7 +259,8 @@ def test_date_only_reply_does_not_inherit_non_train_query():
     data = json.loads(result.content)
 
     assert model_calls == [True]
-    assert data["routing"]["intent"] == "event_collection"
+    assert data["routing"]["intent"] == "unclear"
+    assert data["routing"]["should_call_skill"] is False
 
 
 def test_programming_request_is_rejected_as_out_of_scope():
@@ -346,6 +347,41 @@ def test_trip_request_routes_to_trip_planning():
     data = route.to_intention_data("我下周去上海出差，帮我安排两天行程")
     assert data["routing"]["intent"] == "itinerary_planning"
     assert route.intent_types == ("itinerary_planning",)
+
+
+def test_natural_destination_plan_routes_to_trip_planning():
+    route = FastIntentRouter.route("安排一下去广州")
+
+    assert route is not None
+    assert route.intent_types == ("itinerary_planning",)
+    assert route.safe_to_short_circuit is True
+
+
+def test_structured_trip_facts_default_to_trip_planning():
+    route = FastIntentRouter.route("出发地北京、2天、客户拜访、8月20日")
+
+    assert route is not None
+    assert route.intent_types == ("itinerary_planning",)
+
+
+def test_explicit_current_plan_ignores_plain_clarification_history():
+    async def model_must_not_run(_messages):
+        raise AssertionError("明确的当前规划请求不应被历史澄清文案降级")
+
+    agent = IntentionAgent(name="IntentionAgent", model=model_must_not_run)
+    result = asyncio.run(agent.reply([
+        Msg(name="user", content="安排一下去广州", role="user"),
+        Msg(
+            name="assistant",
+            content="请补充出差目的地、日期，或说明要查询的政策和报销问题。",
+            role="assistant",
+        ),
+        Msg(name="user", content="广州出差计划", role="user"),
+    ]))
+    data = json.loads(result.content)
+
+    assert data["routing"]["intent"] == "itinerary_planning"
+    assert data["routing"]["should_call_skill"] is True
 
 
 def test_policy_query_routes_to_rag_knowledge():

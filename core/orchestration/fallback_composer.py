@@ -23,6 +23,7 @@ from core.presentation import (
     AnswerItem,
     AnswerSection,
     AnswerSource,
+    TransportLeg,
     WeatherDay,
     render_plain_text,
 )
@@ -37,6 +38,8 @@ _FORECAST_PATTERN = re.compile(
 _CURRENT_PATTERN = re.compile(
     r"当前天气[:：]\s*([^，。]+)[，,]\s*气温\s*([^，。]+)[，,]\s*湿度\s*([^，。]+)"
 )
+_TRAIN_NO_PATTERN = re.compile(r"(?<![A-Z0-9])([GCDZTKLS]\d{1,5})(?!\d)", re.IGNORECASE)
+_TRANSPORT_ITEM_LABELS = {"首选交通", "交通建议"}
 
 _LABEL_BY_KIND = {
     "policy": "差旅标准",
@@ -88,6 +91,109 @@ def _item(label, value, detail=""):
     return AnswerItem(label=_clean(label, 60), value=value, detail=_clean(detail, 600))
 
 
+def _train_payload(result: TaskResult) -> Dict:
+    payload = _nested(result.data)
+    if isinstance(payload.get("results"), dict):
+        payload = payload["results"]
+    return payload
+
+
+def _train_rows(results: Iterable[TaskResult]) -> List[Dict]:
+    """Collect normalized 12306 rows without duplicating round-trip aliases."""
+    rows: List[Dict] = []
+    seen = set()
+    for result in results:
+        if result.agent_name != "train_query" or result.status != "success":
+            continue
+        payload = _train_payload(result)
+        candidates = payload.get("trains")
+        if not isinstance(candidates, list):
+            candidates = []
+            for key in ("outbound", "return_trip"):
+                leg_payload = payload.get(key)
+                if isinstance(leg_payload, dict) and isinstance(leg_payload.get("trains"), list):
+                    candidates.extend(leg_payload["trains"])
+        for row in candidates:
+            if not isinstance(row, dict):
+                continue
+            key = tuple(str(row.get(field) or "") for field in (
+                "direction", "train_no", "from_station", "depart_time",
+                "to_station", "arrive_time", "travel_date",
+            ))
+            if key in seen:
+                continue
+            seen.add(key)
+            rows.append(row)
+    return rows
+
+
+def _transport_leg(row: Dict) -> TransportLeg | None:
+    service = _clean(row.get("train_no"), 40)
+    origin = _clean(row.get("from_station"), 80)
+    departure = _clean(row.get("depart_time"), 40)
+    destination = _clean(row.get("to_station"), 80)
+    arrival = _clean(row.get("arrive_time"), 40)
+    if not all((service, origin, departure, destination, arrival)):
+        return None
+    raw_availability = row.get("seats") or {}
+    availability = {
+        _clean(name, 20): _clean(value, 20)
+        for name, value in raw_availability.items()
+        if name and value not in (None, "")
+    } if isinstance(raw_availability, dict) else {}
+    return TransportLeg(
+        mode="train",
+        direction=_clean(row.get("direction"), 20),
+        service=service,
+        origin=origin,
+        departure_time=departure,
+        destination=destination,
+        arrival_time=arrival,
+        duration=_clean(row.get("duration"), 40),
+        travel_date=_clean(row.get("travel_date"), 40),
+        availability=availability,
+    )
+
+
+def _selected_transport_legs(value: str, rows: List[Dict]) -> List[TransportLeg]:
+    """Match planner-selected train numbers back to authoritative 12306 rows."""
+    source = str(value or "")
+    compact = re.sub(r"\s+", "", source).upper()
+    selections = []
+    for match in _TRAIN_NO_PATTERN.finditer(source.upper()):
+        service = match.group(1).upper()
+        prefix = source[:match.start()]
+        direction = "返程" if prefix.rfind("返程") > prefix.rfind("去程") else "去程"
+        key = (service, direction)
+        if key not in selections:
+            selections.append(key)
+
+    legs: List[TransportLeg] = []
+    for service, direction in selections[:4]:
+        candidates = [
+            row for row in rows
+            if str(row.get("train_no") or "").upper() == service
+        ]
+        if not candidates:
+            continue
+
+        def score(row: Dict) -> int:
+            points = 0
+            if str(row.get("direction") or "") == direction:
+                points += 2
+            for fields in (("from_station", "depart_time"), ("to_station", "arrive_time")):
+                needle = "".join(str(row.get(field) or "") for field in fields).upper()
+                if needle and needle in compact:
+                    points += 4
+            return points
+
+        selected = max(candidates, key=score)
+        leg = _transport_leg(selected)
+        if leg is not None:
+            legs.append(leg)
+    return legs
+
+
 class FallbackComposer:
     def compose(
         self,
@@ -126,6 +232,13 @@ class FallbackComposer:
                 notices.append(message)
                 continue
             built = self._render(kind, primary)
+            if kind == "trip":
+                rows = _train_rows(group)
+                if rows:
+                    for section in built:
+                        for item in section.items:
+                            if item.label in _TRANSPORT_ITEM_LABELS:
+                                item.transport_legs = _selected_transport_legs(item.value, rows)
             for section in built:
                 section.goal_id = task.task_id
             sections.extend(built)
@@ -326,7 +439,13 @@ class FallbackComposer:
                 )
             else:
                 seat_detail = _clean(seats, 120)
-            item = _item(train.get("train_no"), route, seat_detail)
+            leg = _transport_leg(train)
+            item = AnswerItem(
+                label=_clean(train.get("train_no"), 60),
+                value=_clean(route, 300),
+                detail=_clean(seat_detail, 600),
+                transport_legs=[leg] if leg is not None else [],
+            ) if route and train.get("train_no") else None
             if item:
                 items.append(item)
         body_parts = []
@@ -372,6 +491,18 @@ class FallbackComposer:
     @staticmethod
     def _trip_sections(result: TaskResult) -> List[AnswerSection]:
         data = _nested(result.data)
+        if data.get("planning_ready") is False:
+            missing = data.get("missing_fields") or []
+            missing_text = "、".join(str(item) for item in missing if item)
+            body = "还需要补充行程信息后才能生成完整方案。"
+            if missing_text:
+                body = f"还需要补充：{missing_text}。"
+            return [AnswerSection(
+                kind="trip",
+                title="行程信息待补充",
+                status="partial",
+                body=body,
+            )]
         itinerary = data.get("itinerary") if isinstance(data.get("itinerary"), dict) else data
         items = []
         transport = itinerary.get("transport_recommendation")
@@ -459,7 +590,10 @@ class FallbackComposer:
     @staticmethod
     def _summary(sections: Iterable[AnswerSection]) -> str:
         successful = [section.title for section in sections if section.status == "success"]
+        partial = [section.title for section in sections if section.status == "partial"]
         failed = [section.title for section in sections if section.status == "error"]
+        if partial and not successful and not failed:
+            return "还需要补充部分信息后才能继续。"
         if successful and not failed:
             return "已整理好" + "和".join(successful) + "。"
         if successful:

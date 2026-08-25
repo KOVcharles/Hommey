@@ -6,6 +6,7 @@ core/guard_rules.py。这里只识别和授权意图，不生成可执行计划�
 from __future__ import annotations
 
 from dataclasses import dataclass
+import re
 from typing import Any, Dict, List, Optional, Tuple
 
 from core.intent_guard import (
@@ -229,15 +230,39 @@ class FastIntentRouter:
 
     @classmethod
     def _looks_like_trip_request(cls, query: str) -> bool:
-        if not has_business_travel_context(query):
+        natural_plan = bool(re.search(
+            r"(?:帮我)?(?:安排|规划)(?:一下)?(?:去|到|前往).{2,20}",
+            query or "",
+        ))
+        structured_facts = cls._looks_like_structured_trip_facts(query)
+        if not (has_business_travel_context(query) or natural_plan or structured_facts):
             return False
         explicit_plan = any(keyword in query for keyword in TRIP_KEYWORDS) or (
             "计划" in query and any(keyword in query for keyword in ("出差", "差旅", "去", "前往"))
-        )
+        ) or natural_plan or structured_facts
         if explicit_plan:
+            if natural_plan or structured_facts:
+                return True
             if "从" in query and ("到" in query or "去" in query):
                 return True
             return any(keyword in query for keyword in (
                 "去", "规划", "安排", "计划", "行程", "路线", "出差", "差旅",
             ))
         return False
+
+    @staticmethod
+    def _looks_like_structured_trip_facts(query: str) -> bool:
+        """Treat a bundle of trip slots as an implicit planning request."""
+        text = query or ""
+        if any(term in text for term in (
+            "天气", "气温", "下雨", "车票", "车次", "高铁", "火车",
+            "政策", "标准", "报销", "合规", "查", "查询",
+        )):
+            return False
+        strong_markers = [
+            bool(re.search(r"(?:出发地|从)[^，,。]{1,12}", text)),
+            bool(re.search(r"(?:目的地)[^，,。]{1,12}", text)),
+            bool(re.search(r"\d+\s*天", text)),
+            any(term in text for term in ("客户拜访", "拜访客户", "会议", "培训", "出差目的")),
+        ]
+        return sum(strong_markers) >= 2 and has_business_travel_context(text)

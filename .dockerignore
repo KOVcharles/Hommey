@@ -19,11 +19,18 @@ build/
 # IDE
 .vscode/
 .idea/
+.claude/
 *.swp
 *.swo
 
 # 记忆数据（由 volume 管理）
 data/memory/*.json
+
+# 私有运行时数据与本地诊断产物，绝不能进入镜像层
+data/backups/
+data/uploads/
+data/eval/
+data/rag_scratch/
 
 # RAG 向量数据（本地开发产物）
 data/rag_knowledge/
@@ -42,8 +49,8 @@ docs/
 tests/
 benchmark.py
 
-# 环境配置（敏感信息，通过 docker-compose env_file 注入）
-.env
+# 环境配置（敏感信息通过 docker-compose env_file 注入；示例文件也不需要进镜像）
+.env*
 
 # 系统文件
 Thumbs.db

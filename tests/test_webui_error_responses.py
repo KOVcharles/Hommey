@@ -13,7 +13,7 @@ from httpx import ASGITransport, AsyncClient
 from webui_new.auth.deps import require_path_user
 from webui_new.auth.storage import User
 from webui_new.manager import HommeyWebInstance
-from webui_new.server import app, manager
+from webui_new.server import app, jinja_env, manager
 
 
 def _error(body):
@@ -84,6 +84,23 @@ def test_webui_routes_are_registered():
     assert "/api/admin/skills" in paths
     assert "/api/admin/skills/{skill_name}" in paths
     assert "/api/admin/skills/{skill_name}/enabled" in paths
+
+
+def test_html_templates_escape_untrusted_values():
+    rendered = jinja_env.from_string("{{ value }}").render(
+        value='\"><img src=x onerror=alert(1)>'
+    )
+
+    assert "<img" not in rendered
+    assert "&lt;img" in rendered
+
+
+@pytest.mark.anyio
+async def test_chat_page_rejects_non_numeric_user_id(client):
+    response = await client.get("/chat/not-a-user-id")
+
+    assert response.status_code == 422
+    assert response.headers["content-type"].startswith("application/json")
 
 
 @pytest.mark.anyio

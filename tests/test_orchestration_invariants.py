@@ -29,15 +29,25 @@ def test_workflow_uses_explicit_edges_without_owning_independent_goals():
     ]
     nodes = pipeline.graph_builder.compile(tasks)
     by_agent = {node.agent_name: node for node in nodes}
+    information_nodes = [
+        node for node in nodes if node.agent_name == "information_query"
+    ]
+    weather_node = next(node for node in information_nodes if node.goal_id == "weather")
+    local_transport_node = next(
+        node for node in information_nodes if node.goal_id == "plan"
+    )
 
     assert by_agent["rag_knowledge"].goal_id == "policy"
-    assert by_agent["information_query"].goal_id == "weather"
+    assert weather_node.capabilities == []
+    assert local_transport_node.capabilities == ["local_transport"]
     assert by_agent["rag_knowledge"].depends_on == []
-    assert by_agent["information_query"].depends_on == []
+    assert weather_node.depends_on == []
+    assert local_transport_node.depends_on == [by_agent["event_collection"].task_id]
     assert set(by_agent["itinerary_planning"].depends_on) >= {
         by_agent["event_collection"].task_id,
         by_agent["rag_knowledge"].task_id,
-        by_agent["information_query"].task_id,
+        weather_node.task_id,
+        local_transport_node.task_id,
         by_agent["train_query"].task_id,
     }
     assert by_agent["train_query"].depends_on == [by_agent["event_collection"].task_id]

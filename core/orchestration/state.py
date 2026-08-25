@@ -93,6 +93,18 @@ class WorkflowRunState(BaseModel):
     def resumable(self) -> bool:
         return self.status in {"WAITING_USER", "INTERRUPTING", "INTERRUPTED"}
 
+    @property
+    def has_consistent_waiting_state(self) -> bool:
+        """A waiting Run is valid only when Goal and WaitState agree."""
+        if self.status != "WAITING_USER":
+            return True
+        waiting_goals = {
+            goal.goal_id for goal in self.goals.values()
+            if goal.status == "WAITING_USER"
+        }
+        wait_goals = {wait.goal_id for wait in self.waits}
+        return bool(waiting_goals) and waiting_goals <= wait_goals
+
 
 class WorkflowTurn(BaseModel):
     model_config = ConfigDict(extra="forbid")

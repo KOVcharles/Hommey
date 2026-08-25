@@ -51,6 +51,22 @@ def test_waiting_query_matrix(query, expected):
     assert TurnResolver.resolve(query, _state("WAITING_USER")).kind == expected
 
 
+def test_waiting_run_requires_matching_goal_and_wait_record():
+    state = _state("WAITING_USER")
+    assert state.has_consistent_waiting_state is True
+    assert TurnResolver.is_valid_active_run(state) is True
+
+    state.waits = []
+    assert state.has_consistent_waiting_state is False
+    assert TurnResolver.is_valid_active_run(state) is False
+
+
+def test_legacy_internal_only_run_is_not_a_current_user_task():
+    state = _state("INTERRUPTED", "event_collection")
+
+    assert TurnResolver.is_valid_active_run(state) is False
+
+
 @pytest.mark.parametrize(("intent", "query", "expected"), [
     ("itinerary_planning", "继续", "resume"),
     ("itinerary_planning", "改成后天去广州", "resume"),
@@ -177,9 +193,8 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
     reply = asyncio.run(intent_agent.reply(Msg(name="user", content=original, role="user")))
     import json
     intention = json.loads(reply.content)
-    assert {
-        "itinerary_planning", "information_query", "rag_knowledge",
-    } == {
+    # plan-trip 本身声明天气、制度和车次子步骤，不需要把它们升级成并列意图。
+    assert {"itinerary_planning"} == {
         item["type"] for item in intention["intents"] if item["should_call_skill"]
     }
 
@@ -206,6 +221,11 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
                 "query_success": True,
                 "results": {"summary": "2026-08-10：多云，25～33°C，最高降水概率30%"},
             }}
+        if agent == "train_query":
+            return {"status": "success", "data": {
+                "query_success": True,
+                "results": {"summary": "G1次可作为候选，出发前通过12306核验", "trains": []},
+            }}
         if agent == "itinerary_planning":
             return {"status": "success", "data": {"itinerary": {
                 "title": "南京一日出差详细计划",
@@ -223,6 +243,10 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
                         {"time": "晚间", "activity": "返回北京", "description": "保留延误备选"},
                     ],
                 }],
+                "notes": [
+                    "南京住宿和交通标准应按公司差旅制度执行。",
+                    "2026-08-10：多云，25～33°C，最高降水概率30%",
+                ],
             }}}
         if agent == "trip_compliance":
             return {"status": "success", "data": {
@@ -249,14 +273,12 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
     ))
     assert first.paused is True
     state = asyncio.run(store.get_active("session-a"))
-    assert state.goals["rag_knowledge"].status == "SUCCEEDED"
-    assert state.goals["information_query"].status == "SUCCEEDED"
-    assert state.goals["rag_knowledge"].answer_delivered is False
-    assert state.goals["information_query"].answer_delivered is False
+    assert set(state.goals) == {"itinerary_planning"}
+    assert state.goals["itinerary_planning"].status == "WAITING_USER"
+    assert calls == ["event_collection"]
 
     # An independent side question can be answered while intake is waiting.
-    # Its delivered Goal must not leak into the later resumed answer, while the
-    # original undelivered weather/policy Goals must remain queued for delivery.
+    # Its delivered Goal must not leak into the later resumed plan answer.
     side_intention = {
         "intents": [{
             "type": "memory_query", "confidence": .9,
@@ -282,13 +304,13 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
     kinds = [section.kind for section in final.answer_document.sections]
     text = final.answer_document.plain_text
 
-    assert {"policy", "weather", "trip"} <= set(kinds)
+    assert kinds and set(kinds) == {"trip"}
     assert "南京住宿和交通标准" in text
     assert "2026-08-10" in text and "多云" in text
     assert "南京一日出差详细计划" in text
     assert "上午" in text and "下午" in text and "晚间" in text
     assert "memory" not in kinds and "上次去了深圳" not in text
-    # Weather and policy completed during the first Turn and are not queried twice.
+    # Weather and policy execute once after intake resumes, then fuse into the trip card.
     assert calls.count("rag_knowledge") == 1
     assert calls.count("information_query") == 1
     assert composed_queries[-1].startswith(original)

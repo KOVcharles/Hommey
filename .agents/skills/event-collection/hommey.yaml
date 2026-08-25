@@ -1,12 +1,17 @@
-version: 1.0.0
+version: 1.0.1
 display_name: 出差事项收集
 category: business
 intent: event_collection
 agent_name: event_collection
 user_facing: true
+intent_exposed: false
 risk_level: low
 catalog_order: 20
 progress_key: trip_details_collecting
+pause:
+  enabled: true
+  pause_agent: event_collection
+  pause_field: planning_ready
 answer:
   section_kind: trip
   require_section: false

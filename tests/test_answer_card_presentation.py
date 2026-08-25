@@ -61,6 +61,102 @@ def test_itinerary_result_becomes_dense_trip_card():
     assert document.sections[0].status == "success"  # 成功 section 标记 success，非 error
 
 
+def test_itinerary_transport_keeps_selected_12306_legs_structured():
+    task = IntentTask(
+        task_id="itinerary_planning",
+        intent="itinerary_planning",
+        query="规划北京到广州的往返行程",
+        entities={"destination": "广州"},
+        display_order=0,
+    )
+    plan = TaskResult(
+        task_id="itinerary_planning-itinerary_planning",
+        goal_id="itinerary_planning",
+        intent="itinerary_planning",
+        agent_name="itinerary_planning",
+        status="success",
+        data={"itinerary": {
+            "title": "北京至广州参加工作会议（2天）",
+            "transport_recommendation": {
+                "preferred": (
+                    "去程：G301次（北京西08:00→广州南15:36，商务座余13张）；"
+                    "返程：G1052次（广州南12:20→北京西22:51，商务座余19张）"
+                ),
+                "reason": "往返车次与会议时间匹配。",
+            },
+        }},
+        display_order=0,
+    )
+    train = TaskResult(
+        task_id="itinerary_planning-train_query",
+        goal_id="itinerary_planning",
+        intent="itinerary_planning",
+        agent_name="train_query",
+        status="success",
+        data={"results": {"trains": [
+            {
+                "direction": "去程", "train_no": "G301", "from_station": "北京",
+                "depart_time": "07:34", "to_station": "广州南", "arrive_time": "15:36",
+                "duration": "08:02", "travel_date": "2026-08-23",
+                "seats": {"商务座": "13"},
+            },
+            {
+                "direction": "去程", "train_no": "G301", "from_station": "北京西",
+                "depart_time": "08:00", "to_station": "广州南", "arrive_time": "15:36",
+                "duration": "07:36", "travel_date": "2026-08-23",
+                "seats": {"商务座": "13", "一等座": "1"},
+            },
+            {
+                "direction": "返程", "train_no": "G1052", "from_station": "广州南",
+                "depart_time": "12:20", "to_station": "北京西", "arrive_time": "22:51",
+                "duration": "10:31", "travel_date": "2026-08-24",
+                "seats": {"商务座": "19"},
+            },
+        ]}},
+        display_order=1,
+    )
+
+    document = FallbackComposer().compose([task], [plan, train])
+    transport = next(item for item in document.sections[0].items if item.label == "首选交通")
+
+    assert transport.value.startswith("去程：G301次")  # 旧客户端的文字回退仍保留
+    assert [leg.service for leg in transport.transport_legs] == ["G301", "G1052"]
+    assert transport.transport_legs[0].origin == "北京西"  # 同车次号时匹配规划选中的站点/时间
+    assert transport.transport_legs[0].departure_time == "08:00"
+    assert transport.transport_legs[1].direction == "返程"
+    assert transport.transport_legs[1].availability == {"商务座": "19"}
+    assert document.model_dump(mode="json")["sections"][0]["items"][0]["transport_legs"]
+
+
+def test_incomplete_trip_collection_never_renders_as_completed_itinerary():
+    task = IntentTask(
+        task_id="event_collection",
+        intent="event_collection",
+        query="收集广州出差信息",
+        entities={"destination": "广州"},
+        display_order=0,
+    )
+    result = TaskResult(
+        task_id="event_collection-event_collection",
+        goal_id="event_collection",
+        intent="event_collection",
+        agent_name="event_collection",
+        status="success",
+        data={
+            "destination": "广州",
+            "missing_fields": ["origin", "duration_days", "trip_purpose"],
+            "planning_ready": False,
+        },
+        display_order=0,
+    )
+
+    document = _compose(task, result)
+
+    assert document.sections[0].status == "partial"
+    assert document.sections[0].title == "行程信息待补充"
+    assert "已整理好行程" not in document.summary
+
+
 def test_long_trip_fallback_does_not_crash():
     # P1-2：>12 天行程不再因 AnswerDocument.sections 上限抛 ValidationError。
     days = 15
@@ -262,7 +358,13 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "has-collapsible-body" in answer_card
     assert "answer-details-content" in answer_card
     assert "answer-details-icon" in answer_card
-    assert "20260813-footer-motion-v4" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    assert "parseTransportLegs" in answer_card
+    assert "structuredTransportLegs" in answer_card
+    assert "item?.transport_legs" in answer_card
+    assert "wrappedService" in answer_card
+    assert "leadingService" in answer_card
+    assert "routeSource.slice(route[0].length)" in answer_card
+    assert "20260822-structured-transport-v1" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -279,8 +381,8 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
     assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert "20260813-footer-motion-v4" in template
-    assert template.count("20260813-footer-motion-v4") >= 2
+    assert template.count("20260819-transport-layout-v1") == 1
+    assert template.count("20260822-structured-transport-v1") == 1
     assert "route-hit-area" in template
     assert "route-progress-gradient" in template
     assert template.count("M20 59 C105 59, 150 13, 250 43 S395 27, 480 27") == 3

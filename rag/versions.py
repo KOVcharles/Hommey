@@ -53,6 +53,7 @@ def compute_index_fingerprint(
     tokenizer: str = "cjk-count",
     ocr_enabled: bool = False,
     ocr_confidence_threshold: float = 0.5,
+    ocr_model: str = "",
 ) -> str:
     """Compute the deterministic index fingerprint (first 16 hex chars)."""
     parsers = dict(parser_versions or PARSER_VERSIONS)
@@ -73,6 +74,7 @@ def compute_index_fingerprint(
         # confidence gate belong in the fingerprint (toggling forces a rebuild).
         "ocr_enabled": bool(ocr_enabled),
         "ocr_confidence_threshold": float(ocr_confidence_threshold),
+        "ocr_model": str(ocr_model or "") if ocr_enabled else "",
     }
     normalized = json.dumps(payload, sort_keys=True, ensure_ascii=False)
     return hashlib.sha256(normalized.encode("utf-8")).hexdigest()[:16]
@@ -90,6 +92,7 @@ def index_version_block(config: Any, parser_versions: Optional[Dict[str, str]] =
         parser_versions=parser_versions,
         ocr_enabled=getattr(config, "ocr_enabled", False),
         ocr_confidence_threshold=getattr(config, "ocr_confidence_threshold", 0.5),
+        ocr_model=getattr(config, "ocr_model", ""),
     )
     return {
         "schema_version": SCHEMA_VERSION,
@@ -107,6 +110,10 @@ def index_version_block(config: Any, parser_versions: Optional[Dict[str, str]] =
                 "chunker_version": CHUNKER_VERSION,
             },
             "parsers": dict(parser_versions or PARSER_VERSIONS),
+            "ocr": {
+                "enabled": bool(getattr(config, "ocr_enabled", False)),
+                "model": str(getattr(config, "ocr_model", "") or ""),
+            },
             "code_revision": code_revision(),
         },
     }

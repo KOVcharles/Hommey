@@ -43,8 +43,8 @@ class RAGPipeline:
         self.parser_registry = parser_registry or ParserRegistry()
         self.normalizer = normalizer or TextNormalizer()
         # Phase 3: flag-gated OCR fallback for text-less PDF pages.  A caller
-        # may inject a fake vision client (tests); the default builds one from
-        # VISION_CONFIG lazily and only acts when config.ocr_enabled is true.
+        # may inject a fake OCR client (tests); the default builds the shared
+        # document OCR client lazily and only acts when config.ocr_enabled is true.
         self.ocr_fallback = ocr_fallback or PageOcrFallback(
             enabled=self.config.ocr_enabled,
             confidence_threshold=self.config.ocr_confidence_threshold,

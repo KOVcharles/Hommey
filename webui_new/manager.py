@@ -40,7 +40,10 @@ from webui_new.core.errors import AppError, BusinessError, InternalError, Upstre
 from core.onboarding import InitialPreferenceOnboarding
 from core.intent_guard import is_pure_chitchat
 from core.intent_router import FastIntentRouter, message_for_non_skill_intent
-from core.intent_catalog import INTENT_DISPLAY_NAMES, updates_preferences_for_agent
+from core.intent_catalog import (
+    INTENT_DISPLAY_NAMES,
+    updates_preferences_for_agent,
+)
 from core.orchestration.memory_hooks import MemoryHookExecutor
 from core.orchestration.pipeline import MultiIntentPipeline
 from core.orchestration.state_store import OrchestrationStateStore, StateConflictError
@@ -634,6 +637,11 @@ class HommeyWebInstance:
             active_run = await self.state_store.recover_orphaned_active_run(
                 active_run.run_id, incoming_request_id=request_id or "",
             )
+        # 旧版独立 event_collection run 或不一致的等待快照不能吞掉新请求。
+        # 已确认字段仍保留在 active_trip；这里只结束失效的生命周期身份。
+        if active_run is not None and not TurnResolver.is_valid_active_run(active_run):
+            await self.state_store.finish_run(active_run.run_id, "ABANDONED")
+            active_run = None
         relation = TurnResolver.resolve(message, active_run) if active_run is not None else None
         resume_state = active_run if relation and relation.kind == "resume" else None
 

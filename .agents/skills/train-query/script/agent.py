@@ -9,8 +9,11 @@
 返回契约（reply 的 Msg.content 为 JSON）：
 - 成功：{"query_type": "高铁/火车车次查询", "query_success": true,
         "results": {"trains": [{train_no, from_station, to_station, depart_time,
-                                arrive_time, duration, seats, prices}],
+                                arrive_time, duration, seats, prices,
+                                direction, travel_date}],
+                    "outbound": {...}, "return_trip": {...},
                     "summary", "note"}}
+  公司行程包含返程日期/天数时自动查询往返；普通单程查询仍只调用一次。
 - 失败：{"query_type": "高铁/火车车次查询", "query_success": false,
         "results": {"message", "note"}}  → result_rules.error_when_field 把它
         标为 error 节点，编排 on_failure: continue 继续。
@@ -131,9 +134,57 @@ class TrainQueryAgent(AgentBase):
             logger.warning("Train query failed for %s→%s: %s", origin, destination, exc)
             return self._failure(message)
 
+        result = self._build_result(origin, destination, date, trains)
+        return_query = self._resolve_return_query(trip, origin, destination, date)
+        if return_query is not None:
+            return_origin, return_destination, return_date = return_query
+            logger.info(
+                "Return train query: %s → %s on %s",
+                return_origin, return_destination, return_date,
+            )
+            try:
+                return_trains = await self._backend_instance().query_trains(
+                    return_origin, return_destination, return_date,
+                )
+            except ExecutionLimitExceeded:
+                raise
+            except Exception as exc:  # 去程可用时，返程失败只做分段降级。
+                if isinstance(exc, TrainQueryError):
+                    message = str(exc)
+                else:
+                    message = f"返程车次查询暂时不可用：{exc}"
+                logger.warning(
+                    "Return train query failed for %s→%s: %s",
+                    return_origin, return_destination, exc,
+                )
+                result = self._build_round_trip_result(
+                    result,
+                    origin=origin,
+                    destination=destination,
+                    date=date,
+                    return_origin=return_origin,
+                    return_destination=return_destination,
+                    return_date=return_date,
+                    return_error=message,
+                )
+            else:
+                return_result = self._build_result(
+                    return_origin, return_destination, return_date, return_trains,
+                )
+                result = self._build_round_trip_result(
+                    result,
+                    origin=origin,
+                    destination=destination,
+                    date=date,
+                    return_origin=return_origin,
+                    return_destination=return_destination,
+                    return_date=return_date,
+                    return_result=return_result,
+                )
+
         return Msg(
             name=self.name,
-            content=json.dumps(self._build_result(origin, destination, date, trains), ensure_ascii=False),
+            content=json.dumps(result, ensure_ascii=False),
             role="assistant",
         )
 
@@ -177,6 +228,34 @@ class TrainQueryAgent(AgentBase):
         if not date:
             date = self._parse_date(user_query)
         return origin, destination, date
+
+    def _resolve_return_query(
+        self,
+        trip: Optional[Dict[str, Any]],
+        origin: str,
+        destination: str,
+        outbound_date: str,
+    ) -> Optional[Tuple[str, str, str]]:
+        """Derive the reverse leg only for a complete company-trip context."""
+        if not trip:
+            return None
+
+        return_date = self._normalize_date(trip.get("end_date") or "")
+        if not return_date:
+            try:
+                duration_days = int(trip.get("duration_days") or 0)
+                start = datetime.strptime(outbound_date, "%Y-%m-%d").date()
+            except (TypeError, ValueError):
+                return None
+            if duration_days <= 0:
+                return None
+            return_date = (start + timedelta(days=duration_days - 1)).isoformat()
+
+        return_origin = destination
+        return_destination = str(trip.get("return_location") or origin).strip()
+        if not return_destination or return_destination == return_origin:
+            return None
+        return return_origin, return_destination, return_date
 
     @staticmethod
     def _parse_route(query: str) -> Tuple[str, str]:
@@ -271,6 +350,81 @@ class TrainQueryAgent(AgentBase):
                 "note": _VERIFICATION_NOTE,
             },
         }
+
+    @staticmethod
+    def _tag_trains(
+        trains: List[Dict[str, Any]],
+        direction: str,
+        travel_date: str,
+    ) -> List[Dict[str, Any]]:
+        return [
+            {**row, "direction": direction, "travel_date": travel_date}
+            for row in trains
+        ]
+
+    def _build_round_trip_result(
+        self,
+        outbound_result: Dict[str, Any],
+        *,
+        origin: str,
+        destination: str,
+        date: str,
+        return_origin: str,
+        return_destination: str,
+        return_date: str,
+        return_result: Optional[Dict[str, Any]] = None,
+        return_error: str = "",
+    ) -> Dict[str, Any]:
+        """Add round-trip segments while preserving the flat ``results.trains`` API."""
+        outbound_data = outbound_result["results"]
+        outbound_trains = self._tag_trains(outbound_data.get("trains") or [], "去程", date)
+        outbound = {
+            "query_success": True,
+            "direction": "去程",
+            "origin": origin,
+            "destination": destination,
+            "date": date,
+            "trains": outbound_trains,
+            "summary": outbound_data.get("summary") or "",
+        }
+
+        if return_result is not None:
+            return_data = return_result["results"]
+            return_trains = self._tag_trains(
+                return_data.get("trains") or [], "返程", return_date,
+            )
+            return_trip = {
+                "query_success": True,
+                "direction": "返程",
+                "origin": return_origin,
+                "destination": return_destination,
+                "date": return_date,
+                "trains": return_trains,
+                "summary": return_data.get("summary") or "",
+            }
+            return_summary = return_trip["summary"]
+        else:
+            return_trains = []
+            return_trip = {
+                "query_success": False,
+                "direction": "返程",
+                "origin": return_origin,
+                "destination": return_destination,
+                "date": return_date,
+                "trains": [],
+                "message": return_error,
+            }
+            return_summary = return_error
+
+        outbound_result["results"] = {
+            **outbound_data,
+            "trains": outbound_trains + return_trains,
+            "outbound": outbound,
+            "return_trip": return_trip,
+            "round_trip_complete": bool(return_result is not None),
+            "summary": f"去程：{outbound['summary']}；返程：{return_summary}",
+        }
+        return outbound_result
 
     @staticmethod
     def _failure(message: str) -> Msg:

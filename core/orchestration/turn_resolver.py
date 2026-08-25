@@ -3,6 +3,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
+from core.intent_catalog import is_routable_intent
 from core.intent_router import FastIntentRouter
 
 
@@ -19,6 +20,15 @@ class TurnRelation:
 
 
 class TurnResolver:
+    @staticmethod
+    def is_valid_active_run(state) -> bool:
+        """Reject stale waits and legacy internal-only Goals at the entry boundary."""
+        return bool(
+            state
+            and state.has_consistent_waiting_state
+            and any(is_routable_intent(goal.intent) for goal in state.goals.values())
+        )
+
     @staticmethod
     def resolve(message: str, state) -> TurnRelation:
         normalized = "".join((message or "").strip().lower().split())
@@ -88,7 +98,6 @@ class TurnResolver:
             "rag_knowledge": ("标准", "政策", "制度", "报销", "补贴"),
             "itinerary_planning": ("行程", "规划", "安排", "路线", "住宿"),
             "preference": ("偏好", "喜欢", "常坐", "常住"),
-            "event_collection": ("出发", "目的地", "日期", "出差", "会议", "拜访"),
             "trip_compliance": ("合规", "符合", "超标", "违规"),
         }
         return any(
