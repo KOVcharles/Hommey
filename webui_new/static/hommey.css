@@ -1353,6 +1353,26 @@ html[data-theme="dark"] .msg-avatar.ai {
 }
 .auth-footnote { margin-top: 18px; color: var(--ink-3); font-size: 10px; line-height: 1.6; text-align: center; }
 
+.icp-footer {
+    position: fixed;
+    z-index: 20;
+    right: 0;
+    bottom: 8px;
+    left: 0;
+    text-align: center;
+    pointer-events: none;
+}
+
+.icp-footer a {
+    color: var(--ink-3);
+    font-size: 12px;
+    line-height: 1.5;
+    text-decoration: none;
+    pointer-events: auto;
+}
+
+.icp-footer a:hover { text-decoration: underline; }
+
 html[data-motion="off"] *,
 html[data-motion="off"] *::before,
 html[data-motion="off"] *::after {
