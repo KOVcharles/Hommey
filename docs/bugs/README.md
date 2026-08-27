@@ -21,3 +21,4 @@ YYYY-MM-DD-简短英文主题.md
 | BUG-2026-08-19-01 | 2026-08-19 | [空环境变量的行尾注释被解析为配置值](2026-08-19-empty-env-inline-comment.md) | 已修复 |
 | BUG-2026-08-19-02 | 2026-08-19 | [行程字段收集被误报为完整行程](2026-08-19-event-collection-false-completion.md) | 代码已修复，待部署验证 |
 | BUG-2026-08-19-03 | 2026-08-19 | [对话历史制造虚假行程收集任务](2026-08-19-dialogue-history-creates-phantom-trip-task.md) | 代码已修复，待部署验证 |
+| BUG-2026-08-25-01 | 2026-08-25 | [意图与编排职责边界](2026-08-25-intention-orchestration-boundaries.md) | Phase 1 已修复，结构性风险待后续阶段 |

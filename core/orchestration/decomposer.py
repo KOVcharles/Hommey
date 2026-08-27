@@ -1,23 +1,13 @@
-"""LLM-assisted task decomposition with a deterministic skill-template fallback."""
+"""Deterministic conversion from authorized intent groups to semantic Goals."""
 from __future__ import annotations
 
-from datetime import datetime
-import json
-import logging
 import re
 from typing import Any, Dict, List, Optional
 
-from core.execution_budget import ExecutionLimitExceeded, consume_agent_call
-from core.intent_catalog import (
-    build_intent_prompt_section,
-    execution_steps_for_intent,
-)
-from core.intent_result import parse_json_object
-from core.llm_response import extract_text_from_response
+from core.intent_catalog import execution_steps_for_intent
+from core.intent_result import coerce_intent_analysis
 
 from .graph_builder import TaskGraphBuilder
-
-logger = logging.getLogger(__name__)
 
 _DATE_PATTERN = re.compile(r"(今天|明天|后天|这两天|未来两天|未来几天|本周|下周|\d{1,2}月\d{1,2}日)")
 _DESTINATION_PATTERNS = (
@@ -30,78 +20,68 @@ _DESTINATION_PATTERNS = (
 
 
 class TaskDecomposer:
-    """Turn a multi-intent request into semantic tasks, never executable agents."""
+    """Compatibility name for the now deterministic IntentGroup adapter."""
 
     def __init__(self, model=None):
-        self.model = model
+        # ``model`` remains accepted while runtime construction rolls forward.
+        # It is intentionally unused: query isolation now happens in IntentionAgent.
+        self.model = None
 
     async def decompose(self, query: str, intention_data: Dict[str, Any]) -> List[Dict[str, Any]]:
-        intents = [
-            item.get("type")
-            for item in intention_data.get("intents", [])
-            if item.get("should_call_skill")
-        ]
-        entities = intention_data.get("key_entities") or {}
-        if self.model is None:
-            return self.fallback(query, intents, entities)
-
-        prompt = self._prompt(query, intents, entities)
-        try:
-            consume_agent_call("TaskDecomposer")
-            response = await self.model([
-                {
-                    "role": "system",
-                    "content": (
-                        "你负责把已识别的公司差旅意图拆成互不越界的语义任务。"
-                        "只输出JSON；不得选择Agent、工具或扩大用户请求。"
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ])
-            text = await extract_text_from_response(response)
-            payload = parse_json_object(text)
-            tasks = payload.get("tasks")
-            if not isinstance(tasks, list):
-                raise ValueError("decomposer response has no tasks list")
-            return tasks
-        except ExecutionLimitExceeded:
-            raise
-        except Exception as exc:
-            logger.warning("Task decomposition failed; using deterministic fallback: %s", exc)
-            return self.fallback(query, intents, entities)
+        return self.from_analysis(query, intention_data)
 
     @staticmethod
-    def _prompt(query: str, intents: List[str], entities: Dict[str, Any]) -> str:
-        today = datetime.now().astimezone().date().isoformat()
-        return f"""【当前日期】{today}
-【原始问题】{query}
-【已授权意图】{json.dumps(intents, ensure_ascii=False)}
-【已识别实体】{json.dumps(entities, ensure_ascii=False)}
+    def from_analysis(query: str, intention_data: Dict[str, Any]) -> List[Dict[str, Any]]:
+        analysis = coerce_intent_analysis(intention_data, query)
+        authorized = TaskDecomposer._authorized_group_ids(intention_data, analysis)
+        dependencies: Dict[str, List[str]] = {}
+        for relation in analysis.relations:
+            if relation.type not in {"required_context", "sequence"}:
+                continue
+            if relation.target not in authorized:
+                continue
+            dependencies.setdefault(relation.target, []).extend(
+                source for source in relation.sources if source in authorized
+            )
 
-为每个已授权意图生成且只生成一个任务。每个 query 只保留该意图负责的内容：
-- 把原始问题按意图切分到各自的 query；不得让某个意图的 query 引入其他意图负责的词域。
-- 保留用户原本的查询范围；用户只泛问“差旅标准”时不要自行枚举住宿、交通、补贴、报销或审批。
-- 不得增加已授权意图之外的任务。
-- 相对日期结合当前日期改写清楚；不确定的信息保持原表达，不要猜测。
+        tasks = []
+        for order, group in enumerate(analysis.groups):
+            if group.group_id not in authorized:
+                continue
+            tasks.append({
+                "task_id": group.group_id,
+                "intent": group.intent,
+                "query": group.query,
+                "entities": dict(group.entities),
+                "depends_on": list(dict.fromkeys(dependencies.get(group.group_id, []))),
+                "side_effect": False,
+                "failure_policy": "continue",
+                "display_order": order,
+            })
+        return tasks
 
-【意图类型】
-{build_intent_prompt_section()}
+    @staticmethod
+    def _authorized_group_ids(intention_data, analysis) -> set[str]:
+        decisions = intention_data.get("policy_decisions") or []
+        if decisions:
+            return {
+                str(item.get("group_id")) for item in decisions
+                if item.get("authorized") and item.get("group_id")
+            }
 
-只输出：
-{{
-  "tasks": [
-    {{
-      "task_id": "稳定的小写英文标识",
-      "intent": "已授权意图",
-      "query": "该任务独立、完整的中文查询",
-      "entities": {{}},
-      "depends_on": [],
-      "side_effect": false,
-      "failure_policy": "continue",
-      "display_order": 0
-    }}
-  ]
-}}"""
+        # Legacy callers authorize per intent item. Match explicit group_id
+        # first, then preserve the old intent-level behavior during rollout.
+        authorized_group_ids = {
+            str(item.get("group_id")) for item in intention_data.get("intents", [])
+            if item.get("should_call_skill") and item.get("group_id")
+        }
+        authorized_intents = {
+            str(item.get("type")) for item in intention_data.get("intents", [])
+            if item.get("should_call_skill") and item.get("type")
+        }
+        return authorized_group_ids | {
+            group.group_id for group in analysis.groups if group.intent in authorized_intents
+        }
 
     @classmethod
     def fallback(
@@ -110,7 +90,7 @@ class TaskDecomposer:
         intents: List[str],
         entities: Optional[Dict[str, Any]] = None,
     ) -> List[Dict[str, Any]]:
-        """Deterministic DAG used when decomposition LLM is unavailable or invalid.
+        """Legacy deterministic adapter for callers without canonical groups.
 
         任务 query 由 skill 执行模板渲染（占位符由 key_entities + 正则补全），
         单步意图直接用语义 query；工作流意图的每步 query 在 graph builder 展开时

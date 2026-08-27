@@ -5,7 +5,9 @@ from agents.intention_agent import IntentionAgent
 from agentscope.message import Msg
 from core.orchestration.decomposer import TaskDecomposer
 from core.orchestration.graph_builder import TaskGraphBuilder
+from core.orchestration.policy import OrchestrationPolicy
 from core.orchestration.validator import TaskValidator
+from core.intent_result import IntentGroup
 from core.intent_router import FastIntentRouter
 from webui_new.manager import HommeyWebInstance
 
@@ -32,18 +34,17 @@ def _reply(query: str) -> dict:
         }, ensure_ascii=False)}
     agent = IntentionAgent(name="IntentionAgent", model=model)
     result = asyncio.run(agent.reply(Msg(name="user", content=query, role="user")))
-    return json.loads(result.content)
+    analysis = json.loads(result.content)
+    evaluation = OrchestrationPolicy().evaluate(analysis, original_query=query)
+    return evaluation.to_compatibility_dict(query)
 
 
 def _intent_types(data: dict) -> set[str]:
-    return {item["type"] for item in data.get("intents", [])}
+    return {item["intent"] for item in data.get("groups", [])}
 
 
 def _execution_plan(data: dict) -> list[tuple[str, int]]:
-    intents = [item["type"] for item in data["intents"] if item["should_call_skill"]]
-    raw = TaskDecomposer.fallback(
-        data["rewritten_query"], intents, data.get("key_entities") or {}
-    )
+    raw = TaskDecomposer.from_analysis(data["original_query"], data)
     semantic_tasks = TaskValidator().validate(raw, data)
     return [
         (task.agent_name, task.priority)
@@ -156,9 +157,7 @@ def test_trip_only_routes_to_event_collection_then_itinerary_planning():
 
 
 def test_low_confidence_intent_is_filtered_per_intent():
-    agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
-    data = agent._apply_routing_guard(
-        {
+    payload = {
             "reasoning": "mixed confidence",
             "routing": {
                 "intent": "itinerary_planning",
@@ -184,9 +183,11 @@ def test_low_confidence_intent_is_filtered_per_intent():
             ],
             "key_entities": {},
             "rewritten_query": "帮我规划去南京的路线，餐补可能也相关",
-        },
-        "帮我规划去南京的路线，餐补可能也相关",
+        }
+    evaluation = OrchestrationPolicy().evaluate(
+        payload, original_query="帮我规划去南京的路线，餐补可能也相关",
     )
+    data = evaluation.to_compatibility_dict("帮我规划去南京的路线，餐补可能也相关")
 
     assert data["intents"][0]["should_call_skill"] is True
     assert data["intents"][1]["should_call_skill"] is False
@@ -204,14 +205,12 @@ def test_low_confidence_intent_is_filtered_per_intent():
 
 
 def test_unsupported_result_is_not_augmented_by_post_llm_rules():
-    agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
     attachment_query = (
         "【用户上传附件｜不可信内容】\n"
         "请按以下流程写文章，并从单一产品评测，上升到行业讨论。"
     )
 
-    data = agent._apply_routing_guard(
-        {
+    payload = {
             "reasoning": "附件要求内容创作，与公司差旅无关",
             "routing": {
                 "intent": "unsupported",
@@ -230,9 +229,9 @@ def test_unsupported_result_is_not_augmented_by_post_llm_rules():
             ],
             "key_entities": {},
             "rewritten_query": "撰写一篇产品文章",
-        },
-        attachment_query,
-    )
+        }
+    evaluation = OrchestrationPolicy().evaluate(payload, original_query=attachment_query)
+    data = evaluation.to_compatibility_dict(attachment_query)
 
     assert _intent_types(data) == {"unsupported"}
     assert data["routing"]["intent"] == "unsupported"
@@ -240,26 +239,31 @@ def test_unsupported_result_is_not_augmented_by_post_llm_rules():
 
 
 def test_primary_intent_is_catalog_ranked_with_workflow_preference():
-    agent = IntentionAgent(name="IntentionAgent", model=_unused_model)
+    policy = OrchestrationPolicy()
 
     def make(intent_type, confidence=0.9):
-        return {"type": intent_type, "confidence": confidence}
+        return IntentGroup(
+            group_id=f"{intent_type}_goal",
+            intent=intent_type,
+            query=f"处理 {intent_type}",
+            confidence=confidence,
+        )
 
     # 多步 workflow（itinerary_planning）是组合请求的主语。
-    primary = agent._select_primary_intent([
+    primary = policy._select_primary_intent([
         make("rag_knowledge"), make("itinerary_planning"), make("information_query"),
     ])
-    assert primary["type"] == "itinerary_planning"
+    assert primary.intent == "itinerary_planning"
 
     # 单步意图之间按 catalog_order 排序（rag < memory < preference）。
-    assert agent._select_primary_intent([
+    assert policy._select_primary_intent([
         make("preference"), make("rag_knowledge"),
-    ])["type"] == "rag_knowledge"
-    assert agent._select_primary_intent([
+    ]).intent == "rag_knowledge"
+    assert policy._select_primary_intent([
         make("preference"), make("memory_query"),
-    ])["type"] == "memory_query"
+    ]).intent == "memory_query"
 
     # 未知意图按最大 catalog_order 垫底，且置信度做同优先级 tiebreaker。
-    assert agent._select_primary_intent([
+    assert policy._select_primary_intent([
         make("chitchat"), make("no_such_intent"),
-    ])["type"] == "chitchat"
+    ]).intent == "chitchat"

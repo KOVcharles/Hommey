@@ -7,7 +7,7 @@ from core.orchestration.composer import AnswerComposer
 from core.orchestration.decomposer import TaskDecomposer
 from core.orchestration.executor import TaskExecutor
 from core.orchestration.graph_builder import TaskGraphBuilder
-from core.orchestration.models import IntentTask, TaskResult
+from core.orchestration.models import ExecutionTask, IntentTask, TaskResult
 from core.orchestration.pipeline import MultiIntentPipeline
 from core.orchestration.validator import TaskValidator, supports_task_pipeline
 
@@ -119,17 +119,19 @@ def test_task_validator_rejects_policy_scope_expansion():
         TaskValidator().validate(raw, INTENTION)
 
 
-def test_task_validator_merges_duplicate_intent_nodes():
+def test_task_validator_preserves_distinct_goals_with_the_same_intent():
     raw = TaskDecomposer.fallback(
         QUERY, ["rag_knowledge", "information_query"], INTENTION["key_entities"]
     )
     raw.append(dict(raw[0], task_id="policy-extra", query=raw[0]["query"] + "（补充）"))
 
     tasks = TaskValidator().validate(raw, INTENTION)
-    assert len(tasks) == 2  # 意图节点级去重：rag_knowledge 合并
-    assert [task.intent for task in tasks] == ["rag_knowledge", "information_query"]
-    rag = next(task for task in tasks if task.intent == "rag_knowledge")
-    assert "补充" in rag.query
+    assert len(tasks) == 3
+    assert [task.intent for task in tasks].count("rag_knowledge") == 2
+    assert [task.intent for task in tasks].count("information_query") == 1
+    assert {task.task_id for task in tasks if task.intent == "rag_knowledge"} == {
+        "rag_knowledge", "policy-extra",
+    }
 
 
 def test_task_validator_rejects_unauthorized_intent():
@@ -195,13 +197,62 @@ def test_executor_runs_independent_tasks_concurrently():
         if started == 2:
             both_started.set()
         await asyncio.wait_for(both_started.wait(), timeout=0.3)
-        return {"status": "success", "data": {"query": kwargs["context"]["rewritten_query"]}}
+        return {"status": "success", "data": {"query": kwargs["context"]["agent_query"]}}
 
     results, pauses = asyncio.run(TaskExecutor(runner).execute(execution_tasks, {}))
 
     assert pauses == []
     assert [result.status for result in results] == ["success", "success"]
     assert results[0].data["query"] != results[1].data["query"]
+
+
+def test_executor_projects_memory_only_to_agents_that_need_it():
+    tasks = [
+        ExecutionTask(
+            task_id="collect-event_collection", goal_id="collect",
+            intent="itinerary_planning", agent_name="event_collection",
+            query="收集北京到上海的出差安排", entities={"origin": "北京", "destination": "上海"},
+        ),
+        ExecutionTask(
+            task_id="weather-information_query", goal_id="weather",
+            intent="information_query", agent_name="information_query",
+            query="查询上海天气", entities={"destination": "上海"},
+        ),
+        ExecutionTask(
+            task_id="policy-rag_knowledge", goal_id="policy",
+            intent="rag_knowledge", agent_name="rag_knowledge",
+            query="查询上海差旅餐补政策", entities={"destination": "上海"},
+        ),
+    ]
+    seen = {}
+
+    async def runner(**kwargs):
+        seen[kwargs["agent_name"]] = kwargs["context"]
+        return {"status": "success", "data": {}}
+
+    base_context = {
+        "_memory_context": {
+            "active_trip": {"origin": "北京", "destination": "上海"},
+            "user_preferences": {"hotel_brands": ["全季"]},
+            "recent_dialogue": [
+                {"role": "assistant", "content": "无关建议"},
+                {"role": "user", "content": "我去上海出差"},
+            ],
+        },
+        "_agent_runtime": {"retrieval_mode": "enhanced", "request_id": "req-1"},
+    }
+    asyncio.run(TaskExecutor(runner).execute(tasks, base_context))
+
+    assert seen["event_collection"]["active_trip"]["destination"] == "上海"
+    assert seen["event_collection"]["user_preferences"]["hotel_brands"] == ["全季"]
+    assert seen["event_collection"]["recent_dialogue"] == [
+        {"role": "user", "content": "我去上海出差"}
+    ]
+    assert "active_trip" not in seen["information_query"]
+    assert "user_preferences" not in seen["information_query"]
+    assert seen["rag_knowledge"]["retrieval_mode"] == "enhanced"
+    assert seen["rag_knowledge"]["request_id"] == "req-1"
+    assert "retrieval_mode" not in seen["information_query"]
 
 
 def test_plan_trip_expands_to_six_step_dag():
@@ -391,14 +442,14 @@ def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
 
     async def runner(**kwargs):
         context = kwargs["context"]
-        seen[kwargs["agent_name"]] = {
-            key: context[key]
-            for key in ("original_query", "agent_query", "rewritten_query", "user_query")
-        }
-        assert set(seen[kwargs["agent_name"]].values()) == {
-            kwargs["context"]["active_task"]["query"]
-        }
-        assert context["request_original_query"] == QUERY
+        seen[kwargs["agent_name"]] = context["agent_query"]
+        assert context["agent_query"] == context["active_task"]["query"]
+        assert "original_query" not in context
+        assert "rewritten_query" not in context
+        assert "user_query" not in context
+        assert "request_original_query" not in context
+        assert "intents" not in context
+        assert "reasoning" not in context
         if kwargs["agent_name"] == "rag_knowledge":
             return {
                 "status": "success",
@@ -424,9 +475,9 @@ def test_pipeline_keeps_agent_queries_scoped_and_builds_answer_document():
     pipeline = MultiIntentPipeline(model=None, composer_model=None, agent_runner=runner)
     output = asyncio.run(pipeline.run(QUERY, INTENTION, {}, progress))
 
-    assert "天气" not in seen["rag_knowledge"]["agent_query"]
-    assert "天气" in seen["information_query"]["agent_query"]
-    assert "标准" not in seen["information_query"]["agent_query"]
+    assert "天气" not in seen["rag_knowledge"]
+    assert "天气" in seen["information_query"]
+    assert "标准" not in seen["information_query"]
     assert [section.kind for section in output.answer_document.sections] == ["policy", "weather"]
     assert len(output.answer_document.sections[1].days) == 2
     assert "400元/晚" in output.answer_document.plain_text

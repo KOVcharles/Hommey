@@ -1887,6 +1887,7 @@
                     message: text,
                     attachment_ids: sendingAttachmentIds,
                     client_request_id: currentRequestId,
+                    session_id: activeSessionId || null,
                     retrieval_mode: retrievalMode,
                 }),
             });

@@ -1,8 +1,8 @@
 """Deterministic validation boundary for LLM-produced semantic tasks.
 
-Authorization is intent-level and declarative: the validator only trusts
-intents previously authorized by the recognition layer, merges duplicate
-tasks at the intent node, checks each task's query stays inside the
+Authorization is group-level and declarative: the validator only trusts
+groups previously authorized by OrchestrationPolicy, preserves multiple Goals
+with the same intent, and checks each task's query stays inside the
 skill-declared scope, requires every side effect to be declared, and verifies
 the dependency graph is acyclic. Agent binding happens later in the graph
 builder, so the LLM can never name an executable.
@@ -23,6 +23,13 @@ from .models import IntentTask
 
 
 def callable_intents(intention_data: Dict[str, Any]) -> List[str]:
+    decisions = intention_data.get("policy_decisions") or []
+    if decisions:
+        return [
+            str(item.get("intent"))
+            for item in decisions
+            if item.get("intent") and item.get("authorized")
+        ]
     return [
         str(item.get("type"))
         for item in intention_data.get("intents", [])
@@ -37,7 +44,7 @@ def supports_task_pipeline(intention_data: Dict[str, Any]) -> bool:
 
 
 class TaskValidator:
-    """Accept one merged scoped task per previously authorized intent."""
+    """Accept one scoped task per previously authorized semantic group."""
 
     def validate(
         self,
@@ -59,33 +66,49 @@ class TaskValidator:
         if len(ids) != len(set(ids)):
             raise ValueError("task_id values must be unique")
 
-        # 意图节点级去重：同一意图的多个任务合并，避免图构建阶段重复执行。
-        merged = self._merge_by_intent(parsed)
-
-        original_query = str(intention_data.get("rewritten_query") or "")
+        original_query = str(
+            intention_data.get("original_query")
+            or intention_data.get("rewritten_query")
+            or ""
+        )
         recognized_entities = self._normalized_entities(
             intention_data.get("key_entities") or {}
         )
-        by_intent: Dict[str, IntentTask] = {}
-        for task in merged:
-            if task.intent not in allowed:
+        decision_by_group = {
+            str(item.get("group_id")): item
+            for item in intention_data.get("policy_decisions") or []
+            if item.get("authorized") and item.get("group_id")
+        }
+        for task in parsed:
+            if decision_by_group:
+                decision = decision_by_group.get(task.task_id)
+                if decision is None:
+                    raise ValueError(f"task group was not authorized: {task.task_id}")
+                if decision.get("intent") != task.intent:
+                    raise ValueError(
+                        f"task intent does not match policy decision: {task.task_id}"
+                    )
+            elif task.intent not in allowed:
                 raise ValueError(f"task intent was not authorized: {task.intent}")
             task.entities = {**recognized_entities, **task.entities}
             self._restore_query_anchors(task)
             self._check_scope(task, original_query)
             if task.side_effect and not side_effect_allowed(task.intent):
                 raise ValueError(f"side effect not allowed for intent: {task.intent}")
-            if task.intent in task.depends_on:
-                raise ValueError(f"task must not depend on itself: {task.intent}")
-            by_intent[task.intent] = task
+            if task.task_id in task.depends_on or task.intent in task.depends_on:
+                raise ValueError(f"task must not depend on itself: {task.task_id}")
+        self._check_dependencies(parsed)
 
-        self._check_dependencies(merged, by_intent)
+        if decision_by_group:
+            missing = set(decision_by_group) - {task.task_id for task in parsed}
+            if missing:
+                raise ValueError(f"intent adapter omitted authorized groups: {sorted(missing)}")
+        else:
+            missing = set(allowed) - {task.intent for task in parsed}
+            if missing:
+                raise ValueError(f"intent adapter omitted authorized intents: {sorted(missing)}")
 
-        missing = set(allowed) - set(by_intent)
-        if missing:
-            raise ValueError(f"decomposer omitted authorized intents: {sorted(missing)}")
-
-        return sorted(merged, key=lambda task: task.display_order)
+        return sorted(parsed, key=lambda task: task.display_order)
 
     @staticmethod
     def _normalized_entities(entities: Dict[str, Any]) -> Dict[str, Any]:
@@ -123,41 +146,6 @@ class TaskValidator:
             task.query = f"{' '.join(anchors)} {task.query}"
 
     @staticmethod
-    def _merge_by_intent(parsed: List[IntentTask]) -> List[IntentTask]:
-        merged: Dict[str, IntentTask] = {}
-        for task in parsed:
-            if task.intent in merged:
-                merged[task.intent] = TaskValidator._merge_tasks(merged[task.intent], task)
-            else:
-                merged[task.intent] = task
-        return list(merged.values())
-
-    @staticmethod
-    def _merge_tasks(first: IntentTask, second: IntentTask) -> IntentTask:
-        query = first.query if len(first.query) >= len(second.query) else second.query
-        return IntentTask(
-            task_id=first.task_id,
-            group_id=first.group_id or second.group_id,
-            intent=first.intent,
-            query=query,
-            entities={**second.entities, **first.entities},
-            depends_on=list(dict.fromkeys([*first.depends_on, *second.depends_on])),
-            side_effect=first.side_effect or second.side_effect,
-            failure_policy=first.failure_policy,
-            display_order=min(first.display_order, second.display_order),
-            capability_selection={
-                "include": list(dict.fromkeys([
-                    *first.capability_selection.include,
-                    *second.capability_selection.include,
-                ])),
-                "exclude": list(dict.fromkeys([
-                    *first.capability_selection.exclude,
-                    *second.capability_selection.exclude,
-                ])),
-            },
-        )
-
-    @staticmethod
     def _check_scope(task: IntentTask, original_query: str) -> None:
         """查询不得引入该意图 skill 声明的禁区词或用户未提及的扩展词域。"""
         definition = _definition_for_intent(task.intent)
@@ -175,12 +163,18 @@ class TaskValidator:
             raise ValueError(f"{task.intent} task expanded the user's scope: {introduced}")
 
     @staticmethod
-    def _check_dependencies(
-        merged: List[IntentTask],
-        by_intent: Dict[str, IntentTask],
-    ) -> None:
-        known = set(by_intent)
-        for task in merged:
+    def _check_dependencies(tasks: List[IntentTask]) -> None:
+        known_ids = {task.task_id for task in tasks}
+        intent_counts: Dict[str, int] = {}
+        for task in tasks:
+            intent_counts[task.intent] = intent_counts.get(task.intent, 0) + 1
+        alias_to_id = {
+            task.intent: task.task_id
+            for task in tasks
+            if intent_counts[task.intent] == 1
+        }
+        known = known_ids | set(alias_to_id)
+        for task in tasks:
             missing = set(task.depends_on) - known
             if missing:
                 raise ValueError(
@@ -190,16 +184,18 @@ class TaskValidator:
         visiting: set = set()
         visited: set = set()
 
-        def visit(intent: str) -> None:
-            if intent in visiting:
-                raise ValueError(f"dependency cycle detected at intent: {intent}")
-            if intent in visited:
-                return
-            visiting.add(intent)
-            for target in by_intent[intent].depends_on:
-                visit(target)
-            visiting.remove(intent)
-            visited.add(intent)
+        by_id = {task.task_id: task for task in tasks}
 
-        for intent in known:
-            visit(intent)
+        def visit(task_id: str) -> None:
+            if task_id in visiting:
+                raise ValueError(f"dependency cycle detected at task: {task_id}")
+            if task_id in visited:
+                return
+            visiting.add(task_id)
+            for target in by_id[task_id].depends_on:
+                visit(alias_to_id.get(target, target))
+            visiting.remove(task_id)
+            visited.add(task_id)
+
+        for task_id in by_id:
+            visit(task_id)

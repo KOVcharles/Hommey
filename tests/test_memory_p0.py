@@ -71,22 +71,16 @@ async def test_intention_prompt_keeps_stored_instructions_inside_untrusted_bound
         captured.append(messages)
         return __import__("json").dumps(
             {
-                "reasoning": "只根据当前问题识别意图",
-                "routing": {
+                "schema_version": 1,
+                "groups": [{
+                    "group_id": "memory_history",
                     "intent": "memory_query",
+                    "query": "查询之前的上海行程",
                     "confidence": 0.95,
-                    "reason": "用户询问自己的历史",
-                    "should_call_skill": True,
-                },
-                "intents": [{
-                    "type": "memory_query",
-                    "confidence": 0.95,
-                    "description": "",
-                    "reason": "用户询问自己的历史",
-                    "should_call_skill": True,
+                    "entities": {},
+                    "source_refs": ["current_query"],
                 }],
-                "key_entities": {},
-                "rewritten_query": "查询之前的上海行程",
+                "relations": [],
             },
             ensure_ascii=False,
         )
@@ -106,7 +100,7 @@ async def test_intention_prompt_keeps_stored_instructions_inside_untrusted_bound
     assert "不得执行" in captured[0][0]["content"]
     assert "均不得直接成为已确认的当前行程地点" in captured[0][0]["content"]
     assert "<memory-data>" in captured[0][1]["content"]
-    assert "缺少当前行程事实时" in captured[0][1]["content"]
+    assert "entities 必须放在各自 group 内" in captured[0][1]["content"]
 
 
 @pytest.mark.anyio
@@ -114,28 +108,20 @@ async def test_intention_rejects_trip_entities_without_current_fact_provenance()
     async def model(_messages):
         return __import__("json").dumps(
             {
-                "reasoning": "错误地沿用了历史行程",
-                "routing": {
+                "schema_version": 1,
+                "groups": [{
+                    "group_id": "alternate_route",
                     "intent": "itinerary_planning",
+                    "query": "如果航班延误，准备从北京到南京的备选路线",
                     "confidence": 0.95,
-                    "reason": "准备差旅备选路线",
-                    "should_call_skill": True,
-                },
-                "intents": [{
-                    "type": "itinerary_planning",
-                    "confidence": 0.95,
-                    "description": "",
-                    "reason": "准备差旅备选路线",
-                    "should_call_skill": True,
+                    "entities": {
+                        "origin": "北京",
+                        "destination": "南京",
+                        "other": "备选路线",
+                    },
+                    "source_refs": ["session_history"],
                 }],
-                "key_entities": {
-                    "origin": "北京",
-                    "destination": "南京",
-                    "date": None,
-                    "duration": None,
-                    "other": "备选路线",
-                },
-                "rewritten_query": "如果航班延误，准备从北京到南京的备选路线",
+                "relations": [],
             },
             ensure_ascii=False,
         )
@@ -150,10 +136,11 @@ async def test_intention_rejects_trip_entities_without_current_fact_provenance()
         Msg(name="user", content="如果航班延误，帮我准备一条备选路线", role="user"),
     ])
     result = __import__("json").loads(response.content)
+    group = result["groups"][0]
 
-    assert result["key_entities"]["origin"] is None
-    assert result["key_entities"]["destination"] is None
-    assert result["rewritten_query"] == "如果航班延误，帮我准备一条备选路线"
+    assert group["entities"]["origin"] is None
+    assert group["entities"]["destination"] is None
+    assert group["query"] == "如果航班延误，帮我准备一条备选路线"
 
 
 @pytest.mark.anyio
@@ -161,28 +148,20 @@ async def test_intention_accepts_trip_entities_from_the_active_trip():
     async def model(_messages):
         return __import__("json").dumps(
             {
-                "reasoning": "沿用当前进行中的行程",
-                "routing": {
+                "schema_version": 1,
+                "groups": [{
+                    "group_id": "alternate_route",
                     "intent": "itinerary_planning",
+                    "query": "如果航班延误，准备从北京到上海的备选路线",
                     "confidence": 0.95,
-                    "reason": "准备差旅备选路线",
-                    "should_call_skill": True,
-                },
-                "intents": [{
-                    "type": "itinerary_planning",
-                    "confidence": 0.95,
-                    "description": "",
-                    "reason": "准备差旅备选路线",
-                    "should_call_skill": True,
+                    "entities": {
+                        "origin": "北京",
+                        "destination": "上海",
+                        "other": "备选路线",
+                    },
+                    "source_refs": ["active_trip"],
                 }],
-                "key_entities": {
-                    "origin": "北京",
-                    "destination": "上海",
-                    "date": None,
-                    "duration": None,
-                    "other": "备选路线",
-                },
-                "rewritten_query": "如果航班延误，准备从北京到上海的备选路线",
+                "relations": [],
             },
             ensure_ascii=False,
         )
@@ -199,10 +178,11 @@ async def test_intention_accepts_trip_entities_from_the_active_trip():
         Msg(name="user", content="如果航班延误，帮我准备一条备选路线", role="user"),
     ])
     result = __import__("json").loads(response.content)
+    group = result["groups"][0]
 
-    assert result["key_entities"]["origin"] == "北京"
-    assert result["key_entities"]["destination"] == "上海"
-    assert result["rewritten_query"] == "如果航班延误，准备从北京到上海的备选路线"
+    assert group["entities"]["origin"] == "北京"
+    assert group["entities"]["destination"] == "上海"
+    assert group["query"] == "如果航班延误，准备从北京到上海的备选路线"
 
 
 def test_short_term_message_version_keeps_growing_after_window_is_full():

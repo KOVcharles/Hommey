@@ -1,76 +1,119 @@
 .trip-intake-card {
+    --intake-canvas: color-mix(in srgb, var(--bg) 96%, var(--route));
+    --intake-accent-ink: color-mix(in srgb, var(--route) 68%, var(--ink));
+    --intake-border: color-mix(in srgb, var(--ink) 9%, transparent);
     width: 100%;
     overflow: hidden;
     border: 1px solid var(--line);
     border-radius: 22px;
-    background:
-        radial-gradient(circle at 92% 0%, color-mix(in srgb, var(--route) 10%, transparent), transparent 32%),
-        color-mix(in srgb, var(--panel) 97%, var(--bg));
-    box-shadow: 0 18px 55px rgba(25, 25, 22, .08);
+    background: var(--panel);
+    box-shadow: 0 12px 38px rgba(49, 39, 28, .05), 0 2px 6px rgba(49, 39, 28, .025);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+    line-height: 1.6;
     animation: answer-card-enter .42s var(--ease) both;
 }
-.trip-intake-header { padding: 22px 24px 20px; }
+.trip-intake-header { padding: 22px 26px 20px; }
 .trip-intake-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 18px; }
-.trip-intake-eyebrow { display: block; margin-bottom: 7px; color: var(--ink-3); font-size: 8px; font-weight: 700; letter-spacing: .12em; }
-.trip-intake-heading h2 { margin: 0; font-size: 19px; font-weight: 650; letter-spacing: -.03em; }
-.trip-intake-progress { flex: none; padding: 7px 10px; border-radius: 999px; color: var(--route); background: color-mix(in srgb, var(--route) 10%, transparent); font-size: 10px; }
-.trip-intake-route { margin-top: 18px; display: grid; grid-template-columns: auto minmax(32px, 1fr) auto; align-items: center; gap: 10px; }
-.trip-intake-route strong { font-size: 12px; font-weight: 650; }
+.trip-intake-eyebrow { display: flex; align-items: center; gap: 7px; margin-bottom: 8px; color: var(--ink-2); font-size: 10px; font-weight: 550; letter-spacing: .14em; }
+.trip-intake-eyebrow::before { content: ""; width: 5px; height: 5px; border-radius: 50%; background: var(--route); }
+.trip-intake-heading h2 { margin: 0; font-size: 21px; line-height: 1.4; font-weight: 600; letter-spacing: 0; }
+.trip-intake-progress { flex: none; padding: 5px 10px; border-radius: 8px; color: var(--intake-accent-ink); background: color-mix(in srgb, var(--route) 9%, var(--panel)); font-size: 12px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.trip-intake-route { margin-top: 14px; display: grid; grid-template-columns: auto minmax(32px, 1fr) auto; align-items: center; gap: 10px; }
+.trip-intake-route strong { font-size: 13px; font-weight: 550; }
 .trip-intake-route-line { height: 1px; position: relative; background: color-mix(in srgb, var(--route) 34%, var(--line)); }
 .trip-intake-route-line::after { content: ""; position: absolute; right: 0; top: -2px; width: 5px; height: 5px; border-radius: 50%; background: var(--route); }
-.trip-intake-summary { margin: 14px 0 0; color: var(--ink-2); font-size: 11px; line-height: 1.65; }
+.trip-intake-summary { margin: 12px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.7; }
 .trip-intake-collected { margin-top: 15px; display: grid; grid-template-columns: auto minmax(0, 1fr); align-items: start; gap: 10px; }
-.trip-intake-collected-label { padding-top: 7px; color: var(--ink-3); font-size: 8px; font-weight: 650; }
+.trip-intake-collected-label { padding-top: 6px; color: var(--ink-2); font-size: 11px; font-weight: 400; }
 .trip-intake-collected-list { min-width: 0; display: flex; flex-wrap: wrap; gap: 6px; }
-.trip-intake-collected-item { min-width: 0; padding: 6px 9px; border: 1px solid var(--line); border-radius: 10px; background: color-mix(in srgb, var(--panel) 78%, var(--soft)); display: flex; align-items: baseline; gap: 6px; }
-.trip-intake-collected-item span { color: var(--ink-3); font-size: 8px; }
-.trip-intake-collected-item strong { max-width: 180px; overflow: hidden; color: var(--ink); font-size: 9px; font-weight: 640; text-overflow: ellipsis; white-space: nowrap; }
-.trip-intake-required { padding: 18px 24px 20px; border-top: 1px solid var(--line); }
-.trip-intake-required > h3 { margin: 0 0 12px; font-size: 10px; font-weight: 650; color: var(--ink-2); }
-.trip-intake-field-list { display: grid; gap: 8px; }
-.trip-intake-field { padding: 12px 13px; display: grid; grid-template-columns: 24px minmax(0, 1fr); gap: 10px; border: 1px solid transparent; border-radius: 14px; background: var(--soft); }
-.trip-intake-field.is-invalid { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); background: color-mix(in srgb, var(--danger) 5%, var(--soft)); }
-.trip-intake-field-index { width: 22px; height: 22px; display: grid; place-items: center; border-radius: 50%; color: var(--route); background: color-mix(in srgb, var(--route) 10%, transparent); font-size: 9px; font-weight: 700; }
-.trip-intake-field-content { min-width: 0; display: flex; flex-direction: column; align-items: flex-start; gap: 3px; }
-.trip-intake-field-label { font-size: 12px; font-weight: 650; }
-.trip-intake-field-help { color: var(--ink-2); font-size: 10px; line-height: 1.55; }
+.trip-intake-collected-item { min-width: 0; padding: 5px 9px; border: 1px solid var(--intake-border); border-radius: 8px; background: var(--bg); display: flex; align-items: baseline; gap: 7px; }
+.trip-intake-collected-item span { color: var(--ink-2); font-size: 11px; }
+.trip-intake-collected-item strong { max-width: 180px; overflow: hidden; color: var(--ink); font-size: 12px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.trip-intake-required { padding: 22px 24px 26px; background: var(--intake-canvas); border-top: 1px solid var(--intake-border); }
+.trip-intake-required-heading { margin: 0 4px 16px; display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.trip-intake-required-heading h3 { margin: 0; color: var(--ink-2); font-size: 12px; font-weight: 550; }
+.trip-intake-step-count { color: var(--ink-2); font-size: 11px; font-variant-numeric: tabular-nums; }
+.trip-intake-field-list { display: flex; flex-direction: column; isolation: isolate; }
+/* Real overlapping cards: the exposed header stays clickable, not a decorative duplicate. */
+.trip-intake-field {
+    position: relative;
+    z-index: var(--step-layer);
+    min-width: 0;
+    margin-inline: calc(var(--step-index) * 6px);
+    border: 1px solid var(--intake-border);
+    border-radius: 16px;
+    background: var(--panel);
+    box-shadow: 0 4px 12px rgba(49, 39, 28, .035);
+    transition: margin .35s var(--ease), border-color .25s ease, box-shadow .35s ease;
+}
+.trip-intake-field + .trip-intake-field { margin-top: -12px; }
+.trip-intake-field.is-expanded { margin-inline: 0; border-color: color-mix(in srgb, var(--route) 22%, var(--intake-border)); box-shadow: 0 9px 24px rgba(49, 39, 28, .07); }
+.trip-intake-field.is-invalid { border-color: color-mix(in srgb, var(--danger) 40%, var(--line)); }
+.trip-intake-step-heading { margin: 0; font: inherit; }
+.trip-intake-step-trigger { width: 100%; min-height: 64px; padding: 14px 20px; border-radius: 16px; display: flex; align-items: center; gap: 12px; text-align: left; color: var(--ink); background: transparent; }
+.trip-intake-field + .trip-intake-field .trip-intake-step-trigger { padding-top: 22px; min-height: 68px; }
+.trip-intake-step-trigger:hover .trip-intake-field-label { color: var(--intake-accent-ink); }
+.trip-intake-step-trigger:focus-visible { outline-offset: -4px; }
+.trip-intake-field-index { flex: none; width: 28px; height: 28px; display: grid; place-items: center; border: 1px solid var(--intake-border); border-radius: 9px; color: var(--ink-2); background: var(--bg); font-size: 12px; font-weight: 550; font-variant-numeric: tabular-nums; }
+.trip-intake-field.is-expanded .trip-intake-field-index,
+.trip-intake-field.is-complete .trip-intake-field-index { color: var(--intake-accent-ink); border-color: transparent; background: color-mix(in srgb, var(--route) 10%, var(--panel)); }
+.trip-intake-step-title { min-width: 0; flex: 1; display: flex; align-items: baseline; gap: 14px; }
+.trip-intake-field-label { flex: none; font-size: 14px; font-weight: 600; line-height: 1.6; transition: color .2s ease; }
+.trip-intake-step-summary { min-width: 0; color: var(--ink-2); font-size: 12px; font-weight: 400; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.trip-intake-field.is-expanded .trip-intake-step-summary { display: none; }
+.trip-intake-step-badge { flex: none; color: var(--ink-2); font-size: 11px; font-weight: 400; }
+.trip-intake-field.is-complete .trip-intake-step-badge { color: var(--intake-accent-ink); }
+.trip-intake-step-trigger .trip-intake-disclosure-icon { flex: none; color: var(--ink-2); margin-left: 3px; }
+.trip-intake-field.is-expanded .trip-intake-disclosure-icon { transform: translateY(2px) rotate(225deg); }
+.trip-intake-step-panel { display: grid; grid-template-rows: 0fr; opacity: 0; transition: grid-template-rows .38s var(--ease), opacity .25s ease; }
+.trip-intake-step-inner { min-height: 0; overflow: hidden; }
+.trip-intake-field.is-expanded .trip-intake-step-panel { grid-template-rows: 1fr; opacity: 1; }
+.trip-intake-field-content { min-width: 0; padding: 0 20px 22px 60px; display: flex; flex-direction: column; align-items: stretch; gap: 4px; }
+.trip-intake-field-help { color: var(--ink-2); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
 .trip-intake-field-help.is-error { color: var(--danger); }
-.trip-intake-field-examples { color: var(--ink-3); font-size: 9px; }
-.trip-intake-suggestion { width: min(100%, 320px); margin-top: 7px; padding: 8px 9px; border: 1px solid color-mix(in srgb, var(--route) 22%, var(--line)); border-radius: 10px; background: color-mix(in srgb, var(--route) 5%, var(--panel)); display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.trip-intake-field-examples { color: var(--ink-2); font-size: 11px; }
+.trip-intake-suggestion { width: 100%; margin-top: 9px; padding: 10px 12px; border: 1px solid color-mix(in srgb, var(--route) 15%, var(--intake-border)); border-radius: 10px; background: color-mix(in srgb, var(--route) 4%, var(--panel)); display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; }
+.trip-intake-suggestion .trip-intake-field-help { flex: 1 1 160px; font-size: 12px; }
 .trip-intake-suggestion .trip-intake-action { flex: none; border-color: color-mix(in srgb, var(--route) 34%, var(--line)); }
-.trip-intake-options { margin-top: 7px; display: flex; flex-wrap: wrap; gap: 6px; }
-.trip-intake-action { min-height: 30px; padding: 0 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2); background: var(--panel); font-size: 9px; transition: border-color .2s var(--ease), transform .2s var(--ease), background .2s var(--ease); }
+.trip-intake-options { margin-top: 9px; display: flex; flex-wrap: wrap; gap: 8px; }
+.trip-intake-action { min-height: 36px; padding: 6px 13px; border: 1px solid var(--intake-border); border-radius: 9px; color: var(--ink-2); background: var(--panel); font-size: 12px; font-weight: 500; line-height: 1.5; transition: border-color .2s var(--ease), transform .2s var(--ease), background .2s var(--ease); }
 .trip-intake-action:hover { border-color: color-mix(in srgb, var(--route) 42%, var(--line)); transform: translateY(-1px); }
-.trip-intake-action.is-selected { color: var(--panel); border-color: var(--route); background: var(--route); box-shadow: 0 0 0 3px color-mix(in srgb, var(--route) 10%, transparent); }
+.trip-intake-action.is-selected { color: var(--intake-accent-ink); border-color: color-mix(in srgb, var(--route) 55%, var(--line)); background: color-mix(in srgb, var(--route) 8%, var(--panel)); box-shadow: 0 1px 3px color-mix(in srgb, var(--route) 8%, transparent); }
 .trip-intake-action:disabled { cursor: not-allowed; opacity: .42; transform: none; }
 .trip-intake-action.is-primary { color: var(--panel); border-color: var(--ink); background: var(--ink); }
-.trip-intake-inline-input { width: min(100%, 320px); min-height: 34px; margin-top: 8px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 10px; outline: 0; color: var(--ink); background: var(--panel); font: inherit; font-size: 10px; transition: border-color .2s var(--ease), box-shadow .2s var(--ease); }
+.trip-intake-inline-input { width: 100%; min-width: 0; min-height: 42px; margin-top: 9px; padding: 10px 12px; border: 1px solid var(--intake-border); border-radius: 10px; outline: 0; color: var(--ink); background: var(--panel); font: inherit; font-size: 13px; transition: border-color .2s var(--ease), box-shadow .2s var(--ease); }
 .trip-intake-inline-input:focus { border-color: color-mix(in srgb, var(--route) 55%, var(--line)); box-shadow: 0 0 0 3px color-mix(in srgb, var(--route) 8%, transparent); }
-.trip-intake-inline-input::placeholder { color: var(--ink-3); }
+.trip-intake-inline-input::placeholder { color: var(--ink-2); opacity: .8; }
+.trip-intake-step-navigation { margin-top: 9px; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; }
+.trip-intake-step-navigation > span { color: var(--ink-2); font-size: 11px; }
+.trip-intake-step-next { min-height: 36px; padding: 6px 10px; border-radius: 8px; color: var(--intake-accent-ink); background: color-mix(in srgb, var(--route) 7%, var(--panel)); font-size: 12px; font-weight: 550; }
+.trip-intake-step-next::after { content: "→"; margin-left: 8px; }
+.trip-intake-step-next:hover { background: color-mix(in srgb, var(--route) 12%, var(--panel)); }
+.trip-intake-step-next:disabled { opacity: .45; cursor: not-allowed; }
 .trip-intake-optional { margin: 0 24px; border-top: 1px solid var(--line); }
 .trip-intake-optional-list { padding-bottom: 12px; display: grid; gap: 6px; }
-.trip-intake-optional-row { padding: 9px 10px; border: 0; border-radius: 10px; text-align: left; color: var(--ink-2); background: var(--soft); display: grid; grid-template-columns: minmax(0, .7fr) minmax(180px, 1fr); align-items: center; gap: 12px; }
-.trip-intake-optional-row span { font-size: 10px; }
-.trip-intake-optional-row small { margin-top: 3px; color: var(--ink-3); font-size: 8px; display: block; }
+.trip-intake-optional-row { padding: 12px; border: 1px solid var(--intake-border); border-radius: 10px; text-align: left; color: var(--ink-2); background: var(--panel); display: grid; grid-template-columns: minmax(0, .7fr) minmax(180px, 1fr); align-items: center; gap: 12px; }
+.trip-intake-optional-row span { font-size: 13px; }
+.trip-intake-optional-row small { margin-top: 3px; color: var(--ink-2); font-size: 11px; display: block; }
 .trip-intake-optional-row .trip-intake-inline-input { width: 100%; margin-top: 0; }
 .trip-intake-conflicts { padding: 0 24px 18px; }
 .trip-intake-conflict { padding: 12px 13px; border: 1px solid color-mix(in srgb, var(--danger) 35%, var(--line)); border-radius: 13px; background: color-mix(in srgb, var(--danger) 5%, var(--soft)); }
-.trip-intake-conflict strong { color: var(--danger); font-size: 10px; }
-.trip-intake-conflict p { margin: 5px 0 0; color: var(--ink-2); font-size: 10px; line-height: 1.6; }
+.trip-intake-conflict strong { color: var(--danger); font-size: 13px; }
+.trip-intake-conflict p { margin: 5px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.6; }
 .trip-intake-footer { padding: 16px 24px 18px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 16px; }
-.trip-intake-footer span { color: var(--ink-3); font-size: 8px; }
-.trip-intake-footer p { margin: 3px 0 0; color: var(--ink-2); font-size: 9px; line-height: 1.5; }
+.trip-intake-footer span { color: var(--ink-2); font-size: 11px; }
+.trip-intake-footer p { margin: 3px 0 0; color: var(--ink-2); font-size: 12px; line-height: 1.5; }
 .trip-intake-submit { flex: none; min-width: 112px; }
 .trip-intake-card.is-submitting .trip-intake-field,
 .trip-intake-card.is-submitting .trip-intake-optional { opacity: .62; pointer-events: none; }
 .trip-intake-text-details { margin: 0 24px; border-top: 1px solid var(--line); }
 .trip-intake-disclosure-trigger {
     width: 100%;
-    min-height: 42px;
+    min-height: 48px;
     padding: 11px 0;
-    color: var(--ink-3);
+    color: var(--ink-2);
     background: transparent;
-    font-size: 9px;
+    font-size: 12px;
     text-align: left;
     display: flex;
     align-items: center;
@@ -107,7 +150,7 @@
     opacity: 1;
     transform: translateY(0);
 }
-.trip-intake-plain-text { margin: 0 0 13px; color: var(--ink-2); white-space: pre-wrap; font: inherit; font-size: 10px; line-height: 1.7; }
+.trip-intake-plain-text { margin: 0 0 13px; color: var(--ink-2); white-space: pre-wrap; overflow-wrap: anywhere; font: inherit; font-size: 12px; line-height: 1.7; }
 .trip-intake-card.is-collapsed { border-radius: 14px; box-shadow: none; }
 .trip-intake-card.is-collapsed .trip-intake-header { padding: 12px 14px; }
 .trip-intake-card.is-collapsed .trip-intake-eyebrow,
@@ -120,12 +163,19 @@
 .trip-intake-card.is-collapsed .trip-intake-footer,
 .trip-intake-card.is-collapsed .trip-intake-text-details { display: none; }
 .trip-intake-card.is-collapsed .trip-intake-heading { align-items: center; }
-.trip-intake-card.is-collapsed .trip-intake-heading h2 { font-size: 11px; color: var(--ink-2); letter-spacing: 0; }
+.trip-intake-card.is-collapsed .trip-intake-heading h2 { font-size: 13px; color: var(--ink-2); letter-spacing: 0; }
 .trip-intake-card.is-collapsed .trip-intake-header { cursor: pointer; }
 
 @media (max-width: 760px) {
     .trip-intake-card { width: 100%; border-radius: 18px; }
     .trip-intake-header, .trip-intake-required { padding-right: 17px; padding-left: 17px; }
+    .trip-intake-heading h2 { font-size: 19px; }
+    .trip-intake-step-trigger { padding-right: 14px; padding-left: 14px; gap: 10px; }
+    .trip-intake-field-content { padding-right: 16px; padding-left: 16px; }
+    .trip-intake-step-title { display: flex; flex-direction: column; gap: 1px; }
+    .trip-intake-step-summary { max-width: 100%; font-size: 11px; }
+    .trip-intake-step-badge { font-size: 10px; }
+    .trip-intake-inline-input { font-size: 16px; }
     .trip-intake-optional { margin-right: 17px; margin-left: 17px; }
     .trip-intake-text-details { margin-right: 17px; margin-left: 17px; }
     .trip-intake-footer { padding-right: 17px; padding-left: 17px; align-items: flex-start; flex-direction: column; }

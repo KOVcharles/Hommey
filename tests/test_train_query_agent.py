@@ -304,6 +304,45 @@ def test_train_query_defaults_missing_date_to_today_in_china_timezone():
     }
 
 
+def test_train_query_uses_home_location_for_destination_only_query():
+    module = _load_module()
+    agent = module.TrainQueryAgent(model=None)
+    seen = {}
+
+    class FakeBackend:
+        async def query_trains(self, origin, destination, date):
+            seen.update(origin=origin, destination=destination, date=date)
+            return []
+
+    agent._backend = FakeBackend()
+    message = Msg(
+        name="Orchestrator",
+        role="user",
+        content=json.dumps(
+            {
+                "context": {
+                    "agent_query": "南京的高铁查一下",
+                    "active_task": {"query": "南京的高铁查一下", "entities": {}},
+                    "user_preferences": {"home_location": "上海"},
+                },
+                "previous_results": [],
+            },
+            ensure_ascii=False,
+        ),
+    )
+
+    result = asyncio.run(agent.reply(message))
+    data = json.loads(result.content)
+
+    assert data["query_success"] is True
+    assert seen["origin"] == "上海"
+    assert seen["destination"] == "南京"
+    assert data["results"]["query_context"]["origin_source"] == (
+        "user_preferences.home_location"
+    )
+    assert "长期记忆" in data["results"]["assumptions"][0]
+
+
 def test_train_query_asks_for_complete_route_when_missing():
     module = _load_module()
     agent = module.TrainQueryAgent(model=None)

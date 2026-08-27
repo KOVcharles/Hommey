@@ -8,6 +8,7 @@ from agentscope.message import Msg
 from core.orchestration.models import IntentTask
 from core.orchestration.fallback_composer import FallbackComposer
 from core.orchestration.pipeline import MultiIntentPipeline
+from core.orchestration.policy import OrchestrationPolicy
 from core.orchestration.state import WorkflowRunState
 from core.orchestration.state_store import OrchestrationStateStore
 from core.orchestration.turn_resolver import TurnResolver
@@ -193,6 +194,9 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
     reply = asyncio.run(intent_agent.reply(Msg(name="user", content=original, role="user")))
     import json
     intention = json.loads(reply.content)
+    intention = OrchestrationPolicy().evaluate(
+        intention, original_query=original,
+    ).to_compatibility_dict(original)
     # plan-trip 本身声明天气、制度和车次子步骤，不需要把它们升级成并列意图。
     assert {"itinerary_planning"} == {
         item["type"] for item in intention["intents"] if item["should_call_skill"]

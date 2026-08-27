@@ -1,0 +1,78 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>车次行程票卡 · Hommey 设计预览</title>
+    <link rel="stylesheet" href="../hommey.css">
+    <link rel="stylesheet" href="../answer-card.css?v=20260827-train-scroll-v2">
+    <style>
+        body { height: auto; min-height: 100%; background: color-mix(in srgb, var(--bg) 97%, var(--route)); }
+        .preview { width: min(800px, 100%); margin: 0 auto; padding: 28px 24px 48px; }
+        .preview-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 22px; color: var(--ink-2); font-size: 12px; }
+        .preview-tools > span { flex: 1; min-width: 180px; }
+        .preview-tools button, .preview-tools select { padding: 7px 10px; border: 1px solid var(--line); border-radius: 8px; color: var(--ink-2); background: var(--panel); font: inherit; }
+        .preview-note { color: var(--ink-2); font-size: 12px; line-height: 1.7; }
+        @media (max-width: 580px) { .preview { padding: 20px 10px 32px; } }
+    </style>
+</head>
+<body>
+    <main class="preview">
+        <nav class="preview-tools" aria-label="预览选项">
+            <span>Hommey / 车次行程票卡</span>
+            <select id="scenario" aria-label="预览场景">
+                <option value="many">多车次滚动</option>
+                <option value="one">单个车次</option>
+                <option value="legacy">旧版数据</option>
+                <option value="roundtrip">往返行程</option>
+                <option value="empty">无车次</option>
+            </select>
+            <button id="theme" type="button">切换深色</button>
+        </nav>
+        <div id="cardMount"></div>
+        <p class="preview-note">仅为模拟展示数据，不代表真实时刻或余票。正式出行请以 12306 实时信息为准。</p>
+    </main>
+    <script src="../answer-card.js?v=20260827-train-scroll-v2"></script>
+    <script>
+        const rows = [
+            ['G7551', '21:01', '21:35', '金山北', '00:34'],
+            ['G7301', '15:20', '15:56', '上海松江', '00:36'],
+            ['G9249', '19:31', '20:09', '上海松江', '00:38'],
+            ['G7303', '16:41', '17:20', '金山北', '00:39'],
+            ['G7521', '17:13', '17:52', '金山北', '00:39'],
+            ['G7001', '8:05', '09:01', '上海虹桥', '00:56'],
+            ['D901', '23:40', '00:35 +1天', '上海虹桥', '00:55'],
+        ];
+        function renderPreview() {
+            const scenario = document.getElementById('scenario').value;
+            let items = rows.map(([service, departure, arrival, origin, duration], index) => ({
+                label: service, value: `${departure} ${origin} → 杭州东 ${arrival} ${duration}`,
+                detail: `商务座 ${index + 6} · 一等座 无 · 二等座 有 · 无座 有`,
+                transport_legs: [{ service, origin, departure_time: departure, destination: '杭州东', arrival_time: arrival, duration, travel_date: '2026-08-27', availability: { 商务座: String(index + 6), 一等座: '无', 二等座: '有', 无座: '有' } }],
+            }));
+            if (scenario === 'one') items = items.slice(0, 1);
+            if (scenario === 'empty') items = [];
+            if (scenario === 'legacy') items = items.slice(0, 4).map(({ transport_legs, ...item }) => item);
+            const roundtrip = scenario === 'roundtrip';
+            if (roundtrip) {
+                const outward = items[1].transport_legs[0];
+                const returning = { ...outward, service: 'G7320', direction: '返程', origin: '杭州东', destination: '上海虹桥', departure_time: '08:30', arrival_time: '09:25', duration: '00:55', travel_date: '2026-08-29' };
+                items = [{ label: '首选交通', value: '去程与返程', detail: '按行程顺序展示，不按时钟重新排列往返段。', transport_legs: [{ ...outward, direction: '去程' }, returning] }];
+            }
+            const data = {
+                title: roundtrip ? '往返行程预览' : '上海至杭州 · 车次参考',
+                summary: '更清晰的时间、车站和余票信息。',
+                sections: [{ kind: roundtrip ? 'trip' : 'train', title: roundtrip ? '交通安排' : '车次信息', body: items.length ? '以下为界面测试样例；按出发时间从早到晚浏览，具体余票请以实时查询为准。' : '当前条件下未找到可展示的车次。', items }],
+            };
+            document.getElementById('cardMount').replaceChildren(window.HommeyAnswerCard.create(data));
+        }
+        document.getElementById('scenario').addEventListener('change', renderPreview);
+        document.getElementById('theme').addEventListener('click', (event) => {
+            const dark = document.documentElement.dataset.theme !== 'dark';
+            document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+            event.currentTarget.textContent = dark ? '切换浅色' : '切换深色';
+        });
+        renderPreview();
+    </script>
+</body>
+</html>

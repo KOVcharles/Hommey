@@ -1,6 +1,9 @@
 (function () {
     'use strict';
 
+    let nextCardId = 0;
+    let nextDisclosureId = 0;
+
     function element(tag, className, text) {
         const node = document.createElement(tag);
         if (className) node.className = className;
@@ -21,6 +24,50 @@
                 : '可直接提交';
         }
         if (state.submit) state.submit.disabled = state.submitting || completed < state.requiredKeys.size;
+        state.steps.forEach((step, key) => {
+            const value = state.values.get(key) || '';
+            const filled = !!String(value).trim();
+            step.row.classList.toggle('is-complete', filled);
+            step.row.classList.toggle('is-invalid', !filled && !!step.field.error);
+            step.summary.textContent = value || '点击补充';
+            step.summary.title = value;
+            step.badge.textContent = filled ? '已填写' : (step.field.error ? '待确认' : '待填写');
+            step.index.textContent = filled ? '✓' : step.number;
+            step.next.disabled = state.submitting || !filled;
+            step.help.textContent = (!filled && step.field.error) || step.field.help_text || '';
+            step.help.classList.toggle('is-error', !filled && !!step.field.error);
+            step.input.setAttribute('aria-invalid', !filled && step.field.error ? 'true' : 'false');
+        });
+        if (state.stepStatus) {
+            const filled = [...state.steps.keys()].filter((key) => state.values.has(key)).length;
+            state.stepStatus.textContent = `${filled} / ${state.steps.size} 项已填`;
+        }
+    }
+
+    function openStep(state, key, focus = false) {
+        if (state.submitting) return;
+        state.activeKey = key;
+        state.steps.forEach((step, stepKey) => {
+            const expanded = stepKey === key;
+            step.row.classList.toggle('is-expanded', expanded);
+            step.trigger.setAttribute('aria-expanded', String(expanded));
+            step.panel.setAttribute('aria-hidden', String(!expanded));
+            step.panel.inert = !expanded;
+        });
+        if (focus) state.steps.get(key)?.trigger.focus({ preventScroll: true });
+    }
+
+    function advanceStep(state, key) {
+        const keys = [...state.steps.keys()];
+        const current = keys.indexOf(key);
+        const next = [...keys.slice(current + 1), ...keys.slice(0, current)]
+            .find((candidate) => !state.values.has(candidate));
+        openStep(state, next || null, !!next);
+        if (!next) {
+            const unresolved = [...state.requiredKeys].find((candidate) => !state.values.has(candidate));
+            const target = state.controls.get(unresolved)?.[0] || state.submit;
+            target?.focus({ preventScroll: true });
+        }
     }
 
     function selectValue(state, key, value, activeControl) {
@@ -103,12 +150,18 @@
         icon.setAttribute('aria-hidden', 'true');
         trigger.appendChild(icon);
         const content = element('div', 'trip-intake-disclosure-content');
+        content.id = `trip-intake-disclosure-${++nextDisclosureId}`;
+        content.inert = true;
+        content.setAttribute('aria-hidden', 'true');
+        trigger.setAttribute('aria-controls', content.id);
         const inner = element('div', 'trip-intake-disclosure-inner');
         inner.appendChild(body);
         content.appendChild(inner);
         trigger.addEventListener('click', () => {
             const expanded = panel.classList.toggle('is-expanded');
             trigger.setAttribute('aria-expanded', expanded ? 'true' : 'false');
+            content.inert = !expanded;
+            content.setAttribute('aria-hidden', String(!expanded));
         });
         panel.appendChild(trigger);
         panel.appendChild(content);
@@ -125,14 +178,51 @@
 
     function renderPrompt(field, index, state) {
         const row = element('div', `trip-intake-field${field.error ? ' is-invalid' : ''}`);
-        row.appendChild(element('span', 'trip-intake-field-index', index + 1));
+        row.dataset.fieldKey = field.key;
+        row.style.setProperty('--step-index', Math.min(index, 3));
+        row.style.setProperty('--step-layer', state.stepCount - index);
+        const heading = element('h4', 'trip-intake-step-heading');
+        const trigger = element('button', 'trip-intake-step-trigger');
+        trigger.type = 'button';
+        trigger.id = `${state.id}-step-${index}`;
+        trigger.setAttribute('aria-label', field.label);
+        trigger.setAttribute('aria-expanded', 'false');
+        const number = element('span', 'trip-intake-field-index', index + 1);
+        number.setAttribute('aria-hidden', 'true');
+        trigger.appendChild(number);
+        const title = element('span', 'trip-intake-step-title');
+        title.appendChild(element('span', 'trip-intake-field-label', field.label));
+        const summary = element('span', 'trip-intake-step-summary', '点击补充');
+        summary.id = `${state.id}-summary-${index}`;
+        trigger.setAttribute('aria-describedby', summary.id);
+        title.appendChild(summary);
+        trigger.appendChild(title);
+        const badge = element('span', 'trip-intake-step-badge', '待填写');
+        trigger.appendChild(badge);
+        const chevron = element('span', 'trip-intake-disclosure-icon');
+        chevron.setAttribute('aria-hidden', 'true');
+        trigger.appendChild(chevron);
+        trigger.addEventListener('click', () => {
+            openStep(state, state.activeKey === field.key ? null : field.key);
+        });
+        heading.appendChild(trigger);
+        row.appendChild(heading);
+        const panel = element('div', 'trip-intake-step-panel');
+        panel.id = `${state.id}-panel-${index}`;
+        panel.setAttribute('role', 'region');
+        panel.setAttribute('aria-labelledby', trigger.id);
+        panel.setAttribute('aria-hidden', 'true');
+        panel.inert = true;
+        trigger.setAttribute('aria-controls', panel.id);
+        const inner = element('div', 'trip-intake-step-inner');
         const content = element('div', 'trip-intake-field-content');
-        content.appendChild(element('strong', 'trip-intake-field-label', field.label));
-        content.appendChild(element(
+        const help = element(
             'span',
             field.error ? 'trip-intake-field-help is-error' : 'trip-intake-field-help',
             field.error || field.help_text || '',
-        ));
+        );
+        help.id = `${state.id}-help-${index}`;
+        content.appendChild(help);
         if (Array.isArray(field.examples) && field.examples.length) {
             content.appendChild(element('span', 'trip-intake-field-examples', `例如：${field.examples.join('、')}`));
         }
@@ -156,8 +246,21 @@
             field.options.forEach((option) => options.appendChild(optionAction(option, field.key, option, state)));
             content.appendChild(options);
         }
-        content.appendChild(inlineInput(field, state, false));
-        row.appendChild(content);
+        const input = inlineInput(field, state, false);
+        input.setAttribute('aria-describedby', help.id);
+        content.appendChild(input);
+        const navigation = element('div', 'trip-intake-step-navigation');
+        navigation.appendChild(element('span', '', '填写后可随时修改'));
+        const next = element('button', 'trip-intake-step-next', index === state.stepCount - 1 ? '完成填写' : '下一步');
+        next.type = 'button';
+        next.disabled = true;
+        next.addEventListener('click', () => advanceStep(state, field.key));
+        navigation.appendChild(next);
+        content.appendChild(navigation);
+        inner.appendChild(content);
+        panel.appendChild(inner);
+        row.appendChild(panel);
+        state.steps.set(field.key, { row, trigger, panel, summary, badge, index: number, number: index + 1, next, help, input, field });
         return row;
     }
 
@@ -224,6 +327,7 @@
         const copy = element('div');
         copy.appendChild(element('span', '', '在卡片内完成补充'));
         state.status = element('p', 'trip-intake-submit-status', '');
+        state.status.setAttribute('role', 'status');
         copy.appendChild(state.status);
         footer.appendChild(copy);
         const submit = element('button', 'trip-intake-action is-primary trip-intake-submit', '提交补充信息');
@@ -263,6 +367,11 @@
             (conflict) => !missingKeys.has(conflict.key),
         );
         const state = {
+            id: `trip-intake-${++nextCardId}`,
+            steps: new Map(),
+            stepCount: (data.missing_required || []).length,
+            activeKey: null,
+            stepStatus: null,
             values: new Map(),
             controls: new Map(),
             requiredKeys: new Set([
@@ -297,11 +406,17 @@
 
         if (Array.isArray(data.missing_required) && data.missing_required.length) {
             const required = element('section', 'trip-intake-required');
-            required.appendChild(element('h3', '', '需要补充'));
+            const heading = element('div', 'trip-intake-required-heading');
+            heading.appendChild(element('h3', '', '补全这一程'));
+            state.stepStatus = element('span', 'trip-intake-step-count');
+            heading.appendChild(state.stepStatus);
+            required.appendChild(heading);
             const list = element('div', 'trip-intake-field-list');
             data.missing_required.forEach((field, index) => list.appendChild(renderPrompt(field, index, state)));
             required.appendChild(list);
             card.appendChild(required);
+            const first = data.missing_required.find((field) => field.error) || data.missing_required[0];
+            openStep(state, first.key);
         }
 
         if (Array.isArray(data.optional) && data.optional.length) {

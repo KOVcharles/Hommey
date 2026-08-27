@@ -93,19 +93,32 @@ class TurnEvaluationCollector:
         self.previous_messages = snapshots
 
     def record_routing(self, intention_data: dict[str, Any]) -> None:
-        raw_intents = intention_data.get("intents") or []
+        groups = intention_data.get("groups") or []
         intents = [
-            str(item.get("type")) for item in raw_intents
-            if isinstance(item, dict) and item.get("type")
+            str(item.get("intent")) for item in groups
+            if isinstance(item, dict) and item.get("intent")
         ]
+        raw_intents = intention_data.get("intents") or []
+        if not intents:
+            intents = [
+                str(item.get("type")) for item in raw_intents
+                if isinstance(item, dict) and item.get("type")
+            ]
         if not intents:
             primary = (intention_data.get("routing") or {}).get("intent")
             intents = [str(primary)] if primary else []
         self.intents = list(dict.fromkeys(intents))
+        decisions = intention_data.get("policy_decisions") or []
         callable_intents = [
-            str(item.get("type")) for item in raw_intents
-            if isinstance(item, dict) and item.get("type") and item.get("should_call_skill") is not False
+            str(item.get("intent")) for item in decisions
+            if isinstance(item, dict) and item.get("intent") and item.get("authorized")
         ]
+        if not decisions:
+            callable_intents = [
+                str(item.get("type")) for item in raw_intents
+                if isinstance(item, dict) and item.get("type")
+                and item.get("should_call_skill") is not False
+            ]
         if not callable_intents and (intention_data.get("routing") or {}).get("should_call_skill"):
             callable_intents = intents
         self.selected_skills = list(dict.fromkeys(

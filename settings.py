@@ -17,6 +17,14 @@ def _bool_env(name: str, default: bool) -> bool:
     return value.strip().lower() in {"1", "true", "yes", "on"}
 
 
+def _optional_bool_env(name: str, default: bool) -> bool:
+    """Read a boolean while allowing a blank env var to inherit its default."""
+    value = _optional_env(name)
+    if value is None:
+        return default
+    return value.lower() in {"1", "true", "yes", "on"}
+
+
 def _int_env(name: str, default: int) -> int:
     value = os.getenv(name)
     if value is None:
@@ -50,6 +58,9 @@ LLM_CONFIG = {
     ),
     "temperature": _float_env("HOMMEY_TEMPERATURE", 0.7),
     "max_tokens": _int_env("HOMMEY_MAX_TOKENS", 8192),
+    # DeepSeek V4 on Alibaba Model Studio enables reasoning by default. Keep it
+    # off for the interactive product unless an operator explicitly opts in.
+    "enable_thinking": _bool_env("HOMMEY_ENABLE_THINKING", False),
 }
 
 
@@ -60,6 +71,9 @@ COMPOSER_CONFIG = {
     "base_url": os.getenv("HOMMEY_COMPOSER_BASE_URL") or LLM_CONFIG["base_url"],
     "temperature": _float_env("HOMMEY_COMPOSER_TEMPERATURE", 0.2),
     "max_tokens": _int_env("HOMMEY_COMPOSER_MAX_TOKENS", 4096),
+    "enable_thinking": _optional_bool_env(
+        "HOMMEY_COMPOSER_ENABLE_THINKING", LLM_CONFIG["enable_thinking"],
+    ),
 }
 
 

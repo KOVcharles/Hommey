@@ -29,6 +29,28 @@ class AgentRuntime:
 _shared_attachment_service = None
 
 
+def _uses_model_studio_deepseek_v4(config: dict) -> bool:
+    """Whether this OpenAI-compatible endpoint supports enable_thinking."""
+    model_name = str(config.get("model_name") or "").lower()
+    base_url = str(config.get("base_url") or "").lower()
+    return model_name.startswith("deepseek-v4-") and "aliyuncs.com" in base_url
+
+
+def _generate_kwargs(config: dict) -> dict:
+    """Build provider-safe OpenAI generation options for one configured model."""
+    kwargs = {
+        "temperature": config.get("temperature", 0.7),
+        "max_tokens": config.get("max_tokens", 8192),
+    }
+    # Model Studio exposes this as a non-standard OpenAI parameter, so the
+    # OpenAI Python client must carry it inside extra_body.
+    if _uses_model_studio_deepseek_v4(config):
+        kwargs["extra_body"] = {
+            "enable_thinking": bool(config.get("enable_thinking", False)),
+        }
+    return kwargs
+
+
 def get_shared_attachment_service():
     global _shared_attachment_service
     if _shared_attachment_service is None:
@@ -58,17 +80,17 @@ def create_agent_runtime(
                 "base_url": config["base_url"],
                 "timeout": float(timeout_sec),
             },
-            generate_kwargs={
-                "temperature": config.get("temperature", 0.7),
-                "max_tokens": config.get("max_tokens", 8192),
-            },
+            generate_kwargs=_generate_kwargs(config),
         )
         return BudgetedModel(raw)
 
     model = create_model(LLM_CONFIG)
     composer_uses_main_model = all(
         COMPOSER_CONFIG.get(key) == LLM_CONFIG.get(key)
-        for key in ("model_name", "api_key", "base_url", "temperature", "max_tokens")
+        for key in (
+            "model_name", "api_key", "base_url", "temperature", "max_tokens",
+            "enable_thinking",
+        )
     )
     composer_model = (
         model

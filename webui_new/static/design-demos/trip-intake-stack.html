@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>行程步骤卡 · Hommey 设计预览</title>
+    <link rel="stylesheet" href="../hommey.css">
+    <link rel="stylesheet" href="../trip-intake-card.css?v=20260827-step-stack-v1">
+    <style>
+        body { min-height: 100%; height: auto; background: color-mix(in srgb, var(--bg) 97%, var(--route)); }
+        .preview { width: min(760px, 100%); margin: 0 auto; padding: 32px 24px 64px; }
+        .preview-tools { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; margin-bottom: 24px; color: var(--ink-2); font-size: 12px; }
+        .preview-tools > span { flex: 1; min-width: 180px; }
+        .preview-tools button, .preview-tools select { border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--ink-2); background: var(--panel); font: inherit; }
+        .preview-result { margin: 16px 4px 0; color: var(--ink-2); font-size: 12px; overflow-wrap: anywhere; }
+        @media (max-width: 600px) { .preview { padding: 20px 12px 40px; } }
+    </style>
+</head>
+<body>
+    <main class="preview">
+        <nav class="preview-tools" aria-label="预览选项">
+            <span>Hommey / 折叠式行程步骤卡</span>
+            <select id="scenario" aria-label="预览场景">
+                <option value="three">三个补充项</option>
+                <option value="one">单个补充项</option>
+                <option value="error">字段错误</option>
+                <option value="conflict">独立冲突项</option>
+                <option value="ready">信息已完整</option>
+            </select>
+            <button id="theme" type="button">切换深色</button>
+            <button id="reset" type="button">重置预览</button>
+        </nav>
+        <div id="cardMount"></div>
+        <p id="result" class="preview-result" role="status">本页仅预览交互，不发送业务请求。</p>
+    </main>
+    <script src="../trip-intake-card.js?v=20260827-step-stack-v1"></script>
+    <script>
+        const sample = {
+            type: 'trip_intake', status: 'collecting_required', title: '行程框架已保存',
+            summary: '再补充几项信息，就能为你整理完整方案。',
+            progress: { completed: 2, total: 5 },
+            route: { destination: '杭州' },
+            collected: [{ label: '目的地', value: '杭州' }, { label: '出发日期', value: '2026-08-27' }],
+            missing_required: [
+                { key: 'origin', label: '出发地', help_text: '通常从哪座城市出发', examples: ['北京', '上海'], suggested_value: '上海', suggestion_reason: '根据你保存的常用出发地' },
+                { key: 'trip_length', label: '行程时长', help_text: '填写出差天数，或直接告诉我返程日期', examples: ['2天', '8月7日返程'], options: ['1天', '2天', '3天'] },
+                { key: 'trip_purpose', label: '出差目的', help_text: '这次出差主要要完成什么工作', examples: ['拜访客户', '参加会议'], options: ['客户拜访', '参加会议', '内部协作', '培训'] },
+            ],
+            optional: [{ key: 'work_location', label: '工作地点', help_text: '公司、园区或详细地址' }],
+            plain_text: '目的地：杭州\n出发日期：2026-08-27\n待补充：出发地、行程时长、出差目的。',
+        };
+        function renderPreview() {
+            const data = structuredClone(sample);
+            const scenario = document.getElementById('scenario').value;
+            if (scenario === 'one') data.missing_required = data.missing_required.slice(0, 1);
+            if (scenario === 'error') data.missing_required[1].error = '返程日期不能早于出发日期，请重新填写。';
+            if (scenario === 'conflict') {
+                data.missing_required = [];
+                data.conflicts = [{ key: 'origin', message: '请确认本次从上海还是北京出发。', values: ['上海', '北京'] }];
+            }
+            if (scenario === 'ready') {
+                data.missing_required = [];
+                data.progress = { completed: 5, total: 5 };
+                data.title = '行程信息已完整';
+            }
+            document.getElementById('cardMount').replaceChildren(window.HommeyTripIntakeCard.create(data));
+            document.getElementById('result').textContent = '本页仅预览交互，不发送业务请求。';
+        }
+        document.getElementById('scenario').addEventListener('change', renderPreview);
+        document.getElementById('reset').addEventListener('click', renderPreview);
+        document.getElementById('theme').addEventListener('click', (event) => {
+            const dark = document.documentElement.dataset.theme !== 'dark';
+            document.documentElement.dataset.theme = dark ? 'dark' : 'light';
+            event.currentTarget.textContent = dark ? '切换浅色' : '切换深色';
+        });
+        document.addEventListener('hommey:submit-message', (event) => {
+            document.getElementById('result').textContent = `预览提交：${event.detail.text}`;
+            queueMicrotask(() => event.detail.complete(true));
+        });
+        renderPreview();
+    </script>
+</body>
+</html>

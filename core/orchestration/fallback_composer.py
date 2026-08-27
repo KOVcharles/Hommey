@@ -451,6 +451,9 @@ class FallbackComposer:
         body_parts = []
         if not items:
             body_parts.append(summary)
+        assumptions = payload.get("assumptions") or []
+        if isinstance(assumptions, list):
+            body_parts.extend(_clean(value, 300) for value in assumptions if value)
         if note:
             body_parts.append(note)
         return AnswerSection(
