@@ -18,8 +18,8 @@ class ChatRequest(BaseModel):
     message: str = ""
     attachment_ids: list[str] = Field(default_factory=list)
     client_request_id: str | None = None
-    # Per-session selection is owned by the client and sent on every turn.
-    # Old clients remain on the stable retrieval path.
+    # 新客户端在每次请求中明确会话归属；未传时兼容旧客户端的当前会话行为。
+    session_id: str | None = None
     retrieval_mode: Literal["standard", "enhanced"] = "standard"
 
 

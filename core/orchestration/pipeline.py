@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class MultiIntentPipeline:
-    """One entry point: decompose → validate → compile → execute → compose.
+    """One entry point: adapt intents → validate → compile → execute → compose.
 
     Durable state is an optional seam so pure pipeline tests need no database.
     In production the state store is the only owner of Run/Turn/Goal/Node state.
@@ -79,6 +79,10 @@ class MultiIntentPipeline:
         try:
             tasks = self.validator.validate(raw_tasks, intention_data)
         except ValueError as exc:
+            if intention_data.get("groups") is not None:
+                # Canonical groups already contain isolated queries. Falling
+                # back to the request-wide query would silently destroy scope.
+                raise
             logger.warning("Rejected decomposed tasks; using deterministic fallback: %s", exc)
             raw_tasks = self.decomposer.fallback(
                 decomposition_query,

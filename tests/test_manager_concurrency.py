@@ -73,6 +73,10 @@ class FakeInstance:
     def __init__(self, process_fn):
         self.initialized = True
         self._process_fn = process_fn
+        self.activated_sessions = []
+
+    def activate_chat_session(self, session_id, *, allow_empty=False):
+        self.activated_sessions.append((session_id, allow_empty))
 
     async def process_message(self, message, request_id=None, attachment_ids=None, progress_callback=None):
         return await self._process_fn(message)
@@ -136,6 +140,18 @@ async def test_process_message_serializes_same_user_via_mock_redis(monkeypatch):
     results = await asyncio.gather(run(1), run(2))
     assert [r["response"] for r in results] == ["m1", "m2"]
     assert holder.max_active == 1  # 同用户从未并行
+
+
+@pytest.mark.asyncio
+async def test_process_message_binds_requested_session_inside_user_lock(monkeypatch):
+    manager = WebHommeyManager()
+    _mock_redis(monkeypatch)
+    instance = FakeInstance(StubProcess().process)
+    manager._instances["u1"] = instance
+
+    await manager.process_message("u1", "m1", session_id="session-a")
+
+    assert instance.activated_sessions == [("session-a", True)]
 
 
 @pytest.mark.asyncio

@@ -3,6 +3,8 @@ python-dotenv==1.0.1
 
 # 多智能体框架
 agentscope==1.0.16
+# agentscope 的 evaluate 模块运行时依赖（未在其依赖中声明，缺了会导致 import 崩溃）
+tqdm
 # AgentScope 1.0.16 仍使用 MCP 1.x 的 streamablehttp_client API。
 mcp>=1.13,<2.0
 

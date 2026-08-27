@@ -11,6 +11,14 @@ from core.intent_guard import (
     has_travel_policy_context,
 )
 from core.intent_router import FastIntentRouter
+from core.orchestration.policy import OrchestrationPolicy
+
+
+def _authorize(data: dict, query: str, context: str = "") -> dict:
+    evaluation = OrchestrationPolicy().evaluate(
+        data, original_query=query, conversation_context=context,
+    )
+    return evaluation.to_compatibility_dict(query)
 
 
 def test_short_input_does_not_call_information_query():
@@ -190,6 +198,7 @@ def test_intention_followup_uses_dialogue_context_instead_of_context_free_route(
         )
     )
     data = json.loads(result.content)
+    data = _authorize(data, "那边天气怎么样", "我下周要去南京出差")
 
     assert len(model_calls) == 1
     assert data["routing"]["intent"] == "information_query"
@@ -211,6 +220,7 @@ def test_date_only_followup_inherits_immediately_previous_train_query():
         )
     )
     data = json.loads(result.content)
+    data = _authorize(data, "明天的", "帮我查一下定南到重庆的车票")
 
     assert data["routing"]["intent"] == "train_query"
     assert data["routing"]["should_call_skill"] is True
@@ -257,6 +267,7 @@ def test_dialogue_history_cannot_authorize_internal_event_collection():
         )
     )
     data = json.loads(result.content)
+    data = _authorize(data, "明天的", "我要去重庆出差")
 
     assert model_calls == [True]
     assert data["routing"]["intent"] == "unclear"
@@ -319,6 +330,7 @@ def test_booking_request_without_ticket_skill_resolves_to_unsupported():
     agent = IntentionAgent(name="IntentionAgent", model=product_boundary_model)
     result = asyncio.run(agent.reply(Msg(name="user", content="帮我订票付款", role="user")))
     data = json.loads(result.content)
+    data = _authorize(data, "帮我订票付款")
 
     assert data["routing"]["intent"] == "unsupported"
     assert data["routing"]["should_call_skill"] is False
@@ -379,6 +391,7 @@ def test_explicit_current_plan_ignores_plain_clarification_history():
         Msg(name="user", content="广州出差计划", role="user"),
     ]))
     data = json.loads(result.content)
+    data = _authorize(data, "广州出差计划")
 
     assert data["routing"]["intent"] == "itinerary_planning"
     assert data["routing"]["should_call_skill"] is True
@@ -502,6 +515,7 @@ def test_intention_connection_error_falls_back_without_information_query():
     agent = IntentionAgent(name="IntentionAgent", model=failing_model)
     result = asyncio.run(agent.reply(Msg(name="user", content="帮我处理一下这个事情", role="user")))
     data = json.loads(result.content)
+    data = _authorize(data, "帮我处理一下这个事情")
 
     assert data["routing"]["intent"] == "fallback"
     assert data["routing"]["should_call_skill"] is False
@@ -536,6 +550,7 @@ def test_low_confidence_skill_call_is_blocked():
     agent = IntentionAgent(name="IntentionAgent", model=low_confidence_model)
     result = asyncio.run(agent.reply(Msg(name="user", content="帮我处理这个内容", role="user")))
     data = json.loads(result.content)
+    data = _authorize(data, "帮我处理这个内容")
 
     assert data["routing"]["should_call_skill"] is False
     assert data["intents"][0]["should_call_skill"] is False

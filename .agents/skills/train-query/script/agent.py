@@ -54,6 +54,9 @@ _PROMPT_COMPLETE_MSG = (
 _ROUTE_RE = re.compile(
     r"(?:从)?([一-鿿]{2,8}?)(?:到|→)([一-鿿]{2,8}?)(?=$|，|,|的|高铁|火车|动车|车次|班次|线路|路线|\s)"
 )
+_DESTINATION_ONLY_RE = re.compile(
+    r"(?:去|到|前往)?([一-鿿]{2,8}?)(?:市)?(?:的)?(?:高铁|火车|动车|车次|车票)"
+)
 # 问句前缀（锚定开头）与日期短语：路由解析前先剥离，避免「帮我查一下这周四上海」
 # 这类动词/日期前缀污染出发站。日期仍由 _parse_date 在原句上解析，此处只清理路由段。
 _QUERY_LEAD_RE = re.compile(
@@ -105,6 +108,7 @@ class TrainQueryAgent(AgentBase):
                 context = payload.get("context", {})
                 active_task = context.get("active_task") or {}
                 entities = active_task.get("entities") or {}
+                user_preferences = context.get("user_preferences") or {}
                 user_query = (
                     active_task.get("query")
                     or context.get("agent_query")
@@ -113,11 +117,18 @@ class TrainQueryAgent(AgentBase):
                 )
             except json.JSONDecodeError:
                 user_query = content
+                user_preferences = {}
         else:
             user_query = str(content)
+            user_preferences = {}
 
         trip = self._trip_from_previous_results(payload.get("previous_results") or [])
         origin, destination, date = self._resolve_query(trip, entities, user_query)
+        memory_origin = self._home_location(user_preferences)
+        used_memory_origin = False
+        if not origin and destination and memory_origin and memory_origin != destination:
+            origin = memory_origin
+            used_memory_origin = True
 
         if not origin or not destination:
             return self._failure(_PROMPT_COMPLETE_MSG)
@@ -135,6 +146,15 @@ class TrainQueryAgent(AgentBase):
             return self._failure(message)
 
         result = self._build_result(origin, destination, date, trains)
+        if used_memory_origin:
+            result["results"]["assumptions"] = [
+                f"已按长期记忆中的常驻城市{origin}作为出发地；如需从其他城市出发，请直接告诉我。"
+            ]
+            result["results"]["query_context"] = {
+                "origin": origin,
+                "destination": destination,
+                "origin_source": "user_preferences.home_location",
+            }
         return_query = self._resolve_return_query(trip, origin, destination, date)
         if return_query is not None:
             return_origin, return_destination, return_date = return_query
@@ -225,6 +245,8 @@ class TrainQueryAgent(AgentBase):
             parsed_origin, parsed_destination = self._parse_route(user_query)
             origin = origin or parsed_origin
             destination = destination or parsed_destination
+        if not destination:
+            destination = self._parse_destination_only(user_query)
         if not date:
             date = self._parse_date(user_query)
         return origin, destination, date
@@ -266,6 +288,24 @@ class TrainQueryAgent(AgentBase):
         if not m:
             return "", ""
         return m.group(1).strip(), m.group(2).strip()
+
+    @staticmethod
+    def _parse_destination_only(query: str) -> str:
+        """Parse destination-only wording such as ``南京的高铁查一下``."""
+        q = (query or "").strip()
+        q = _QUERY_LEAD_RE.sub("", q)
+        q = _ROUTE_NOISE_RE.sub("", q)
+        match = _DESTINATION_ONLY_RE.search(q)
+        return match.group(1).strip() if match else ""
+
+    @staticmethod
+    def _home_location(preferences: Dict[str, Any]) -> str:
+        if not isinstance(preferences, dict):
+            return ""
+        value = preferences.get("home_location")
+        if isinstance(value, str):
+            return value.strip()
+        return ""
 
     @classmethod
     def _parse_date(cls, query: str) -> str:

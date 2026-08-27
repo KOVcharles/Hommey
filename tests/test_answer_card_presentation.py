@@ -157,6 +157,38 @@ def test_incomplete_trip_collection_never_renders_as_completed_itinerary():
     assert "已整理好行程" not in document.summary
 
 
+def test_train_card_surfaces_memory_origin_assumption():
+    task = IntentTask(
+        task_id="train_query",
+        intent="train_query",
+        query="南京的高铁查一下",
+        entities={"destination": "南京"},
+        display_order=0,
+    )
+    result = TaskResult(
+        task_id="train_query",
+        intent="train_query",
+        agent_name="train_query",
+        status="success",
+        data={"results": {
+            "summary": "查询到 1 趟车次。",
+            "assumptions": ["已按长期记忆中的常驻城市上海作为出发地。"],
+            "trains": [{
+                "train_no": "G94", "from_station": "上海虹桥",
+                "depart_time": "08:55", "to_station": "南京南",
+                "arrive_time": "09:54", "duration": "00:59",
+                "seats": {"二等座": "有"},
+            }],
+        }},
+        display_order=0,
+    )
+
+    document = _compose(task, result)
+
+    assert "长期记忆中的常驻城市上海" in document.sections[0].body
+    assert document.sections[0].items[0].label == "G94"
+
+
 def test_long_trip_fallback_does_not_crash():
     # P1-2：>12 天行程不再因 AnswerDocument.sections 上限抛 ValidationError。
     days = 15
@@ -319,7 +351,7 @@ def test_login_route_animation_has_a_defined_keyframe_and_fresh_asset_version():
 
     assert "animation: auth-route-travel 7s ease-in-out infinite" in css
     assert "@keyframes auth-route-travel" in css
-    assert "20260817-auth-route-motion-v1" in template
+    assert 'href="/static/hommey.css?v=20260827-github-v2"' in template
 
 
 def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
@@ -364,7 +396,14 @@ def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():
     assert "wrappedService" in answer_card
     assert "leadingService" in answer_card
     assert "routeSource.slice(route[0].length)" in answer_card
-    assert "20260822-structured-transport-v1" in (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
+    answer_css = (root / "webui_new/static/answer-card.css").read_text(encoding="utf-8")
+    assert "answer-train-scroll" in answer_card
+    assert "sortTrainItems(section.items)" in answer_card
+    assert "overscroll-behavior-y: contain" in answer_css
+    assert "font-variant-numeric: tabular-nums" in answer_css
+    assert "answer-train-pagination" not in answer_card
+    assert "20260827-train-scroll-v2" in template
 
 
 def test_structured_cards_and_composer_share_one_content_rail():
@@ -380,9 +419,8 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert ".message-row.ai:has(.answer-card) .msg-avatar.ai { display: none; }" in layout
     assert "width: calc(100% - 26px)" in layout
     assert ".answer-card {\n    width: 100%;" in answer
-    assert ".trip-intake-card {\n    width: 100%;" in intake
-    assert template.count("20260819-transport-layout-v1") == 1
-    assert template.count("20260822-structured-transport-v1") == 1
+    assert "width: 100%;" in intake.split(".trip-intake-card {", 1)[1].split("}", 1)[0]
+    assert template.count("20260827-train-scroll-v2") == 2
     assert "route-hit-area" in template
     assert "route-progress-gradient" in template
     assert template.count("M20 59 C105 59, 150 13, 250 43 S395 27, 480 27") == 3

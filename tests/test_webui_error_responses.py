@@ -161,6 +161,50 @@ async def test_chat_not_initialized_route_defers_to_manager_lazy_init(client, mo
 
 
 @pytest.mark.anyio
+async def test_chat_route_forwards_requested_session(client, monkeypatch):
+    calls = []
+
+    async def fake_process_message(
+        user_id, message, *, request_id=None, attachment_ids=None, session_id=None
+    ):
+        calls.append((user_id, message, request_id, attachment_ids, session_id))
+        return {"response": "ok", "agents": [], "preferences_updated": False}
+
+    monkeypatch.setattr(manager, "process_message", fake_process_message)
+
+    response = await client.post(
+        "/api/u1/chat",
+        json={"message": "hello", "session_id": "session-a"},
+        headers={"X-Request-ID": "rid-chat-session"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("u1", "hello", "rid-chat-session", [], "session-a")]
+
+
+@pytest.mark.anyio
+async def test_stream_route_forwards_requested_session(client, monkeypatch):
+    calls = []
+
+    async def fake_stream_message(
+        user_id, message, *, request_id=None, attachment_ids=None, session_id=None
+    ):
+        calls.append((user_id, message, request_id, attachment_ids, session_id))
+        yield {"type": "done", "preferences_updated": False, "timings": {}}
+
+    monkeypatch.setattr(manager, "stream_message", fake_stream_message)
+
+    response = await client.post(
+        "/api/u1/chat/stream",
+        json={"message": "hello", "session_id": "session-a"},
+        headers={"X-Request-ID": "rid-stream-session"},
+    )
+
+    assert response.status_code == 200
+    assert calls == [("u1", "hello", "rid-stream-session", [], "session-a")]
+
+
+@pytest.mark.anyio
 async def test_chat_route_forwards_explicit_enhanced_retrieval_mode(client, monkeypatch):
     calls = []
 
@@ -444,7 +488,11 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
         def to_intention_data(self, _message):
             return {
                 "routing": {"should_call_skill": True},
-                "intents": [{"type": "information_query", "should_call_skill": True}],
+                "intents": [{
+                    "type": "information_query",
+                    "confidence": 0.95,
+                    "should_call_skill": True,
+                }],
             }
 
     class Memory:
@@ -505,7 +553,7 @@ async def test_stream_optional_agent_error_returns_partial_success(client, monke
 
     response = await client.post(
         "/api/u1/chat/stream",
-        json={"message": "我要去出差"},
+        json={"message": "查询南京天气"},
         headers={"X-Request-ID": "rid-agent-stream"},
     )
 
@@ -528,7 +576,11 @@ async def test_stream_required_agent_error_is_normalized(client, monkeypatch):
         def to_intention_data(self, _message):
             return {
                 "routing": {"should_call_skill": True},
-                "intents": [{"type": "event_collection", "should_call_skill": True}],
+                "intents": [{
+                    "type": "itinerary_planning",
+                    "confidence": 0.95,
+                    "should_call_skill": True,
+                }],
             }
 
     class Memory:
@@ -648,7 +700,11 @@ async def test_manager_orchestration_error_does_not_return_raw_exception(monkeyp
         def to_intention_data(self, _message):
             return {
                 "routing": {"should_call_skill": True},
-                "intents": [{"type": "event_collection", "should_call_skill": True}],
+                "intents": [{
+                    "type": "itinerary_planning",
+                    "confidence": 0.95,
+                    "should_call_skill": True,
+                }],
             }
 
     class Memory:

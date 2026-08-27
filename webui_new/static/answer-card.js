@@ -367,7 +367,7 @@
     ]);
 
     function formatAvailability(label, value) {
-        const raw = String(value || '').trim();
+        const raw = String(value ?? '').trim();
         if (!raw) return '';
         if (/^\d+$/.test(raw)) return `${label}余${raw}张`;
         if (raw === '有') return `${label}有票`;
@@ -386,10 +386,6 @@
                 const rightIndex = TRANSPORT_AVAILABILITY_ORDER.indexOf(right);
                 return (leftIndex < 0 ? 999 : leftIndex) - (rightIndex < 0 ? 999 : rightIndex);
             });
-            const seatMetadata = availability
-                .map(([label, value]) => formatAvailability(label, value))
-                .filter(Boolean)
-                .slice(0, 4);
             return {
                 direction: String(leg?.direction || '行程'),
                 service: String(leg?.service || ''),
@@ -397,12 +393,12 @@
                 departure: String(leg?.departure_time || ''),
                 destination: String(leg?.destination || ''),
                 arrival: String(leg?.arrival_time || ''),
+                travelDate: String(leg?.travel_date || ''),
+                duration: String(leg?.duration || ''),
+                seats: availability.filter(([, value]) => value !== null && value !== undefined && String(value).trim() !== '')
+                    .map(([label, value]) => ({ label, value: String(value).trim() })),
                 description: '',
-                metadata: [
-                    leg?.travel_date ? String(leg.travel_date) : '',
-                    leg?.duration ? `历时 ${leg.duration}` : '',
-                    ...seatMetadata,
-                ].filter(Boolean),
+                metadata: [],
             };
         }).filter((leg) => leg.service && leg.origin && leg.departure && leg.destination && leg.arrival);
     }
@@ -455,9 +451,103 @@
             .filter(Boolean);
     }
 
-    function renderTransportValue(item, fact) {
-        const legs = structuredTransportLegs(item);
-        if (!legs.length) legs.push(...parseTransportLegs(item.value));
+    function transportLegs(item, isTrain = false) {
+        const structured = structuredTransportLegs(item);
+        if (structured.length) return structured;
+        const parsed = parseTransportLegs(item.value);
+        if (parsed.length || !isTrain) return parsed;
+        // Older train answers used "15:20 上海松江 → 杭州东 15:56 00:36".
+        const route = String(item.value || '').trim().match(
+            /^(\d{1,2}:\d{2})\s+(.+?)\s*[→–—-]\s*(.+?)\s+(\d{1,2}:\d{2})(?:\s+(.+))?$/,
+        );
+        if (!route) return [];
+        return [{
+            service: item.label, direction: '', origin: route[2], departure: route[1],
+            destination: route[3], arrival: route[4], duration: route[5] || '',
+            travelDate: '', seats: [], metadata: [],
+        }];
+    }
+
+    function clockMinutes(value) {
+        const match = String(value || '').trim().match(/^(\d{1,2}):(\d{2})(?![\d:])/);
+        if (!match || Number(match[1]) > 23 || Number(match[2]) > 59) return Infinity;
+        return Number(match[1]) * 60 + Number(match[2]);
+    }
+
+    function travelDateKey(value) {
+        const match = String(value || '').trim().match(/^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/);
+        if (!match) return Infinity;
+        const [, year, month, day] = match.map(Number);
+        const date = new Date(Date.UTC(year, month - 1, day));
+        if (date.getUTCFullYear() !== year || date.getUTCMonth() !== month - 1 || date.getUTCDate() !== day) return Infinity;
+        return date.getTime();
+    }
+
+    function sortTrainItems(items) {
+        return items.map((item, index) => {
+            const leg = item?.transport_legs?.[0];
+            const fallback = leg ? null : transportLegs(item, true)[0];
+            return {
+                item, index,
+                date: travelDateKey(leg?.travel_date || fallback?.travelDate),
+                time: clockMinutes(leg?.departure_time || fallback?.departure || String(item.value || '').trim()),
+            };
+        }).sort((left, right) => {
+            // Unknown departure times stay at the end; equal keys retain source order.
+            if ((left.time === Infinity) !== (right.time === Infinity)) return left.time === Infinity ? 1 : -1;
+            if (left.date !== right.date) return left.date < right.date ? -1 : 1;
+            return left.time - right.time || left.index - right.index;
+        }).map(({ item }) => item);
+    }
+
+    function formatDuration(value) {
+        const raw = String(value || '').trim();
+        const clock = raw.match(/^(\d+):(\d{2})$/);
+        if (!clock || Number(clock[2]) > 59) return raw;
+        const hours = Number(clock[1]);
+        const minutes = Number(clock[2]);
+        return [hours ? `${hours} 小时` : '', minutes ? `${minutes} 分钟` : ''].filter(Boolean).join(' ') || raw;
+    }
+
+    function remainingTransportDetail(item, legs) {
+        const compact = (value) => String(value || '').replace(/\s+/g, '');
+        const redundant = new Set(legs.flatMap((leg) => (leg.seats || []).flatMap(({ label, value }) => [
+            compact(`${label}${value}`), compact(formatAvailability(label, value)),
+        ])));
+        return String(item.detail || '').split(/\s*[·•]\s*/)
+            .filter((part) => !redundant.has(compact(part))).join(' · ');
+    }
+
+    function renderTransportSeats(seats) {
+        const list = element('div', 'answer-transport-seats');
+        seats.forEach(({ label, value }) => {
+            const unavailable = value === '无' || /^0+$/.test(value);
+            const known = value === '有' || /^\d+$/.test(value);
+            const seat = element('div', `answer-transport-seat${unavailable ? ' is-unavailable' : known ? ' is-available' : ''}`);
+            seat.appendChild(element('span', '', label));
+            const text = unavailable ? '无票' : value === '有' ? '有票' : /^\d+$/.test(value) ? `余 ${value} 张` : value;
+            seat.appendChild(element('strong', '', text));
+            list.appendChild(seat);
+        });
+        return list;
+    }
+
+    function renderTransportPoint(time, station, destination = false) {
+        const point = element('div', `answer-transport-point${destination ? ' is-destination' : ''}`);
+        const clock = element('div', 'answer-transport-time');
+        const match = String(time || '').trim().match(/^(\d{1,2}:\d{2})(.*)$/);
+        if (match && clockMinutes(match[1]) !== Infinity) {
+            clock.appendChild(element('strong', '', match[1].padStart(5, '0')));
+            if (match[2].trim()) clock.appendChild(element('small', 'answer-transport-time-note', match[2].trim()));
+        } else {
+            clock.appendChild(element('strong', '', time));
+        }
+        point.appendChild(clock);
+        point.appendChild(element('span', '', station));
+        return point;
+    }
+
+    function renderTransportValue(item, fact, legs = transportLegs(item)) {
         if (!legs.length) {
             fact.appendChild(element('strong', 'answer-fact-value', item.value));
             return;
@@ -466,25 +556,29 @@
         const routes = element('div', 'answer-transport-routes');
         legs.forEach((leg) => {
             const returning = leg.direction === '返程';
-            const card = element('div', `answer-transport-leg${returning ? ' is-return' : ''}`);
+            const card = element('article', `answer-transport-leg${returning ? ' is-return' : ''}`);
+            card.setAttribute('aria-label', `${leg.service || leg.direction} ${leg.origin || ''}至${leg.destination || ''}`);
             const head = element('div', 'answer-transport-head');
-            head.appendChild(element('span', `answer-transport-direction is-${returning ? 'return' : 'outbound'}`, leg.direction));
+            const mark = element('span', 'answer-transport-mark');
+            mark.setAttribute('aria-hidden', 'true');
+            head.appendChild(mark);
             if (leg.service) head.appendChild(element('strong', 'answer-transport-service', leg.service));
+            if (leg.direction && leg.direction !== '行程') {
+                head.appendChild(element('span', `answer-transport-direction is-${returning ? 'return' : 'outbound'}`, leg.direction));
+            }
+            if (leg.travelDate) head.appendChild(element('span', 'answer-transport-date', leg.travelDate));
             card.appendChild(head);
 
             if (leg.origin && leg.destination) {
                 const route = element('div', 'answer-transport-route');
-                const origin = element('div', 'answer-transport-point');
-                origin.appendChild(element('strong', '', leg.departure));
-                origin.appendChild(element('span', '', leg.origin));
-                route.appendChild(origin);
+                route.appendChild(renderTransportPoint(leg.departure, leg.origin));
+                const journey = element('div', 'answer-transport-journey');
+                if (leg.duration) journey.appendChild(element('span', 'answer-transport-duration', formatDuration(leg.duration)));
                 const line = element('span', 'answer-transport-line');
                 line.setAttribute('aria-hidden', 'true');
-                route.appendChild(line);
-                const destination = element('div', 'answer-transport-point is-destination');
-                destination.appendChild(element('strong', '', leg.arrival));
-                destination.appendChild(element('span', '', leg.destination));
-                route.appendChild(destination);
+                journey.appendChild(line);
+                route.appendChild(journey);
+                route.appendChild(renderTransportPoint(leg.arrival, leg.destination, true));
                 card.appendChild(route);
             } else {
                 card.appendChild(element('p', 'answer-transport-copy', leg.description));
@@ -495,6 +589,7 @@
                 leg.metadata.forEach((value) => metadata.appendChild(element('span', '', value)));
                 card.appendChild(metadata);
             }
+            if (leg.seats?.length) card.appendChild(renderTransportSeats(leg.seats));
             routes.appendChild(card);
         });
         fact.appendChild(routes);
@@ -511,21 +606,30 @@
 
     function renderItems(section, content, isOverview, isTimeline) {
         if (!Array.isArray(section.items) || !section.items.length) return;
+        const isTrain = section.kind === 'train';
         const grid = element('div', `answer-fact-grid${isOverview ? ' answer-overview-grid' : ''}`);
-        section.items.forEach((item) => {
+        if (isTrain) {
+            grid.classList.add('answer-train-list');
+            grid.setAttribute('role', 'list');
+        }
+
+        const renderItem = (item) => {
             const fact = element('div', `answer-fact${isOverview ? overviewFactClass(item.label) : ''}`);
             const hasStructuredTransport = Array.isArray(item?.transport_legs) && item.transport_legs.length > 0;
+            const legs = transportLegs(item, isTrain);
             if (hasStructuredTransport) fact.classList.add('is-transport', 'is-wide');
+            if (isTrain) fact.setAttribute('role', 'listitem');
             if (String(item.value || '').length + String(item.detail || '').length > 110) {
                 fact.classList.add('is-wide');
             }
-            fact.appendChild(element('span', 'answer-fact-label', item.label));
-            if (hasStructuredTransport || (isOverview && fact.classList.contains('is-transport'))) {
-                renderTransportValue(item, fact);
+            if (!isTrain || !legs.length) fact.appendChild(element('span', 'answer-fact-label', item.label));
+            if (hasStructuredTransport || (isTrain && legs.length) || (isOverview && fact.classList.contains('is-transport'))) {
+                renderTransportValue(item, fact, legs);
             } else {
                 fact.appendChild(element('strong', 'answer-fact-value', item.value));
             }
-            const detailValue = isTimeline ? cleanTimelineDetail(item.detail) : item.detail;
+            const detailValue = isTimeline ? cleanTimelineDetail(item.detail)
+                : isTrain && legs.length ? remainingTransportDetail(item, legs) : item.detail;
             if (detailValue) {
                 const detail = element('span', 'answer-fact-detail', detailValue);
                 if (isOverview && fact.classList.contains('is-transport')) {
@@ -540,8 +644,24 @@
                 }
             }
             grid.appendChild(fact);
-        });
-        content.appendChild(grid);
+        };
+
+        (isTrain ? sortTrainItems(section.items) : section.items).forEach(renderItem);
+        if (!isTrain) {
+            content.appendChild(grid);
+            return;
+        }
+        const toolbar = element('div', 'answer-train-toolbar');
+        toolbar.appendChild(element('strong', '', `共 ${section.items.length} 趟车次`));
+        toolbar.appendChild(element('span', '', '出发时间 · 由早到晚'));
+        content.appendChild(toolbar);
+        const scroll = element('div', 'answer-train-scroll');
+        scroll.tabIndex = 0;
+        scroll.setAttribute('role', 'region');
+        scroll.setAttribute('aria-label', '车次列表，按出发日期和时间排序，时间未知的车次列于末尾');
+        scroll.appendChild(grid);
+        content.appendChild(scroll);
+        if (section.items.length > 1) content.appendChild(element('p', 'answer-train-scroll-hint', '在列表内滚动查看全部车次'));
     }
 
     function renderWeather(section, content) {
@@ -767,5 +887,5 @@
         return card;
     }
 
-    window.HommeyAnswerCard = { create, localizeWeatherCondition };
+    window.HommeyAnswerCard = { create, localizeWeatherCondition, sortTrainItems };
 })();

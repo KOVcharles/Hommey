@@ -290,9 +290,13 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     template = (root / "webui_new/templates/chat.html").read_text(encoding="utf-8")
     assert "renderDisclosure" in card
     assert "trip-intake-disclosure-icon" in card
-    assert template.count("20260813-disclosure-motion-v7") == 1
-    assert template.count("20260819-conflict-dedup-v1") == 1
-    assert template.count("20260813-interactive-route-v4") == 2
+    assert template.count("20260827-step-stack-v1") == 2
+    assert "openStep" in card
+    assert "advanceStep" in card
+    assert "step.panel.inert = !expanded" in card
+    assert "aria-controls" in card
+    assert "trip-intake-step-summary" in card
+    assert template.count('src="/static/app.js?v=20260813-interactive-route-v4"') == 1
     assert 'id="knowledgeAdminActions"' in template
     assert 'aria-label="知识库管理" hidden' in template
     assert "knowledgeUploadButton" in template

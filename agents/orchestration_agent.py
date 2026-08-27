@@ -82,31 +82,29 @@ class OrchestrationAgent(AgentBase):
             上下文字典
         """
         request_context = request_context or {}
-        rewritten_query = intention_data.get("rewritten_query", "")
+        # This is an internal staging object, not the prompt context sent to
+        # every child agent.  The TaskExecutor selects a minimal, agent-specific
+        # projection for each node.  In particular, routing reasoning, the
+        # compatibility ``intents`` projection, request-wide entities and the
+        # raw user query must not leak into an isolated Goal.
         context = {
-            "reasoning": intention_data.get("reasoning", ""),
-            "intents": intention_data.get("intents", []),
-            "key_entities": intention_data.get("key_entities", {}),
-            "rewritten_query": rewritten_query,
-            "original_query": request_context.get("original_query", rewritten_query),
-            # Attachment facts bypass the lossy intent-query rewrite.
-            "agent_query": request_context.get("agent_query", rewritten_query),
-            "retrieval_mode": request_context.get("retrieval_mode", "standard"),
-            "request_id": request_context.get("request_id", ""),
-            "attachment_sources": request_context.get("attachment_sources", []),
-            "attachment_warnings": request_context.get("attachment_warnings", []),
+            "_agent_runtime": {
+                "retrieval_mode": request_context.get("retrieval_mode", "standard"),
+                "request_id": request_context.get("request_id", ""),
+            },
+            "_memory_context": {},
         }
 
         # 从记忆系统获取上下文
         if self.memory_manager:
             # 短期记忆：最近对话
             recent_context = self.memory_manager.short_term.get_recent_context(3)
-            context["recent_dialogue"] = recent_context
+            context["_memory_context"]["recent_dialogue"] = recent_context
 
             # 长期记忆：用户偏好
             preferences = self.memory_manager.long_term.get_preference()
-            context["user_preferences"] = preferences
-            context["active_trip"] = self.memory_manager.get_active_trip()
+            context["_memory_context"]["user_preferences"] = preferences
+            context["_memory_context"]["active_trip"] = self.memory_manager.get_active_trip()
 
         return context
 
@@ -193,18 +191,14 @@ class OrchestrationAgent(AgentBase):
         Returns:
             执行结果
         """
-        # ``task_params.query`` is the final Goal-scope authority. Child agents
-        # historically read different context aliases; leaving the request-wide
-        # query in any of them lets policy/weather bleed into each other.
+        # ``task_params.query`` is the final Goal-scope authority.  TaskExecutor
+        # has already built a minimal node context.  Keep the one compatibility
+        # alias that existing skills consume, but do not restore the old four
+        # request/query aliases: they add prompt tokens and invite scope bleed.
         context = dict(context)
         scoped_query = str((task_params or {}).get("query") or "").strip()
         if scoped_query:
-            context.setdefault(
-                "request_original_query",
-                context.get("original_query") or context.get("agent_query") or "",
-            )
-            for key in ("original_query", "agent_query", "rewritten_query", "user_query"):
-                context[key] = scoped_query
+            context["agent_query"] = scoped_query
 
         # 检查智能体是否注册
         if agent_name not in self.agent_registry:

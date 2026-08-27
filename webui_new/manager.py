@@ -46,6 +46,7 @@ from core.intent_catalog import (
 )
 from core.orchestration.memory_hooks import MemoryHookExecutor
 from core.orchestration.pipeline import MultiIntentPipeline
+from core.orchestration.policy import OrchestrationPolicy
 from core.orchestration.state_store import OrchestrationStateStore, StateConflictError
 from core.orchestration.turn_resolver import TurnResolver
 from core.orchestration.validator import supports_task_pipeline
@@ -87,6 +88,7 @@ class HommeyWebInstance:
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
         self.multi_intent_pipeline: Optional[MultiIntentPipeline] = None
+        self.orchestration_policy = OrchestrationPolicy()
         self.state_store: Optional[OrchestrationStateStore] = None
         self._agent_cache = {}
         self.circuit_breaker: Optional[CircuitBreaker] = None
@@ -289,12 +291,15 @@ class HommeyWebInstance:
         self._total_messages = 0
         return session_id
 
-    def activate_chat_session(self, session_id: str) -> dict:
+    def activate_chat_session(self, session_id: str, *, allow_empty: bool = False) -> dict:
         payload = self.get_chat_session(session_id)
-        if not payload["messages"]:
+        if not payload["messages"] and not allow_empty:
             raise ValueError("Chat session not found")
         if self.memory_manager:
-            session_id = self.memory_manager.activate_session(session_id)
+            try:
+                session_id = self.memory_manager.activate_session(session_id)
+            except ValueError as exc:
+                raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除") from exc
         self.session_id = session_id
         self._last_activity_monotonic = time.monotonic()
         self._total_messages = len(payload["messages"])
@@ -692,12 +697,15 @@ class HommeyWebInstance:
 
         rc = RESILIENCE_CONFIG
         agent_max_retries = rc.get("agent_max_retries", 1)
+        policy_context = ""
+        policy_query = agent_query
         # 带附件时强制走完整意图链路（_build_context 会把 agent_query 含附件上下文喂给 LLM），
         # 不走绕过上下文的 fast_route，避免附件文本无法到达模型。
         fast_route = None if attachment_ids or active_run is not None else self._route_without_context(message)
 
         if resume_state is not None:
             intention_data = resume_state.intention_data
+            policy_query = resume_state.original_query
             intention_result = Msg(
                 name="StateCoordinator",
                 content=json.dumps(intention_data, ensure_ascii=False),
@@ -725,6 +733,9 @@ class HommeyWebInstance:
 
                 context_start = time.perf_counter()
                 context_messages = await context_future
+                policy_context = "\n".join(
+                    str(getattr(item, "content", "")) for item in context_messages[:-1]
+                )
                 timings["context"] = time.perf_counter() - context_start
 
                 intent_start = time.perf_counter()
@@ -760,7 +771,7 @@ class HommeyWebInstance:
                 )
 
         try:
-            intention_data = json.loads(intention_result.content)
+            raw_intention_data = json.loads(intention_result.content)
         except json.JSONDecodeError:
             raise UpstreamError(
                 "INTENTION_PARSE_FAILED",
@@ -768,6 +779,13 @@ class HommeyWebInstance:
                 retryable=False,
                 component=COMPONENT_LLM,
             )
+
+        policy_evaluation = self.orchestration_policy.evaluate(
+            raw_intention_data,
+            original_query=policy_query,
+            conversation_context=policy_context,
+        )
+        intention_data = policy_evaluation.to_compatibility_dict(policy_query)
 
         collector = current_collector()
         if collector is not None:
@@ -1441,6 +1459,7 @@ class WebHommeyManager:
         *,
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
+        session_id: str | None = None,
         retrieval_mode: str = "standard",
         progress_callback=None,
     ) -> dict:
@@ -1464,6 +1483,13 @@ class WebHommeyManager:
             if not instance or not instance.initialized:
                 from webui_new.core.errors import BusinessError
                 raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+
+            if session_id:
+                await run_blocking(
+                    instance.activate_chat_session,
+                    session_id,
+                    allow_empty=True,
+                )
 
             # 与锁丢失事件竞争：锁易主即中止在途处理。
             # instance.process_message 内部已有 request_timeout_sec 的 wait_for，取消是既有可接受语义。
@@ -1506,6 +1532,7 @@ class WebHommeyManager:
         *,
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
+        session_id: str | None = None,
         retrieval_mode: str = "standard",
     ):
         """SSE 流式入口：与 process_message 相同的取锁顺序，持锁到流结束。
@@ -1531,6 +1558,12 @@ class WebHommeyManager:
             if not instance or not instance.initialized:
                 from webui_new.core.errors import BusinessError
                 raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+            if session_id:
+                await run_blocking(
+                    instance.activate_chat_session,
+                    session_id,
+                    allow_empty=True,
+                )
             instance_kwargs = {
                 "request_id": request_id,
                 "attachment_ids": attachment_ids,

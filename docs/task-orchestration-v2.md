@@ -6,7 +6,8 @@
 
 ```text
 IntentionAgent
-  -> TaskDecomposer
+  -> OrchestrationPolicy
+  -> IntentTask adapter (current class name: TaskDecomposer)
   -> TaskValidator
   -> TaskGraphBuilder
   -> TaskExecutor
@@ -16,17 +17,41 @@ IntentionAgent
 
 `webui_new/manager.py` 是请求入口。系统不再保留旧编排开关，也不存在按优先级列表执行的备用路径。
 
-快速路由只是意图识别的优化：只有“可证明完整的单意图”才能短路模型。含“然后、同时、顺便、另外”等连接关系的请求必须走完整识别；模型若遗漏用户明确说出的天气、制度或规划子句，确定性候选会补齐语义意图，但不会生成执行步骤。
+快速路由只是意图识别的优化：只有“可证明完整的单意图”才能短路模型。含“然后、同时、顺便、另外”等连接关系的请求必须走完整识别；模型若遗漏用户明确说出的天气、制度或规划子句，确定性候选会补齐语义意图，但不会生成执行步骤。快速路由和模型输出最终都会归一化为同一个 `IntentAnalysis`。
 
 ## 职责边界
 
-- `IntentionAgent`：识别一个或多个意图、改写 query、给出置信度和 `should_call_skill`。它不选择 Agent、不生成步骤、不决定执行顺序。
-- `TaskDecomposer`：把已授权意图变成彼此隔离的语义任务。模型不可指定 Agent 或工具；模型失败时使用确定性 fallback。
-- `TaskValidator`：校验意图授权、query scope、副作用和依赖，拒绝越权或循环依赖。
+- `IntentionAgent`：只读取当前 Query 和受限上下文，输出一个或多个 `IntentGroup`。每组包含隔离后的 query、置信度、组内实体和来源引用；它不输出 `should_call_skill`，不选择 Skill/Agent，不生成步骤。
+- `OrchestrationPolicy`：确定性授权边界。它重新执行输入安全检查、领域规则、意图可见性和置信度门槛，逐 `group_id` 输出 `PolicyDecision`；旧协议传入的 `should_call_skill` 不被信任。
+- `TaskDecomposer`：类名为兼容保留，当前不再调用模型，也不做语义拆解；它只是把已授权 `IntentGroup` 一对一转换成 `IntentTask`，并把显式关系转换为 Goal 依赖。
+- `TaskValidator`：按 `group_id` 校验授权、query scope、副作用和依赖，拒绝越权或循环依赖。同一 intent 的多个 Goal 不得合并。
 - `TaskGraphBuilder`：读取 `.agents/skills/*/hommey.yaml` 的 `execution` 声明，绑定可信 Agent，展开工作流并构建 DAG。
 - `TaskExecutor`：根据显式依赖边执行 DAG；priority 只决定同时 ready 节点的批次顺序，不能代替依赖。后继任务读取前序结果，并统一处理失败、暂停和重试语义。
-- `OrchestrationAgent`：名称暂时为兼容保留，实际只是 DAG 使用的子 Agent 执行适配器和审计记录器，不拥有计划和流程状态。
-- `AnswerComposer`：依据语义任务与执行结果生成统一答案；每个 section 带 `goal_id`，来源、数值事实及逐 Goal 覆盖仍受 validator 约束。
+- `OrchestrationAgent`：名称暂时为兼容保留，实际只是 DAG 使用的子 Agent 执行适配器和审计记录器，不拥有计划和流程状态。这里的 child agent 是既有业务 Agent，不是本次新增的 Agent 类型。
+- `AnswerComposer`：依据语义任务与执行结果生成统一答案；每个 section 带 `goal_id`，来源、数值事实及逐 Goal 覆盖仍受 validator 约束。聚合由管线调用 Composer 完成，不由 `IntentionAgent` 或子 Agent 完成。
+
+## 当前协议边界
+
+意图层的规范输出是：
+
+```json
+{
+  "schema_version": 1,
+  "groups": [
+    {
+      "group_id": "weather_shanghai",
+      "intent": "information_query",
+      "query": "查询2026年9月2日起上海两天的天气",
+      "confidence": 0.94,
+      "entities": {"destination": "上海", "date": "2026-09-02", "duration": 2},
+      "source_refs": ["current_query"]
+    }
+  ],
+  "relations": []
+}
+```
+
+策略层追加 `policy_decisions`，并在迁移期投影出旧 `routing`、`intents`、`key_entities` 和 `rewritten_query` 字段。旧字段只为现有调用方兼容，不再是执行授权或多意图实体的事实源。执行链路以 `groups + policy_decisions` 为准。
 
 ## 单意图与多意图
 
@@ -54,7 +79,9 @@ IntentionAgent
 
 Skill 的 `pause` 只声明哪个节点可以等待用户及判定字段，它不是状态仓库。节点需要补充信息时，只冻结该 Goal 和依赖它的下游；其他独立 Goal 继续运行并提交。短补全只送入当前 `focused_goal_id`，不会广播给其他等待 Goal。等待期间可以回答旁支问题，旁支完成后焦点必须回到仍在等待的 Goal。后续补充或“继续”会新建 Turn，从已提交节点之后恢复；当时正在运行的节点标为 `INTERRUPTED`，使用不变的 `operation_id` 幂等重试。
 
-状态快照使用 schema v2 JSONB。状态更新只发生在 durable boundary：Run/Turn 创建、Node 开始、Node 提交、进入等待、请求中断和 Turn 结束。文件后端用原子替换服务开发测试；PostgreSQL 使用行锁、`(run_id, request_id)` 唯一约束及活动 Run 唯一索引保障幂等和并发。
+状态快照仍使用 schema v2 JSONB，本次意图职责调整没有修改数据库 schema。`intention_data` 会保存新协议和兼容投影，`semantic_tasks` 保存本轮 Goal 语义，`nodes` 仍只保存节点运行状态。状态更新只发生在 durable boundary：Run/Turn 创建、Node 开始、Node 提交、进入等待、请求中断和 Turn 结束。文件后端用原子替换服务开发测试；PostgreSQL 使用行锁、`(run_id, request_id)` 唯一约束及活动 Run 唯一索引保障幂等和并发。
+
+计划中的 state v3 会把静态 `plan.node_specs` 与动态 `runtime.node_states` 明确分区，并持久化可恢复执行计划；该迁移尚未实施，也不存在 `0022` 数据库迁移。当前恢复仍依据 v2 快照、`semantic_tasks`、Skill 声明和 `graph_hash` 校验重建图。
 
 Goal 状态由状态机根据所属 Node 统一推导：失败节点或依赖失败造成的跳过为 `FAILED`；存在等待节点为 `WAITING_USER`；存在中断节点为 `INTERRUPTED`；全部成功或普通跳过才是 `SUCCEEDED`。可降级 Goal 失败可以生成 error section 且 Run 结束为 `COMPLETED`；声明 `abort` 的硬失败才使 Run 为 `FAILED`。
 

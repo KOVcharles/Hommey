@@ -55,6 +55,8 @@ def create_chat_router(manager):
                 "request_id": rid,
                 "attachment_ids": data.attachment_ids,
             }
+            if data.session_id:
+                kwargs["session_id"] = data.session_id
             if data.retrieval_mode == "enhanced":
                 kwargs["retrieval_mode"] = "enhanced"
             result = await manager.process_message(user_id, data.message, **kwargs)
@@ -92,6 +94,8 @@ def create_chat_router(manager):
                     "request_id": request_id(request),
                     "attachment_ids": data.attachment_ids,
                 }
+                if data.session_id:
+                    kwargs["session_id"] = data.session_id
                 if data.retrieval_mode == "enhanced":
                     kwargs["retrieval_mode"] = "enhanced"
                 async for event in manager.stream_message(user_id, data.message, **kwargs):

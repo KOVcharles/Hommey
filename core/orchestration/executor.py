@@ -157,24 +157,7 @@ class TaskExecutor:
         await self._emit(progress, task_event("running", task.task_id, task.intent))
         if lifecycle is not None:
             await lifecycle.node_started(task)
-        scoped_context = dict(base_context)
-        request_original = (
-            scoped_context.get("request_original_query")
-            or scoped_context.get("original_query")
-            or scoped_context.get("agent_query")
-        )
-        scoped_context["request_original_query"] = request_original
-        scoped_context["original_query"] = task.query
-        scoped_context["agent_query"] = task.query
-        scoped_context["rewritten_query"] = task.query
-        scoped_context["user_query"] = task.query
-        scoped_context["active_task"] = {
-            "task_id": task.task_id,
-            "intent": task.intent,
-            "query": task.query,
-            "entities": task.entities,
-            "capabilities": task.capabilities,
-        }
+        scoped_context = self._agent_context(task, base_context)
         previous_results = [self._legacy_result(item) for item in previous]
         operation_id = (
             f"{lifecycle.run_id}:{task.task_id}" if lifecycle is not None else task.task_id
@@ -255,6 +238,54 @@ class TaskExecutor:
         if lifecycle is not None:
             await lifecycle.node_finished(result)
         return result
+
+    @staticmethod
+    def _agent_context(task: ExecutionTask, base_context: Dict[str, Any]) -> Dict[str, Any]:
+        """Build the smallest model-visible context for one execution node.
+
+        ``IntentGroup.query`` and ``IntentGroup.entities`` are already isolated
+        by the intention layer.  Passing the request-wide routing envelope or
+        duplicate query aliases to every skill only increases token usage and
+        lets a child expand back into a sibling Goal.  Dependency outputs travel
+        in ``previous_results`` separately; durable memory is opt-in by the
+        agent that can use it.
+        """
+        context = {
+            # Kept for existing skills during the compatibility migration.
+            "agent_query": task.query,
+            "key_entities": dict(task.entities),
+            "active_task": {
+                "task_id": task.task_id,
+                "intent": task.intent,
+                "query": task.query,
+                "entities": dict(task.entities),
+                "capabilities": list(task.capabilities),
+            },
+        }
+        memory = base_context.get("_memory_context") or {}
+        runtime = base_context.get("_agent_runtime") or {}
+
+        # Only agents that use current-trip state or preference data receive it.
+        if task.agent_name == "event_collection":
+            context["active_trip"] = memory.get("active_trip") or {}
+            context["user_preferences"] = memory.get("user_preferences") or {}
+            # The collector uses prior *user facts* only to complete a current
+            # trip; avoid exposing assistant text and cap it defensively.
+            context["recent_dialogue"] = [
+                item for item in (memory.get("recent_dialogue") or [])[-3:]
+                if isinstance(item, dict) and item.get("role") == "user"
+            ]
+        elif task.agent_name in {"train_query", "itinerary_planning"}:
+            context["user_preferences"] = memory.get("user_preferences") or {}
+        elif task.agent_name == "trip_compliance":
+            context["active_trip"] = memory.get("active_trip") or {}
+        elif task.agent_name == "rag_knowledge":
+            # Retrieval mode and trace id are runtime controls consumed by the
+            # RAG implementation, not conversational context.
+            context["retrieval_mode"] = runtime.get("retrieval_mode", "standard")
+            context["request_id"] = runtime.get("request_id", "")
+
+        return context
 
     @staticmethod
     def _pause_info(
