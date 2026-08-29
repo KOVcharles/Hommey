@@ -267,6 +267,8 @@ class TaskExecutor:
 
         # Only agents that use current-trip state or preference data receive it.
         if task.agent_name == "event_collection":
+            if base_context.get("_structured_trip_input"):
+                context["structured_trip_input"] = dict(base_context["_structured_trip_input"])
             context["active_trip"] = memory.get("active_trip") or {}
             context["user_preferences"] = memory.get("user_preferences") or {}
             # The collector uses prior *user facts* only to complete a current

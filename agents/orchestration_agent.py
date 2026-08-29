@@ -94,6 +94,8 @@ class OrchestrationAgent(AgentBase):
             },
             "_memory_context": {},
         }
+        if request_context.get("structured_trip_input"):
+            context["_structured_trip_input"] = dict(request_context["structured_trip_input"])
 
         # 从记忆系统获取上下文
         if self.memory_manager:

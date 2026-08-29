@@ -424,7 +424,7 @@ def test_structured_cards_and_composer_share_one_content_rail():
     assert "route-hit-area" in template
     assert "route-progress-gradient" in template
     assert template.count("M20 59 C105 59, 150 13, 250 43 S395 27, 480 27") == 3
-    assert "20260813-interactive-route-v4" in template
+    assert "20260829-quick-trip-v1" in template
 
 
 def test_hommey_mark_has_enough_top_viewbox_padding():

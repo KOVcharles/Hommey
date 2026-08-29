@@ -22,6 +22,7 @@ from core.guard_rules import (
     COMPLIANCE_KEYWORDS,
     GENERIC_POLICY_KEYWORDS,
     MEMORY_KEYWORDS,
+    PLACE_INFORMATION_KEYWORDS,
     POLICY_KEYWORDS,
     PREFERENCE_KEYWORDS,
     SEARCH_KEYWORDS,
@@ -146,6 +147,7 @@ class FastIntentRouter:
         ) and has_travel_policy_context(q)
         has_weather = any(keyword in q for keyword in WEATHER_KEYWORDS)
         has_search = any(keyword in q for keyword in SEARCH_KEYWORDS)
+        has_place_information = any(keyword in q for keyword in PLACE_INFORMATION_KEYWORDS)
         has_compliance = any(keyword in q for keyword in COMPLIANCE_KEYWORDS)
         has_train = any(keyword in q for keyword in TRAIN_KEYWORDS)
 
@@ -167,6 +169,11 @@ class FastIntentRouter:
             candidates.append(IntentCandidate("train_query", 0.9, "查询高铁/火车车次、时刻与余票"))
 
         if has_weather:
+            info_guard = can_call_information_query(q, 0.9)
+            if info_guard.intent == "information_query" and info_guard.should_call_skill:
+                candidates.append(IntentCandidate("information_query", info_guard.confidence, info_guard.reason))
+
+        if has_place_information and not cls._looks_like_trip_request(q):
             info_guard = can_call_information_query(q, 0.9)
             if info_guard.intent == "information_query" and info_guard.should_call_skill:
                 candidates.append(IntentCandidate("information_query", info_guard.confidence, info_guard.reason))

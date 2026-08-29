@@ -1,4 +1,4 @@
-version: 1.1.0
+version: 1.2.0
 display_name: 差旅外部信息
 category: capability
 intent: information_query
@@ -12,7 +12,7 @@ scope:
   query_anchor_fields: [destination, start_date]
 answer:
   section_kind: weather
-tools: [weather, web_search]
+tools: [weather, web_search, place_search]
 execution:
   - skill: query-info
     agent_name: information_query
@@ -25,3 +25,23 @@ execution:
     result_rules:
       error_when_field: query_success
       error_code: INFORMATION_QUERY_UNAVAILABLE
+  - skill: place-query
+    agent_name: place_information
+    priority: 1
+    on_failure: continue
+    max_retries: 1
+    reason: 查询中国大陆地点和附近酒店
+    expected_output: 带来源、距离和参考消费边界的真实地点与酒店信息
+    query: 查询当前问题中的地点或附近酒店
+    capabilities:
+      - name: place_search
+        default_enabled: false
+        aliases: [地址, 在哪, 位置, 地点, 园区, 写字楼, 会场]
+        query: 查询当前问题中的具体地点
+      - name: nearby_hotels
+        default_enabled: false
+        aliases: [酒店, 住宿, 住哪里, 住哪, 附近酒店, 周边酒店]
+        query: 查询当前问题中明确地点附近的酒店
+    result_rules:
+      error_when_field: query_success
+      error_code: PLACE_INFORMATION_UNAVAILABLE

@@ -82,6 +82,19 @@ TRIP_INTAKE_CONFIG = {
 }
 
 
+AMAP_CONFIG = {
+    "enabled": _optional_bool_env("HOMMEY_AMAP_ENABLED", True),
+    "api_key": _optional_env("HOMMEY_AMAP_WEB_KEY"),
+    "base_url": os.getenv("HOMMEY_AMAP_BASE_URL", "https://restapi.amap.com").rstrip("/"),
+    "timeout_sec": _float_env("HOMMEY_AMAP_TIMEOUT_SEC", 8.0),
+    "max_retries": _int_env("HOMMEY_AMAP_MAX_RETRIES", 1),
+    "cache_ttl_sec": _int_env("HOMMEY_AMAP_CACHE_TTL_SEC", 300),
+    "hotel_radius_m": _int_env("HOMMEY_AMAP_HOTEL_RADIUS_M", 5000),
+    "hotel_limit": 3,
+    "mainland_only": True,
+}
+
+
 SYSTEM_CONFIG = {
     "enable_llm": _bool_env("HOMMEY_ENABLE_LLM", True),
     "log_level": os.getenv("HOMMEY_LOG_LEVEL", "INFO"),

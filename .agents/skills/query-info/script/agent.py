@@ -123,6 +123,19 @@ class InformationQueryAgent(AgentBase):
             )
             return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
 
+        # 地点和附近酒店由同一 information_query Goal 下的内部
+        # place_information 节点处理，避免再发起一次通用网页搜索。
+        if self._is_place_query(user_query):
+            return Msg(
+                name=self.name,
+                content=json.dumps({
+                    "query_success": True,
+                    "skipped": True,
+                    "results": {"message": "地点查询已交由地图地点能力处理。"},
+                }, ensure_ascii=False),
+                role="assistant",
+            )
+
         # 天气类问题优先走 wttr.in，避免通用搜索返回低质结果
         if self._is_weather_query(user_query):
             logger.info(f"Weather query: {user_query}")
@@ -240,6 +253,12 @@ class InformationQueryAgent(AgentBase):
         if not q:
             return False
         return "天气" in q or "气温" in q or "下雨" in q or "预报" in q
+
+    @staticmethod
+    def _is_place_query(query: str) -> bool:
+        return any(keyword in str(query or "") for keyword in (
+            "酒店", "住宿", "附近", "周边", "地址", "位置", "在哪",
+        ))
 
     async def _weather_query(
         self, query: str, city_hint: str = "",

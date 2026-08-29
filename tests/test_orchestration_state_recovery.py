@@ -78,6 +78,8 @@ def test_resume_injects_new_input_and_reuses_operation_id(tmp_path):
             return {"status": "success", "data": {
                 "query_success": True, "results": {"summary": "G2 历时4小时30分", "trains": []},
             }}
+        if agent == "place_information":
+            return {"status": "success", "data": {"query_success": True, "skipped": True}}
         if agent == "itinerary_planning":
             return {"status": "success", "data": {"itinerary": {"title": "上海出差方案"}}}
         if agent == "trip_compliance":
