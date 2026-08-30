@@ -1,10 +1,11 @@
 """
-信息查询智能体 - 真实检索版（免费API）
-支持：天气（wttr.in）、网络搜索（DDGS，开启 safesearch + 结果过滤）
+信息查询智能体 - 真实检索版
+支持：高德国内天气与公交路线、Open-Meteo 天气降级、受限网络搜索
 
-使用免费API：
-- 天气：wttr.in（无需 API Key）
-- 搜索：ddgs（Dux Distributed Global Search，可选 bing/duckduckgo 等，需安装：pip install ddgs）
+数据源：
+- 中国大陆天气和明确 POI 间公交路线：高德 Web 服务
+- 海外或高德不可用时的天气：Open-Meteo
+- 其他公开信息：ddgs（需安装：pip install ddgs）
 """
 from agentscope.agent import AgentBase
 from agentscope.message import Msg
@@ -15,12 +16,13 @@ import logging
 import re
 import sys
 import os
-from urllib.parse import quote
 
 # Add project root to sys.path
 sys.path.append(os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../..")))
 
 from core.execution_budget import ExecutionLimitExceeded, consume_external_call
+from core.integrations.places.amap import AMapError
+from core.integrations.travel_info import TravelInformationService
 
 logger = logging.getLogger(__name__)
 
@@ -73,17 +75,22 @@ class InformationQueryAgent(AgentBase):
     信息查询智能体（真实检索版）
 
     核心功能：
-    - 天气查询 - 使用 wttr.in 免费 API（无需搜索，结果可靠）
-    - 网络搜索 - 使用 DDGS（开启 safesearch，过滤可疑来源）
+    - 国内天气查询 - 高德 Web 服务优先，Open-Meteo 降级
+    - 明确地点间公交路线 - 高德路径规划 2.0 优先
+    - 其他公开信息 - DDGS（开启 safesearch，过滤可疑来源）
 
     注意：
     - 差旅标准查询由独立的 RAGKnowledgeAgent 处理
     """
 
-    def __init__(self, name: str = "InformationQueryAgent", model=None, skills_root=None, **kwargs):
+    def __init__(
+        self, name: str = "InformationQueryAgent", model=None, skills_root=None,
+        travel_info_service=None, **kwargs,
+    ):
         super().__init__()
         self.name = name
         self.model = model
+        self.travel_info_service = travel_info_service or TravelInformationService()
         from utils.skill_loader import SkillLoader
         self.skill_loader = SkillLoader(skills_root)
 
@@ -123,6 +130,10 @@ class InformationQueryAgent(AgentBase):
             )
             return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
 
+        if self._is_route_query(user_query):
+            result = await self._local_transport_query(user_query)
+            return Msg(name=self.name, content=json.dumps(result, ensure_ascii=False), role="assistant")
+
         # 地点和附近酒店由同一 information_query Goal 下的内部
         # place_information 节点处理，避免再发起一次通用网页搜索。
         if self._is_place_query(user_query):
@@ -136,7 +147,7 @@ class InformationQueryAgent(AgentBase):
                 role="assistant",
             )
 
-        # 天气类问题优先走 wttr.in，避免通用搜索返回低质结果
+        # 天气类问题优先走地图/气象供应商，避免通用搜索返回低质结果。
         if self._is_weather_query(user_query):
             logger.info(f"Weather query: {user_query}")
             try:
@@ -204,7 +215,12 @@ class InformationQueryAgent(AgentBase):
             requests.append(self._weather_query(weather_query, city_hint=destination))
         if "local_transport" in selected:
             labels.append("local_transport")
-            requests.append(self._web_search(transport_query))
+            requests.append(self._local_transport_query(
+                transport_query,
+                origin=origin,
+                destination=destination,
+                allow_amap=False,
+            ))
         values = await asyncio.gather(*requests, return_exceptions=True)
         for value in values:
             if isinstance(value, ExecutionLimitExceeded):
@@ -260,14 +276,20 @@ class InformationQueryAgent(AgentBase):
             "酒店", "住宿", "附近", "周边", "地址", "位置", "在哪",
         ))
 
+    @staticmethod
+    def _is_route_query(query: str) -> bool:
+        text = str(query or "")
+        return bool(
+            re.search(r".{2,40}(?:到|至|→).{2,40}", text)
+            and any(keyword in text for keyword in (
+                "怎么走", "如何走", "路线", "地铁", "公交", "打车", "市内交通", "接驳",
+            ))
+        )
+
     async def _weather_query(
         self, query: str, city_hint: str = "",
     ) -> Dict[str, Any]:
-        """
-        使用 wttr.in 免费 API 查询天气（无需 API Key，结果可靠）。
-        支持中文城市名，如：杭州、北京。
-        """
-        import asyncio
+        """Use AMap for mainland weather, with Open-Meteo as fallback."""
         try:
             import httpx
         except ImportError:
@@ -277,7 +299,6 @@ class InformationQueryAgent(AgentBase):
                 "results": {"message": "需要安装 httpx: pip install httpx"},
             }
 
-        # 从问题中提取城市（简单取第一个常见城市名或整句前 10 字中连续中文）
         city = city_hint or self._extract_city_from_query(query)
         if not city:
             return {
@@ -286,59 +307,50 @@ class InformationQueryAgent(AgentBase):
                 "results": {"message": "未识别到城市，请说明具体城市，如：杭州下周的天气怎么样？"},
             }
 
-        url = f"https://wttr.in/{quote(city)}?format=j1"
-        try:
-            consume_external_call("weather")
-            loop = asyncio.get_event_loop()
-            resp = await loop.run_in_executor(
-                None,
-                lambda: httpx.get(
-                    url,
-                    timeout=10.0,
-                    follow_redirects=True,
-                    headers={"User-Agent": "Hommey/1.0 (+https://wttr.in)"},
-                ),
-            )
-            resp.raise_for_status()
-            data = resp.json()
-        except ExecutionLimitExceeded:
-            raise
-        except Exception as e:
-            logger.warning(f"wttr.in request failed, trying Open-Meteo fallback: {e}")
-            return await self._open_meteo_weather_query(city, httpx)
-
-        try:
-            current = data.get("current_condition", [{}])[0]
-            temp_c = current.get("temp_C", "?")
-            wdesc = current.get("weatherDesc", [{}])
-            desc = (wdesc[0].get("value") if wdesc else None) or "—"
-            humidity = current.get("humidity", "?")
-            weather_text = f"{city}当前天气：{desc}，气温 {temp_c}°C，湿度 {humidity}%。"
-            forecasts = []
-            for day in data.get("weather", [])[:5]:
-                date = day.get("date", "")
-                maxtemp = day.get("maxtempC", "?")
-                mintemp = day.get("mintempC", "?")
-                h = (day.get("hourly") or [{}])[0] if day.get("hourly") else {}
-                daily_desc = (h.get("weatherDesc") or [{}])[0].get("value", "—") if h else "—"
-                forecasts.append(f"{date}: {daily_desc}，{mintemp}~{maxtemp}°C")
-            if forecasts:
-                weather_text += " 未来几日：" + "；".join(forecasts[:3])
-            return {
-                "query_type": "天气查询",
-                "query_success": True,
-                "results": {
-                    "summary": weather_text,
-                    "sources": [{"url": "https://wttr.in", "title": "wttr.in"}],
-                },
-            }
-        except Exception as e:
-            logger.warning(f"Parse wttr.in response failed: {e}")
-            return {
-                "query_type": "天气查询",
-                "query_success": False,
-                "results": {"message": "天气数据解析失败", "sources": [{"url": "https://wttr.in", "title": "wttr.in"}]},
-            }
+        if self.travel_info_service.configured:
+            try:
+                report = await self.travel_info_service.weather(city)
+                if report is not None and (report.current or report.forecasts):
+                    summary_parts = []
+                    if report.current is not None:
+                        current = report.current
+                        temp = self._display_number(current.temperature_c)
+                        humidity = self._display_number(current.humidity_pct)
+                        summary_parts.append(
+                            f"{report.city}当前天气：{current.condition or '—'}，"
+                            f"气温 {temp}°C，湿度 {humidity}%。"
+                        )
+                    forecasts = []
+                    for day in report.forecasts[:3]:
+                        condition = day.day_condition or day.night_condition or "—"
+                        if day.night_condition and day.night_condition != condition:
+                            condition = f"{condition}转{day.night_condition}"
+                        forecasts.append(
+                            f"{day.date}: {condition}，"
+                            f"{self._display_number(day.low_c)}~{self._display_number(day.high_c)}°C"
+                        )
+                    if forecasts:
+                        summary_parts.append("未来几日：" + "；".join(forecasts))
+                    return {
+                        "query_type": "天气查询",
+                        "query_success": True,
+                        "results": {
+                            "summary": " ".join(summary_parts),
+                            "provider": "amap",
+                            "weather": report.model_dump(mode="json"),
+                            "sources": [{
+                                "url": "https://lbs.amap.com/api/webservice/guide/api/weatherinfo",
+                                "title": "高德天气查询",
+                            }],
+                        },
+                    }
+            except ExecutionLimitExceeded:
+                raise
+            except AMapError as exc:
+                logger.warning("AMap weather unavailable, using fallback: %s", exc)
+            except Exception as exc:
+                logger.warning("AMap weather normalization failed, using fallback: %s", exc)
+        return await self._open_meteo_weather_query(city, httpx)
 
     async def _open_meteo_weather_query(self, city: str, httpx_module) -> Dict[str, Any]:
         """使用 Open-Meteo 作为天气备用接口（无需 API Key）。"""
@@ -346,15 +358,14 @@ class InformationQueryAgent(AgentBase):
 
         city_coords = self._city_coordinates(city)
         if not city_coords:
+            city_coords = await self._open_meteo_geocode(city, httpx_module)
+        if not city_coords:
             return {
                 "query_type": "天气查询",
                 "query_success": False,
                 "results": {
-                    "message": f"天气接口暂时不可用，且未内置「{city}」的经纬度。请稍后重试或换一个常见城市名。",
-                    "sources": [
-                        {"url": "https://wttr.in", "title": "wttr.in"},
-                        {"url": "https://open-meteo.com", "title": "Open-Meteo"},
-                    ],
+                    "message": f"未能解析「{city}」的天气查询位置，请补充更完整的城市名称。",
+                    "sources": [{"url": "https://open-meteo.com", "title": "Open-Meteo"}],
                 },
             }
 
@@ -364,7 +375,7 @@ class InformationQueryAgent(AgentBase):
             "longitude": longitude,
             "current": "temperature_2m,relative_humidity_2m,weather_code",
             "daily": "weather_code,temperature_2m_max,temperature_2m_min,precipitation_probability_max",
-            "timezone": "Asia/Shanghai",
+            "timezone": "auto",
             "forecast_days": 4,
         }
 
@@ -392,10 +403,7 @@ class InformationQueryAgent(AgentBase):
                 "query_success": False,
                 "results": {
                     "message": f"天气接口暂时不可用: {e}",
-                    "sources": [
-                        {"url": "https://wttr.in", "title": "wttr.in"},
-                        {"url": "https://open-meteo.com", "title": "Open-Meteo"},
-                    ],
+                    "sources": [{"url": "https://open-meteo.com", "title": "Open-Meteo"}],
                 },
             }
 
@@ -430,6 +438,133 @@ class InformationQueryAgent(AgentBase):
                 "sources": [{"url": "https://open-meteo.com", "title": "Open-Meteo"}],
             },
         }
+
+    async def _open_meteo_geocode(self, city: str, httpx_module) -> Optional[tuple]:
+        """Resolve non-mainland or uncommon cities for the fallback provider."""
+        import asyncio
+
+        try:
+            consume_external_call("weather")
+            loop = asyncio.get_event_loop()
+            resp = await loop.run_in_executor(
+                None,
+                lambda: httpx_module.get(
+                    "https://geocoding-api.open-meteo.com/v1/search",
+                    params={
+                        "name": city,
+                        "count": 1,
+                        "language": "zh",
+                        "format": "json",
+                    },
+                    timeout=10.0,
+                    follow_redirects=True,
+                    headers={"User-Agent": "Hommey/1.0"},
+                ),
+            )
+            resp.raise_for_status()
+            candidates = (resp.json() or {}).get("results") or []
+            if not candidates or not isinstance(candidates[0], dict):
+                return None
+            latitude = float(candidates[0]["latitude"])
+            longitude = float(candidates[0]["longitude"])
+            return latitude, longitude
+        except ExecutionLimitExceeded:
+            raise
+        except (KeyError, TypeError, ValueError, OSError) as exc:
+            logger.warning("Open-Meteo geocoding failed: %s", exc)
+            return None
+        except Exception as exc:
+            logger.warning("Open-Meteo geocoding request failed: %s", exc)
+            return None
+
+    async def _local_transport_query(
+        self,
+        query: str,
+        *,
+        origin: str = "",
+        destination: str = "",
+        city_hint: str = "",
+        allow_amap: bool = True,
+    ) -> Dict[str, Any]:
+        """Prefer AMap only when both endpoints resolve to unambiguous POIs."""
+        if allow_amap and self.travel_info_service.configured:
+            route_origin, route_destination = origin, destination
+            if not route_origin or not route_destination:
+                route_origin, route_destination = self._extract_route_endpoints(query)
+            if route_origin and route_destination:
+                try:
+                    origin_result, destination_result = await asyncio.gather(
+                        self.travel_info_service.resolve_anchor(route_origin, city=city_hint),
+                        self.travel_info_service.resolve_anchor(route_destination, city=city_hint),
+                    )
+                    origin_place = origin_result[0]
+                    destination_place = destination_result[0]
+                    if origin_place is not None and destination_place is not None:
+                        plan = await self.travel_info_service.transit_routes(
+                            origin_place, destination_place, limit=3,
+                        )
+                        if plan.options:
+                            route_summaries = []
+                            for index, option in enumerate(plan.options, 1):
+                                facts = []
+                                if option.lines:
+                                    facts.append(" → ".join(option.lines[:4]))
+                                if option.duration_sec is not None:
+                                    facts.append(f"约{max(1, round(option.duration_sec / 60))}分钟")
+                                if option.distance_m:
+                                    facts.append(f"约{option.distance_m / 1000:.1f}公里")
+                                if option.transit_fee_cny is not None:
+                                    facts.append(f"参考票价{option.transit_fee_cny:g}元")
+                                route_summaries.append(
+                                    f"方案{index}：" + ("，".join(facts) or "高德公交方案")
+                                )
+                            return {
+                                "query_type": "市内交通",
+                                "query_success": True,
+                                "results": {
+                                    "summary": (
+                                        f"{plan.origin.name}到{plan.destination.name}："
+                                        + "；".join(route_summaries)
+                                        + "。路线与耗时会随交通状态变化，出发前请再次核验。"
+                                    ),
+                                    "provider": "amap",
+                                    "route": plan.model_dump(mode="json"),
+                                    "sources": [{
+                                        "url": "https://lbs.amap.com/api/webservice/guide/api/newroute",
+                                        "title": "高德路径规划 2.0",
+                                    }],
+                                },
+                            }
+                except ExecutionLimitExceeded:
+                    raise
+                except AMapError as exc:
+                    logger.warning("AMap transit unavailable, using web fallback: %s", exc)
+                except Exception as exc:
+                    logger.warning("AMap transit normalization failed, using web fallback: %s", exc)
+        return await self._web_search(query)
+
+    @staticmethod
+    def _extract_route_endpoints(query: str) -> tuple[str, str]:
+        text = re.sub(r"[？?！!。]", "", str(query or "")).strip()
+        match = re.search(
+            r"(?:从)?(.{2,40}?)(?:到|至|→)(.{2,40}?)(?:怎么走|如何走|路线|地铁|公交|打车|交通|接驳)",
+            text,
+        )
+        if not match:
+            return "", ""
+        origin = re.sub(r"^(?:请问|帮我|查询|查一下|我想从)", "", match.group(1)).strip(" ，,")
+        destination = re.sub(r"(?:的)?$", "", match.group(2)).strip(" ，,")
+        return origin[:80], destination[:80]
+
+    @staticmethod
+    def _display_number(value: Any) -> str:
+        if value is None:
+            return "?"
+        try:
+            number = float(value)
+        except (TypeError, ValueError):
+            return str(value)
+        return f"{number:g}"
 
     def _city_coordinates(self, city: str) -> Optional[tuple]:
         """常见城市经纬度，用于天气接口备用查询。"""

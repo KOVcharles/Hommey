@@ -157,6 +157,36 @@ def test_incomplete_trip_collection_never_renders_as_completed_itinerary():
     assert "已整理好行程" not in document.summary
 
 
+def test_amap_transit_result_is_not_mislabeled_as_weather():
+    task = IntentTask(
+        task_id="information_query",
+        intent="information_query",
+        query="上海虹桥站到静安寺怎么走",
+        entities={"destination": "上海"},
+    )
+    result = TaskResult(
+        task_id="information_query-information_query",
+        intent="information_query",
+        agent_name="information_query",
+        status="success",
+        data={
+            "query_type": "市内交通",
+            "query_success": True,
+            "results": {
+                "summary": "上海虹桥站到静安寺：方案1：地铁2号线，约45分钟。",
+                "provider": "amap",
+                "route": {"options": [{"lines": ["地铁2号线"]}]},
+            },
+        },
+    )
+
+    document = _compose(task, result)
+
+    assert document.sections[0].kind == "general"
+    assert document.sections[0].title == "市内交通"
+    assert "地铁2号线" in document.sections[0].body
+
+
 def test_train_card_surfaces_memory_origin_assumption():
     task = IntentTask(
         task_id="train_query",

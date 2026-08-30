@@ -76,6 +76,95 @@ def test_amap_provider_normalizes_and_limits_nearby_hotels():
     assert hotels[1].reference_cost.realtime is False
 
 
+def test_amap_provider_resolves_adcode_and_normalizes_weather():
+    async def handler(request: httpx.Request):
+        if request.url.path == "/v3/geocode/geo":
+            assert request.url.params["address"] == "杭州"
+            return httpx.Response(200, json={
+                "status": "1",
+                "geocodes": [{"adcode": "330100", "location": "120.1551,30.2741"}],
+            })
+        assert request.url.path == "/v3/weather/weatherInfo"
+        if request.url.params["extensions"] == "base":
+            return httpx.Response(200, json={
+                "status": "1",
+                "lives": [{
+                    "province": "浙江", "city": "杭州市", "adcode": "330100",
+                    "weather": "多云", "temperature": "29", "humidity": "68",
+                    "winddirection": "东", "windpower": "≤3",
+                    "reporttime": "2026-08-30 10:00:00",
+                }],
+            })
+        return httpx.Response(200, json={
+            "status": "1",
+            "forecasts": [{
+                "province": "浙江", "city": "杭州市", "adcode": "330100",
+                "casts": [{
+                    "date": "2026-08-30", "dayweather": "多云", "nightweather": "小雨",
+                    "daytemp": "31", "nighttemp": "24", "daywind": "东",
+                    "nightwind": "东", "daypower": "≤3", "nightpower": "≤3",
+                }],
+            }],
+        })
+
+    client = httpx.AsyncClient(
+        base_url="https://restapi.amap.com", transport=httpx.MockTransport(handler),
+    )
+    provider = AMapProvider(config={
+        "enabled": True, "api_key": "test-key", "base_url": "https://restapi.amap.com",
+        "timeout_sec": 1,
+    }, client=client)
+    try:
+        report = asyncio.run(provider.weather("杭州"))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert report.provider == "amap"
+    assert report.city == "杭州市"
+    assert report.adcode == "330100"
+    assert report.current.temperature_c == 29
+    assert report.current.humidity_pct == 68
+    assert report.forecasts[0].low_c == 24
+    assert report.forecasts[0].high_c == 31
+
+
+def test_amap_provider_normalizes_transit_routes_between_verified_pois():
+    async def handler(request: httpx.Request):
+        assert request.url.path == "/v5/direction/transit/integrated"
+        assert request.url.params["city1"] == "0571"
+        assert request.url.params["city2"] == "0571"
+        return httpx.Response(200, json={
+            "status": "1",
+            "route": {"transits": [{
+                "distance": "12800",
+                "cost": {"duration": "2520", "transit_fee": "6"},
+                "segments": [{
+                    "bus": {"buslines": [{"name": "地铁5号线"}, {"name": "地铁19号线"}]},
+                }],
+            }]},
+        })
+
+    destination = _place("P2", "杭州东站").model_copy(update={
+        "location": GeoPoint(lng=120.212, lat=30.291),
+    })
+    client = httpx.AsyncClient(
+        base_url="https://restapi.amap.com", transport=httpx.MockTransport(handler),
+    )
+    provider = AMapProvider(config={
+        "enabled": True, "api_key": "test-key", "base_url": "https://restapi.amap.com",
+        "timeout_sec": 1,
+    }, client=client)
+    try:
+        plan = asyncio.run(provider.transit_routes(_place(), destination))
+    finally:
+        asyncio.run(client.aclose())
+
+    assert len(plan.options) == 1
+    assert plan.options[0].duration_sec == 2520
+    assert plan.options[0].transit_fee_cny == 6
+    assert plan.options[0].lines == ["地铁5号线", "地铁19号线"]
+
+
 def test_place_agent_uses_trip_work_location_and_returns_three_hotels():
     class FakeService:
         configured = True

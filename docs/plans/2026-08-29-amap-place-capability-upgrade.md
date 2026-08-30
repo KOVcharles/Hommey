@@ -1,4 +1,4 @@
-# 高德地点与附近酒店通用能力升级设计
+# 高德地点、天气与市内路线通用能力升级设计
 
 > 日期：2026-08-29
 > 状态：实施中
@@ -16,6 +16,12 @@
 6. 第一版返回综合排序前三家酒店。
 7. 高德 `cost` 只能展示为“高德参考消费”，不能称为指定日期实时房价；缺失时显示
    “价格待确认”，不得由模型补造。
+8. 中国大陆天气使用高德 Web 服务作为主数据源，海外、未配置 Key 或供应商不可用时使用
+   Open-Meteo 降级；移除对 `wttr.in` 的主链路依赖。
+9. 市内路线只在起终点均为服务端可核验的明确 POI 时调用高德路径规划 2.0。仅有出发城市和
+   目的城市时，不得猜测城市中心坐标生成伪精确路线。
+10. 高德不替代 12306 车次余票、航班动态、机票价格或酒店实时库存，这些能力继续由各自
+    专用供应商或受限公共信息降级链路承担。
 
 ## 2. 设计边界
 
@@ -38,10 +44,13 @@
 现有 Goal 与 Workflow
           │
           ▼
-place_information 内部执行 Agent
+place_information / query-info
           │
           ▼
-PlaceInformationService → AMapProvider
+PlaceInformationService / TravelInformationService
+          │
+          ▼
+AMapProvider → Open-Meteo（仅天气降级）
 ```
 
 `place_information` 是内部执行 Agent，不是用户 intent，也不创建独立 Goal。它执行时继承
@@ -58,10 +67,24 @@ PlaceInformationService → AMapProvider
 | `nearby_hotels` | 围绕已确认工作地点搜索酒店 | 完整差旅且存在明确工作地点时默认启用 |
 | `route_distance` | 获取候选酒店到工作地点的距离 | 第一版以高德周边搜索距离为准 |
 
-现有 `weather`、`local_transport` 和 `train` 保持不变。能力选择继续复用
-`CapabilitySelection.include/exclude`，不增加第二套布尔选择协议。
+`weather` 和 `local_transport` 的 capability 名称保持不变，但内部数据源升级为共享高德
+服务；`train` 保持独立。能力选择继续复用 `CapabilitySelection.include/exclude`，不增加
+第二套布尔选择协议。
 
-### 3.2 规范化地点
+### 3.2 天气与市内路线规范
+
+`query-info` 通过 `TravelInformationService` 使用同一个服务端高德 Web 服务 Key：
+
+- 天气先把中国大陆城市解析为 `adcode`，分别获取实况和短期预报，保留高德返回的
+  `reporttime` 与规范化结构；
+- 高德未配置、城市无法在中国大陆解析或请求失败时，天气降级到 Open-Meteo；
+- 普通对话中形如“上海虹桥站到静安寺怎么走”的请求，只有起终点均能唯一核验为 POI 时
+  才查询公交路线，最多返回三个方案；
+- 完整差旅只有“北京→上海”这类城市级起终点时，继续查询公开航班/接驳信息，不把城市
+  中心当作真实出发点或到达点；
+- 公交耗时、路线和参考票价都标注为动态公开信息，出发前需再次核验。
+
+### 3.3 规范化地点
 
 ```json
 {
@@ -84,7 +107,7 @@ PlaceInformationService → AMapProvider
 浏览器提交的 `verified` 和坐标不构成信任。服务端必须使用 POI ID 或结构化地址重新查询，
 并用服务端响应重建规范化地点。
 
-### 3.3 规范化酒店结果
+### 3.4 规范化酒店结果
 
 ```json
 {
@@ -219,6 +242,9 @@ PlaceInformationService → AMapProvider
 至少覆盖：
 
 - 普通天气查询不触发酒店查询；
+- 中国大陆天气优先使用高德，未配置或海外城市降级到 Open-Meteo；
+- 明确 POI 间路线使用高德路径规划，城市级跨城行程不猜测路线端点；
+- 市内路线回答不得误显示为“目的地天气”；
 - “某地点附近酒店”只触发地点能力；
 - 完整差旅含明确工作地点时自动查询酒店；
 - 没有工作地点时不以城市中心伪造附近酒店；

@@ -1,6 +1,16 @@
 """Provider-neutral place information capability."""
 
-from .models import GeoPoint, HotelCandidate, ReferenceCost, VerifiedPlace
+from .models import (
+    GeoPoint,
+    HotelCandidate,
+    ReferenceCost,
+    TransitRouteOption,
+    TransitRoutePlan,
+    VerifiedPlace,
+    WeatherCurrent,
+    WeatherForecastDay,
+    WeatherReport,
+)
 from .service import PlaceInformationService
 
 __all__ = [
@@ -8,5 +18,10 @@ __all__ = [
     "HotelCandidate",
     "PlaceInformationService",
     "ReferenceCost",
+    "TransitRouteOption",
+    "TransitRoutePlan",
     "VerifiedPlace",
+    "WeatherCurrent",
+    "WeatherForecastDay",
+    "WeatherReport",
 ]

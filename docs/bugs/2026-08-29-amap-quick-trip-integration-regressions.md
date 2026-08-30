@@ -1,7 +1,7 @@
 # 高德地点能力与快速差旅接入回归记录
 
-> 编号：BUG-2026-08-29-01 / BUG-2026-08-29-02 / BUG-2026-08-29-03
-> 发现日期：2026-08-29
+> 编号：BUG-2026-08-29-01 / BUG-2026-08-29-02 / BUG-2026-08-29-03 / BUG-2026-08-30-04 / BUG-2026-08-30-05 / BUG-2026-08-30-06
+> 发现日期：2026-08-29 至 2026-08-30
 > 状态：均已修复并加入回归测试
 
 ## 1. Capability 扩展导致 Goal 查询失去作用域
@@ -64,7 +64,58 @@
 否定继续写入 exclude。`test_standalone_hotel_opt_out_does_not_reinclude_from_keyword_match`
 直接覆盖了地点关键词与否定词同时出现的路径。
 
-## 4. 非产品故障
+## 4. 市内路线结果被错误标记为天气
+
+### 现象
+
+`query-info` 的声明式回答类型原本固定为 `weather`。单独查询“上海虹桥站到静安寺怎么走”时，
+即使执行节点返回了正确的高德公交路线，fallback composer 仍会把结果放进标题为“目的地天气”
+的卡片。
+
+### 根因
+
+同一个 `information_query` capability 同时承载天气和公开交通，但旧的 fallback 渲染只根据
+intent 的静态 `section_kind` 选择卡片，没有检查已规范化结果中的 `query_type` 和 `route`。
+
+### 修复与验证
+
+不增加用户 intent 或回答协议类型。仅当 `information_query` 明确返回 `query_type=市内交通`
+或结构化 `route` 时，确定性渲染为“市内交通”通用区块；天气仍沿用现有天气卡。新增
+`test_amap_transit_result_is_not_mislabeled_as_weather` 覆盖该路径。
+
+## 5. 新路线工具名导致 Skill 清单校验失败
+
+### 现象
+
+为 `query-info` 增加高德路径规划后，初版清单把工具声明为新的 `route_planning`。SkillLoader
+在应用启动和测试收集阶段拒绝该值，所有依赖 Skill 目录的模块均无法加载。
+
+### 根因
+
+本次实现只升级了 `travel_information` 的内部 provider，并没有增加新的平台级工具类型。清单
+却越过现有 `ToolName` 枚举声明了新类型，破坏了启动期的严格配置校验。
+
+### 修复与验证
+
+继续使用既有 `travel_information` 工具标识，由 `query-info` 内部选择天气、路线或公共信息
+provider，不扩展平台工具协议。`test_skill_catalog_derived.py`、`test_skill_platform.py` 和
+`test_skill_registry.py` 覆盖清单解析与注册链路。
+
+## 6. 海外天气降级沿用中国时区
+
+### 现象与根因
+
+Open-Meteo 原降级实现只覆盖内置中国城市，经纬度查询固定使用 `Asia/Shanghai`。升级为支持
+海外城市动态地理编码后，如果继续沿用该参数，海外逐日预报的日期边界会按中国时区计算，
+不符合目的地当地日期。
+
+### 修复与验证
+
+Open-Meteo 降级请求改为 `timezone=auto`，让供应商按解析后的目的地坐标选择当地时区。
+`test_open_meteo_fallback_geocodes_overseas_city_in_local_timezone` 覆盖海外地理编码、当地时区
+参数和天气结果生成。
+
+## 7. 非产品故障
 
 本地首次收集 WebUI 测试时，环境文件中的 PostgreSQL DSN 占位值造成连接池超时。切换到
 测试用本地 RAG/记忆后端后测试正常。该问题属于测试运行配置，不是本次功能产生的产品

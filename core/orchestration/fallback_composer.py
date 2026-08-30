@@ -357,6 +357,8 @@ class FallbackComposer:
     def _render(cls, kind: str, result: TaskResult) -> List[AnswerSection]:
         if result.agent_name == "place_information":
             return [cls._place_section(result)]
+        if result.agent_name == "information_query" and cls._has_public_transport_route(result):
+            return [cls._public_transport_section(result)]
         renderer = {
             "policy": cls._policy_section,
             "weather": cls._weather_section,
@@ -373,6 +375,23 @@ class FallbackComposer:
         if isinstance(built, AnswerSection):
             return [built]
         return built or []
+
+    @staticmethod
+    def _has_public_transport_route(result: TaskResult) -> bool:
+        data = _nested(result.data)
+        payload = data.get("results") if isinstance(data.get("results"), dict) else data
+        return bool(data.get("query_type") == "市内交通" or payload.get("route"))
+
+    @staticmethod
+    def _public_transport_section(result: TaskResult) -> AnswerSection:
+        data = _nested(result.data)
+        payload = data.get("results") if isinstance(data.get("results"), dict) else data
+        summary = _clean(payload.get("summary") or payload.get("message") or "已取得市内交通信息。")
+        return AnswerSection(
+            kind="general",
+            title="市内交通",
+            body=summary,
+        )
 
     @staticmethod
     def _place_section(result: TaskResult) -> AnswerSection:
