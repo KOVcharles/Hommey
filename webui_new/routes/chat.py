@@ -27,11 +27,13 @@ from webui_new.core.errors import (
     stream_error_event,
 )
 from webui_new.schemas.requests import ChatRequest, InterruptRequest, SessionRenameRequest
+from webui_new.quick_trip import build_quick_trip_message
+from core.integrations.places.amap import AMapError
 
 logger = logging.getLogger(__name__)
 
 
-def create_chat_router(manager):
+def create_chat_router(manager, place_service=None):
     """创建聊天 router；manager 由 server.py 注入，避免反向 import server。"""
     router = APIRouter()
 
@@ -45,21 +47,26 @@ def create_chat_router(manager):
         由 manager.process_message 内部懒初始化。会话列表等不走统一入口的路由
         仍保留预检查。
         """
-        if not data.message.strip() and not data.attachment_ids:
+        if not data.message.strip() and not data.attachment_ids and data.trip_input is None:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
 
         try:
+            message, structured_trip_input, _capability_selection = await _prepare_chat_input(
+                data, place_service
+            )
             rid = request_id(request)
-            logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(data.message))
+            logger.info("[%s] ➤ %s", user_id, redact_sensitive_text(message))
             kwargs = {
                 "request_id": rid,
                 "attachment_ids": data.attachment_ids,
             }
+            if structured_trip_input is not None:
+                kwargs["structured_trip_input"] = structured_trip_input
             if data.session_id:
                 kwargs["session_id"] = data.session_id
             if data.retrieval_mode == "enhanced":
                 kwargs["retrieval_mode"] = "enhanced"
-            result = await manager.process_message(user_id, data.message, **kwargs)
+            result = await manager.process_message(user_id, message, **kwargs)
             safe_response = redact_sensitive_text(result.get("response", ""))
             logger.info("[%s] ◀ %s...", user_id, safe_response[:80])
             return result
@@ -78,8 +85,12 @@ def create_chat_router(manager):
         不做 NOT_INITIALIZED 预检查：未初始化/跨 worker（实例在另一 worker）时
         由 manager.stream_message 内部懒初始化。
         """
-        if not data.message.strip() and not data.attachment_ids:
+        if not data.message.strip() and not data.attachment_ids and data.trip_input is None:
             raise BusinessError("EMPTY_MESSAGE", "请输入消息或添加附件")
+
+        message, structured_trip_input, _capability_selection = await _prepare_chat_input(
+            data, place_service
+        )
 
         async def event_stream():
             """把 manager.stream_message() 的事件逐行编码为 NDJSON。
@@ -89,16 +100,18 @@ def create_chat_router(manager):
             """
             started_at = time.perf_counter()
             try:
-                logger.info("[%s] -> %s", user_id, redact_sensitive_text(data.message))
+                logger.info("[%s] -> %s", user_id, redact_sensitive_text(message))
                 kwargs = {
                     "request_id": request_id(request),
                     "attachment_ids": data.attachment_ids,
                 }
+                if structured_trip_input is not None:
+                    kwargs["structured_trip_input"] = structured_trip_input
                 if data.session_id:
                     kwargs["session_id"] = data.session_id
                 if data.retrieval_mode == "enhanced":
                     kwargs["retrieval_mode"] = "enhanced"
-                async for event in manager.stream_message(user_id, data.message, **kwargs):
+                async for event in manager.stream_message(user_id, message, **kwargs):
                     yield json.dumps(event, ensure_ascii=False) + "\n"
             except asyncio.CancelledError:
                 duration_ms = int((time.perf_counter() - started_at) * 1000)
@@ -233,3 +246,26 @@ def create_chat_router(manager):
         return intent_api_payload()
 
     return router
+
+
+async def _prepare_chat_input(data: ChatRequest, place_service):
+    """Verify provider-backed form locations and build the normal user utterance."""
+    if data.input_source != "quick_trip_form" or data.trip_input is None:
+        return data.message, None, None
+    trip_input = data.trip_input.model_dump(mode="json")
+    if trip_input.get("work_location_place_id"):
+        if place_service is None or not place_service.configured:
+            raise BusinessError("PLACE_SERVICE_NOT_CONFIGURED", "地点服务尚未配置，请联系管理员")
+        try:
+            verified = await place_service.verify(trip_input["work_location_place_id"])
+        except AMapError as exc:
+            raise BusinessError("PLACE_VERIFICATION_FAILED", "工作地点校验失败，请重新选择") from exc
+        if verified is None:
+            raise BusinessError("PLACE_NOT_FOUND", "工作地点已失效，请重新选择")
+        trip_input["work_location"] = verified.name
+        trip_input["work_location_verified"] = verified.model_dump(mode="json")
+    selection = (
+        data.capability_selection.model_dump(mode="json")
+        if data.capability_selection is not None else {"include": ["nearby_hotels"], "exclude": []}
+    )
+    return build_quick_trip_message(trip_input, selection), trip_input, selection

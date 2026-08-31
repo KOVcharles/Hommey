@@ -42,18 +42,48 @@ def test_weather_opt_out_keeps_transport_and_mandatory_steps():
 
 
 def test_all_optional_facets_can_be_removed_without_disabling_policy_or_compliance():
-    query = "详细规划南京出差，不要天气和市内交通，也不用查高铁、政策和合规"
+    query = "详细规划南京出差，不要天气和市内交通，也不用查高铁和附近酒店、政策和合规"
     task = apply_capability_selection([_plan(query)], query)[0]
 
     nodes = TaskGraphBuilder().compile([task])
     agents = {node.agent_name for node in nodes}
 
     assert set(task.capability_selection.exclude) == {
-        "weather", "local_transport", "train",
+        "weather", "local_transport", "train", "nearby_hotels",
     }
     assert "information_query" not in agents
     assert "train_query" not in agents
+    assert "place_information" not in agents
     assert {"event_collection", "rag_knowledge", "itinerary_planning", "trip_compliance"} <= agents
+
+
+def test_explicit_work_location_keeps_nearby_hotel_capability_enabled():
+    query = "规划南京出差，工作地点是南京国际博览中心"
+    plan = _plan(query)
+    plan.entities["work_location"] = "南京国际博览中心"
+
+    task = apply_capability_selection([plan], query)[0]
+    nodes = TaskGraphBuilder().compile([task])
+    place = next(node for node in nodes if node.agent_name == "place_information")
+
+    assert "nearby_hotels" not in task.capability_selection.exclude
+    assert place.capabilities == ["nearby_hotels"]
+    assert place.failure_policy == "continue"
+
+
+def test_standalone_hotel_opt_out_does_not_reinclude_from_keyword_match():
+    query = "不要查附近酒店，只看南京天气"
+    info = IntentTask(
+        task_id="information_query", intent="information_query",
+        query=query, entities={"destination": "南京"},
+    )
+
+    task = apply_capability_selection([info], query)[0]
+    agents = {node.agent_name for node in TaskGraphBuilder().compile([task])}
+
+    assert "nearby_hotels" not in task.capability_selection.include
+    assert "nearby_hotels" in task.capability_selection.exclude
+    assert "place_information" not in agents
 
 
 def test_different_destination_standalone_weather_is_not_a_plan_dependency():
@@ -184,6 +214,20 @@ def test_query_info_skips_weather_call_but_keeps_local_transport():
     assert calls == ["local_transport"]
     assert "weather" not in result["results"]
     assert result["results"]["transport"]["summary"] == "建议地铁接驳"
+
+
+def test_standalone_hotel_query_selects_place_capability():
+    query = "阿里巴巴西溪园区附近有哪些酒店？"
+    task = IntentTask(
+        task_id="information_query", intent="information_query", query=query,
+    )
+
+    selected = apply_capability_selection([task], query)[0]
+    nodes = TaskGraphBuilder().compile([selected])
+    place = next(node for node in nodes if node.agent_name == "place_information")
+
+    assert selected.capability_selection.include == ["place_search", "nearby_hotels"]
+    assert place.capabilities == ["place_search", "nearby_hotels"]
 
 
 def test_itinerary_planner_keeps_repeated_agent_facets_for_fusion():

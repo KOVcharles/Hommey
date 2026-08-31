@@ -1,0 +1,12 @@
+version: 1.0.0
+display_name: 地点与附近酒店
+category: capability
+agent_name: place_information
+entrypoint: script/agent.py
+user_facing: false
+intent_exposed: false
+enabled_by_default: true
+risk_level: medium
+catalog_order: 65
+progress_key: place_information_searching
+tools: [place_search]

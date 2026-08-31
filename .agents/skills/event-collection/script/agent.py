@@ -58,20 +58,25 @@ class EventCollectionAgent(AgentBase):
                 user_preferences = context.get("user_preferences", {}) or {}
                 active_trip = context.get("active_trip") or {}
                 recent_dialogue = context.get("recent_dialogue") or []
+                structured_trip_input = context.get("structured_trip_input") or {}
             except json.JSONDecodeError:
                 user_query = content
                 user_preferences = {}
                 active_trip = {}
                 recent_dialogue = []
+                structured_trip_input = {}
         else:
             user_query = str(content)
             user_preferences = {}
             active_trip = {}
             recent_dialogue = []
+            structured_trip_input = {}
 
         # 当前任务和当前会话是已确认事实；偏好/显式引用的历史只能产生待确认候选。
         background_info = ""
         trusted_location_sources = [user_query]
+        if structured_trip_input:
+            trusted_location_sources.append(json.dumps(structured_trip_input, ensure_ascii=False))
         if active_trip:
             background_info += "【当前出差任务】（在此基础上增量更新）\n"
             background_info += json.dumps(active_trip, ensure_ascii=False, indent=2) + "\n\n"
@@ -211,6 +216,17 @@ class EventCollectionAgent(AgentBase):
                 "extracted_count": 0,
                 "error": str(e)
             }
+
+        # 结构化表单值已由 API schema 校验，地点也按 POI ID 复验；它们是
+        # 本轮最高优先级的事实源，避免模型改写或遗漏明确字段。
+        for key in (
+            "origin", "destination", "start_date", "end_date", "duration_days",
+            "return_location", "trip_purpose", "work_location", "work_schedule",
+            "work_location_verified",
+        ):
+            value = structured_trip_input.get(key)
+            if value not in (None, ""):
+                result[key] = value
 
         # LLM只提取候选事实；来源校验和是否可规划均由确定性规则计算。
         rejected_locations = remove_ungrounded_trip_locations(result, trusted_location_sources)

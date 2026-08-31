@@ -39,6 +39,8 @@ from webui_new.routes.users import create_users_router
 from webui_new.auth.migrations import apply_all_migrations
 from webui_new.routes.skill_admin import create_skill_admin_router
 from webui_new.routes.knowledge_base import create_knowledge_base_router
+from webui_new.routes.places import create_places_router
+from core.integrations.places.service import PlaceInformationService
 from webui_new.knowledge_base_service import KnowledgeBaseManagementService
 from webui_new.skill_platform import SkillPlatformService
 from context.postgres_pool import close_all_postgres_pools
@@ -66,6 +68,7 @@ async def lifespan(_app):
 app = FastAPI(title="Hommey 商旅助手", version="3.0.0", lifespan=lifespan)
 manager = WebHommeyManager()
 skill_platform = SkillPlatformService()
+place_service = PlaceInformationService()
 
 # 多模态附件服务（与 runtime 共享同一单例：路由用于上传，manager 用于 normalize/绑定）。
 from runtime import get_shared_attachment_service  # noqa: E402
@@ -97,7 +100,8 @@ app.include_router(create_pages_router(_render))
 app.include_router(create_auth_router())
 app.include_router(create_users_router(manager))
 app.include_router(create_onboarding_router(manager))
-app.include_router(create_chat_router(manager))
+app.include_router(create_chat_router(manager, place_service))
+app.include_router(create_places_router(place_service))
 app.include_router(create_attachments_router(attachment_service))
 app.include_router(create_asr_router())
 app.include_router(create_skill_admin_router(skill_platform))

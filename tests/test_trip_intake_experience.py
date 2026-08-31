@@ -296,7 +296,7 @@ def test_frontend_has_non_cyclic_user_bubble_and_typed_renderer():
     assert "step.panel.inert = !expanded" in card
     assert "aria-controls" in card
     assert "trip-intake-step-summary" in card
-    assert template.count('src="/static/app.js?v=20260813-interactive-route-v4"') == 1
+    assert template.count('src="/static/app.js?v=20260829-quick-trip-v1"') == 1
     assert 'id="knowledgeAdminActions"' in template
     assert 'aria-label="知识库管理" hidden' in template
     assert "knowledgeUploadButton" in template

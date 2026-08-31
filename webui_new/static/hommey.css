@@ -382,6 +382,19 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     align-items: center;
     gap: 6px;
 }
+.quick-trip-trigger {
+    min-height: 30px;
+    padding: 0 10px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink-2);
+    background: transparent;
+    font-size: 11px;
+    font-weight: 560;
+    white-space: nowrap;
+    transition: color .18s ease, background .18s ease, border-color .18s ease;
+}
+.quick-trip-trigger:hover { color: var(--ink); background: var(--soft); border-color: var(--line-2); }
 .retrieval-mode-control { position: relative; }
 .retrieval-mode-trigger {
     height: 34px;
@@ -1028,6 +1041,69 @@ html[data-theme="dark"] .msg-avatar.ai {
     transition: transform .32s var(--ease);
 }
 .modal-layer.open .attachments-modal { transform: none; }
+.quick-trip-modal {
+    overflow: hidden;
+    width: min(660px, 100%);
+    max-height: min(820px, calc(100vh - 40px));
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    background: var(--panel);
+    box-shadow: var(--shadow-3);
+    transform: translateY(12px) scale(.985);
+    transition: transform .32s var(--ease);
+    display: flex;
+    flex-direction: column;
+}
+.modal-layer.open .quick-trip-modal { transform: none; }
+.quick-trip-modal .modal-head > div { min-width: 0; }
+.quick-trip-modal .modal-head p { margin: 4px 0 0; color: var(--ink-3); font-size: 10px; }
+.quick-trip-body { padding: 18px 21px; overflow: auto; }
+.quick-trip-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 13px; }
+.quick-trip-field { position: relative; display: flex; flex-direction: column; gap: 7px; margin-bottom: 13px; }
+.quick-trip-field > span, .quick-trip-capabilities legend { color: var(--ink-2); font-size: 11px; font-weight: 570; }
+.quick-trip-field > span small { margin-left: 5px; color: var(--ink-3); font-size: 9px; font-weight: 450; }
+.quick-trip-field input {
+    width: 100%;
+    height: 42px;
+    padding: 0 11px;
+    border: 1px solid var(--line);
+    border-radius: 11px;
+    outline: none;
+    color: var(--ink);
+    background: var(--soft);
+    font-size: 12px;
+    transition: border-color .18s ease, box-shadow .18s ease;
+}
+.quick-trip-field input:focus { border-color: var(--line-2); box-shadow: 0 0 0 3px color-mix(in srgb, var(--sage) 16%, transparent); }
+.quick-trip-help { margin-top: -2px; color: var(--ink-3); font-size: 9px; line-height: 1.5; }
+.quick-trip-help.is-error { color: var(--danger); }
+.quick-trip-help.is-verified { color: var(--sage); }
+.place-suggestions {
+    position: absolute;
+    z-index: 3;
+    top: 67px;
+    right: 0;
+    left: 0;
+    max-height: 230px;
+    padding: 5px;
+    overflow: auto;
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    background: var(--panel);
+    box-shadow: var(--shadow-2);
+}
+.place-suggestion { width: 100%; padding: 9px; border-radius: 9px; background: transparent; text-align: left; }
+.place-suggestion:hover, .place-suggestion:focus { background: var(--soft); }
+.place-suggestion strong { display: block; color: var(--ink); font-size: 11px; font-weight: 600; }
+.place-suggestion small { display: block; margin-top: 3px; color: var(--ink-3); font-size: 9px; line-height: 1.4; }
+.place-suggestions-empty { padding: 14px 9px; color: var(--ink-3); font-size: 10px; text-align: center; }
+.quick-trip-capabilities { margin: 2px 0 0; padding: 0; border: 0; display: flex; flex-wrap: wrap; gap: 8px; }
+.quick-trip-capabilities legend { margin-bottom: 8px; }
+.quick-trip-capabilities label { display: inline-flex; align-items: center; gap: 6px; padding: 7px 10px; border: 1px solid var(--line); border-radius: 999px; color: var(--ink-2); font-size: 10px; cursor: pointer; }
+.quick-trip-capabilities input { accent-color: var(--sage); }
+.quick-trip-actions { min-height: 66px; padding: 12px 21px; border-top: 1px solid var(--line); display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.quick-trip-actions > span { color: var(--ink-3); font-size: 9px; }
+.quick-trip-actions > div { display: flex; gap: 8px; }
 .attachments-list {
     flex: 1;
     padding: 10px;
@@ -1457,6 +1533,9 @@ html[data-motion="off"] *::after {
     .chat-composer-shell { width: calc(100% - 26px); padding-right: 0; padding-left: 0; }
     .sidebar { top: 6px; bottom: 6px; left: 6px; width: min(286px, calc(100vw - 12px)); }
     .modal-layer { padding: 10px; }
+    .quick-trip-grid { grid-template-columns: 1fr; gap: 0; }
+    .quick-trip-trigger { padding: 0 8px; font-size: 10px; }
+    .quick-trip-actions { align-items: flex-end; }
     .settings-body { padding: 13px; }
     .auth-page { grid-template-columns: 1fr; }
     .auth-visual { display: none; }
