@@ -230,6 +230,8 @@ def test_exact_nanjing_weather_policy_plan_survives_intake_resume(tmp_path):
                 "query_success": True,
                 "results": {"summary": "G1次可作为候选，出发前通过12306核验", "trains": []},
             }}
+        if agent == "place_information":
+            return {"status": "success", "data": {"query_success": True, "skipped": True}}
         if agent == "itinerary_planning":
             return {"status": "success", "data": {"itinerary": {
                 "title": "南京一日出差详细计划",

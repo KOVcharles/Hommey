@@ -151,6 +151,7 @@ def test_trip_only_routes_to_event_collection_then_itinerary_planning():
         ("rag_knowledge", 2),
         ("information_query", 2),
         ("train_query", 2),
+        ("place_information", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]
@@ -199,6 +200,7 @@ def test_low_confidence_intent_is_filtered_per_intent():
         ("rag_knowledge", 2),
         ("information_query", 2),
         ("train_query", 2),
+        ("place_information", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]

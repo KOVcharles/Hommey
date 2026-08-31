@@ -355,6 +355,10 @@ class FallbackComposer:
 
     @classmethod
     def _render(cls, kind: str, result: TaskResult) -> List[AnswerSection]:
+        if result.agent_name == "place_information":
+            return [cls._place_section(result)]
+        if result.agent_name == "information_query" and cls._has_public_transport_route(result):
+            return [cls._public_transport_section(result)]
         renderer = {
             "policy": cls._policy_section,
             "weather": cls._weather_section,
@@ -371,6 +375,58 @@ class FallbackComposer:
         if isinstance(built, AnswerSection):
             return [built]
         return built or []
+
+    @staticmethod
+    def _has_public_transport_route(result: TaskResult) -> bool:
+        data = _nested(result.data)
+        payload = data.get("results") if isinstance(data.get("results"), dict) else data
+        return bool(data.get("query_type") == "市内交通" or payload.get("route"))
+
+    @staticmethod
+    def _public_transport_section(result: TaskResult) -> AnswerSection:
+        data = _nested(result.data)
+        payload = data.get("results") if isinstance(data.get("results"), dict) else data
+        summary = _clean(payload.get("summary") or payload.get("message") or "已取得市内交通信息。")
+        return AnswerSection(
+            kind="general",
+            title="市内交通",
+            body=summary,
+        )
+
+    @staticmethod
+    def _place_section(result: TaskResult) -> AnswerSection:
+        data = _nested(result.data)
+        payload = data.get("results") if isinstance(data.get("results"), dict) else data
+        items = []
+        for hotel in payload.get("hotels") or []:
+            if not isinstance(hotel, dict) or not hotel.get("name"):
+                continue
+            facts = []
+            if hotel.get("distance_m") not in (None, ""):
+                facts.append(f"距工作地点约{hotel['distance_m']}米")
+            if hotel.get("rating") not in (None, ""):
+                facts.append(f"评分{hotel['rating']}")
+            reference = hotel.get("reference_cost")
+            if isinstance(reference, dict) and reference.get("amount"):
+                facts.append(f"高德参考消费约{reference['amount']}元")
+            else:
+                facts.append("价格待确认")
+            items.append(AnswerItem(
+                label=_clean(hotel.get("name"), 60),
+                value=" · ".join(facts),
+                detail=_clean(hotel.get("address"), 600),
+            ))
+        body = _clean(payload.get("message") or payload.get("summary") or "", 1000)
+        notice = _clean(payload.get("price_notice") or "", 400)
+        if notice and notice not in body:
+            body = " ".join(value for value in (body, notice) if value)
+        return AnswerSection(
+            kind="weather",
+            title="附近酒店",
+            status="partial" if data.get("needs_confirmation") else "success",
+            body=body if not items else notice,
+            items=items,
+        )
 
     @staticmethod
     def _policy_section(result: TaskResult) -> AnswerSection:
@@ -521,6 +577,24 @@ class FallbackComposer:
             _item("住宿建议", itinerary.get("lodging_advice")),
             _item("预算参考", itinerary.get("estimated_budget")),
         ]))
+        for hotel in itinerary.get("hotel_recommendations") or []:
+            if not isinstance(hotel, dict) or not hotel.get("name"):
+                continue
+            facts = []
+            if hotel.get("distance_m") not in (None, ""):
+                facts.append(f"距工作地点约{hotel['distance_m']}米")
+            if hotel.get("rating") not in (None, ""):
+                facts.append(f"评分{hotel['rating']}")
+            reference = hotel.get("reference_cost")
+            if isinstance(reference, dict) and reference.get("amount"):
+                facts.append(f"高德参考消费约{reference['amount']}元")
+            else:
+                facts.append("价格待确认")
+            items.append(AnswerItem(
+                label=_clean(hotel.get("name"), 60),
+                value=" · ".join(facts),
+                detail=_clean(hotel.get("address"), 600),
+            ))
         title = _clean(itinerary.get("title") or "行程安排", 80)
         sections = [AnswerSection(kind="trip", title=title, items=[item for item in items if item])]
 

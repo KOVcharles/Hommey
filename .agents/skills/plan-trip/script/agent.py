@@ -106,6 +106,37 @@ def normalize_planning_result(result: Dict[str, Any]) -> Dict[str, Any]:
     return result
 
 
+def attach_verified_hotels(result: Dict[str, Any], all_info: Dict[str, Any]) -> Dict[str, Any]:
+    """Attach provider facts after model parsing so hotel facts stay grounded."""
+    itinerary = result.get("itinerary") if isinstance(result.get("itinerary"), dict) else None
+    place_data = all_info.get("place_information")
+    place_results = place_data.get("results") if isinstance(place_data, dict) else None
+    hotels = place_results.get("hotels") if isinstance(place_results, dict) else None
+    if itinerary is None or not isinstance(hotels, list):
+        return result
+    normalized = []
+    for hotel in hotels[:3]:
+        if not isinstance(hotel, dict) or not hotel.get("name"):
+            continue
+        normalized.append({
+            key: hotel.get(key)
+            for key in (
+                "provider_place_id", "name", "address", "district", "business_area",
+                "distance_m", "rating", "reference_cost", "price_status", "source",
+                "retrieved_at",
+            )
+            if hotel.get(key) not in (None, "")
+        })
+    if normalized:
+        itinerary["hotel_recommendations"] = normalized
+        notices = itinerary.setdefault("notes", [])
+        if isinstance(notices, list):
+            boundary = "酒店消费为高德参考消费，不是指定日期实时房价或可订库存，请通过差旅平台确认。"
+            if boundary not in notices:
+                notices.append(boundary)
+    return result
+
+
 class ItineraryPlanningAgent(AgentBase):
     """
     行程规划智能体（主协调）
@@ -277,6 +308,7 @@ class ItineraryPlanningAgent(AgentBase):
             if result is None:
                 raise ValueError("Parsed result is None")
             result = normalize_planning_result(result)
+            result = attach_verified_hotels(result, all_info)
 
         except ExecutionLimitExceeded:
             raise

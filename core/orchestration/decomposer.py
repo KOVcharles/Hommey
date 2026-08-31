@@ -122,7 +122,12 @@ class TaskDecomposer:
     def _task_query(cls, intent: str, entities: Dict[str, Any], original_query: str) -> str:
         """单步意图渲染首个执行步骤的 scoped query；无模板或工作流则退回原始问题。"""
         steps = execution_steps_for_intent(intent)
-        if len(steps) > 1:
+        # A workflow Goal keeps the full user request because its child steps
+        # need different slices. A capability may also expand to parallel
+        # provider nodes (for example weather + place search); its Goal query
+        # still uses the first scoped template so policy terms from sibling
+        # Goals do not leak into scope validation.
+        if len(steps) > 1 and intent == "itinerary_planning":
             return original_query
         if steps:
             template = steps[0].query

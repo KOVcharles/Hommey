@@ -97,6 +97,7 @@
                         <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
                         </button>
+                        <button class="quick-trip-trigger" type="button" data-quick-trip-open aria-label="快速差旅" title="快速填写差旅信息">快速差旅</button>
                         <span class="composer-spacer"></span>
                         <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -150,6 +151,7 @@
                         <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
                         </button>
+                        <button class="quick-trip-trigger" type="button" data-quick-trip-open aria-label="快速差旅" title="快速填写差旅信息">快速差旅</button>
                         <span class="composer-spacer"></span>
                         <button id="sendBtn" class="send-button" type="button" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -413,9 +415,54 @@
         </div>
     </section>
 
+    <section id="quickTripLayer" class="modal-layer" aria-label="快速差旅">
+        <form id="quickTripForm" class="quick-trip-modal">
+            <header class="modal-head">
+                <div>
+                    <h2>快速差旅</h2>
+                    <p>填写明确事实，仍由完整差旅流程规划与核验。</p>
+                </div>
+                <button class="icon-button" type="button" data-close-layer="quickTripLayer" aria-label="关闭">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
+                </button>
+            </header>
+            <div class="quick-trip-body">
+                <div class="quick-trip-grid">
+                    <label class="quick-trip-field"><span>出发地</span><input id="quickTripOrigin" name="origin" type="text" maxlength="100" placeholder="例如：上海" required></label>
+                    <label class="quick-trip-field"><span>目的地</span><input id="quickTripDestination" name="destination" type="text" maxlength="100" placeholder="例如：杭州" required></label>
+                    <label class="quick-trip-field"><span>出发日期</span><input id="quickTripStartDate" name="start_date" type="date" required></label>
+                    <label class="quick-trip-field"><span>返程日期</span><input id="quickTripEndDate" name="end_date" type="date" required></label>
+                </div>
+                <label class="quick-trip-field"><span>出差目的</span><input id="quickTripPurpose" name="trip_purpose" type="text" maxlength="300" placeholder="例如：客户拜访" required></label>
+                <div class="quick-trip-field place-picker">
+                    <span>会议 / 客户地点 <small>选填，输入后需选择高德地点</small></span>
+                    <input id="quickTripWorkLocation" type="text" maxlength="200" autocomplete="off" placeholder="搜索园区、写字楼、客户地址" aria-autocomplete="list" aria-controls="quickTripPlaceSuggestions">
+                    <input id="quickTripWorkLocationId" type="hidden">
+                    <div id="quickTripPlaceSuggestions" class="place-suggestions" role="listbox" hidden></div>
+                    <small id="quickTripPlaceStatus" class="quick-trip-help">选择后将默认查询附近前三家酒店；价格为高德参考消费。</small>
+                </div>
+                <label class="quick-trip-field"><span>地点备注 <small>选填</small></span><input id="quickTripWorkNote" type="text" maxlength="300" placeholder="例如：访客中心 3 楼"></label>
+                <fieldset class="quick-trip-capabilities">
+                    <legend>本次查询内容</legend>
+                    <label><input type="checkbox" name="quick_capability" value="weather" checked><span>天气</span></label>
+                    <label><input type="checkbox" name="quick_capability" value="local_transport" checked><span>市内交通</span></label>
+                    <label><input type="checkbox" name="quick_capability" value="train" checked><span>高铁车次</span></label>
+                    <label><input type="checkbox" name="quick_capability" value="nearby_hotels" checked><span>附近酒店</span></label>
+                </fieldset>
+            </div>
+            <footer class="quick-trip-actions">
+                <span>中国大陆地点 · 高德数据</span>
+                <div>
+                    <button class="secondary-button" type="button" data-close-layer="quickTripLayer">取消</button>
+                    <button id="quickTripSubmit" class="primary-button" type="submit">开始规划</button>
+                </div>
+            </footer>
+        </form>
+    </section>
+
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/answer-card.js?v=20260827-train-scroll-v2"></script>
     <script src="/static/trip-intake-card.js?v=20260827-step-stack-v1"></script>
-    <script src="/static/app.js?v=20260813-interactive-route-v4"></script>
+    <script src="/static/app.js?v=20260829-quick-trip-v1"></script>
 </body>
 </html>

@@ -48,6 +48,12 @@
     const knowledgeExitLabel = document.getElementById('knowledgeExitLabel');
     const attachmentsLayer = document.getElementById('attachmentsLayer');
     const attachmentsList = document.getElementById('attachmentsList');
+    const quickTripLayer = document.getElementById('quickTripLayer');
+    const quickTripForm = document.getElementById('quickTripForm');
+    const quickTripWorkLocation = document.getElementById('quickTripWorkLocation');
+    const quickTripWorkLocationId = document.getElementById('quickTripWorkLocationId');
+    const quickTripPlaceSuggestions = document.getElementById('quickTripPlaceSuggestions');
+    const quickTripPlaceStatus = document.getElementById('quickTripPlaceStatus');
     const retrievalModeControls = Array.from(document.querySelectorAll('[data-retrieval-mode-control]'));
 
     const ACCESS_TOKEN_KEY = 'hommey.access_token';
@@ -83,6 +89,8 @@
     let knowledgeReturnView = 'home';
     let retrievalMode = 'standard';
     let routeMotionController = null;
+    let quickTripSearchTimer = null;
+    let quickTripSearchController = null;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
@@ -496,6 +504,11 @@
             button.addEventListener('click', openAttachmentPanel);
         });
         document.getElementById('attachmentsClose').addEventListener('click', () => closeLayer('attachmentsLayer'));
+        document.querySelectorAll('[data-quick-trip-open]').forEach((button) => {
+            button.addEventListener('click', openQuickTrip);
+        });
+        quickTripForm.addEventListener('submit', submitQuickTrip);
+        quickTripWorkLocation.addEventListener('input', handleQuickTripPlaceInput);
 
         document.querySelectorAll('[data-close-layer]').forEach((button) => {
             button.addEventListener('click', () => closeLayer(button.dataset.closeLayer));
@@ -545,6 +558,7 @@
 
         document.addEventListener('click', (event) => {
             if (!event.target.closest('[data-retrieval-mode-control]')) closeRetrievalModeMenus();
+            if (!event.target.closest('.place-picker')) hideQuickTripSuggestions();
             if (!sessionPopover.contains(event.target) && !event.target.closest('.session-more')) {
                 sessionPopover.hidden = true;
             }
@@ -1846,6 +1860,165 @@
         );
     }
 
+    function localDateValue(offsetDays = 0) {
+        const value = new Date();
+        value.setDate(value.getDate() + offsetDays);
+        const year = value.getFullYear();
+        const month = String(value.getMonth() + 1).padStart(2, '0');
+        const day = String(value.getDate()).padStart(2, '0');
+        return `${year}-${month}-${day}`;
+    }
+
+    function openQuickTrip() {
+        if (isProcessing || isOnboarding) {
+            showToast(isProcessing ? '当前任务完成后即可使用快速差旅。' : '请先完成首次设置。');
+            return;
+        }
+        closeSidebar();
+        const start = document.getElementById('quickTripStartDate');
+        const end = document.getElementById('quickTripEndDate');
+        const today = localDateValue();
+        start.min = today;
+        end.min = today;
+        if (!start.value) start.value = today;
+        if (!end.value) end.value = localDateValue(2);
+        quickTripLayer.classList.add('open');
+        setTimeout(() => document.getElementById('quickTripOrigin').focus(), 120);
+    }
+
+    function hideQuickTripSuggestions() {
+        quickTripPlaceSuggestions.hidden = true;
+        quickTripPlaceSuggestions.replaceChildren();
+    }
+
+    function setQuickTripPlaceStatus(message, state = '') {
+        quickTripPlaceStatus.textContent = message;
+        quickTripPlaceStatus.classList.toggle('is-error', state === 'error');
+        quickTripPlaceStatus.classList.toggle('is-verified', state === 'verified');
+    }
+
+    function handleQuickTripPlaceInput() {
+        quickTripWorkLocationId.value = '';
+        setQuickTripPlaceStatus('选择后将默认查询附近前三家酒店；价格为高德参考消费。');
+        clearTimeout(quickTripSearchTimer);
+        quickTripSearchController?.abort();
+        const keyword = quickTripWorkLocation.value.trim();
+        if (keyword.length < 2) {
+            hideQuickTripSuggestions();
+            return;
+        }
+        quickTripSearchTimer = setTimeout(() => searchQuickTripPlaces(keyword), 320);
+    }
+
+    async function searchQuickTripPlaces(keyword) {
+        quickTripSearchController = new AbortController();
+        const city = document.getElementById('quickTripDestination').value.trim();
+        const params = new URLSearchParams({ keyword });
+        if (city) params.set('city', city);
+        try {
+            const response = await authFetch(
+                `/api/${encodeURIComponent(userId)}/places/suggest?${params.toString()}`,
+                { signal: quickTripSearchController.signal }
+            );
+            const data = await response.json();
+            if (!response.ok) throw createApiError(data, '地点查询失败', response.status);
+            if (quickTripWorkLocation.value.trim() !== keyword) return;
+            renderQuickTripPlaces(data.items || []);
+        } catch (err) {
+            if (err.name === 'AbortError') return;
+            hideQuickTripSuggestions();
+            setQuickTripPlaceStatus(formatDisplayError(err, '地点查询暂时不可用'), 'error');
+        }
+    }
+
+    function renderQuickTripPlaces(items) {
+        quickTripPlaceSuggestions.replaceChildren();
+        if (!items.length) {
+            const empty = document.createElement('div');
+            empty.className = 'place-suggestions-empty';
+            empty.textContent = '没有找到匹配地点，请补充城市或完整名称。';
+            quickTripPlaceSuggestions.appendChild(empty);
+        } else {
+            items.slice(0, 5).forEach((item) => {
+                const button = document.createElement('button');
+                button.type = 'button';
+                button.className = 'place-suggestion';
+                button.setAttribute('role', 'option');
+                const name = document.createElement('strong');
+                name.textContent = item.name || '未命名地点';
+                const address = document.createElement('small');
+                address.textContent = [item.city, item.district, item.address].filter(Boolean).join(' · ');
+                button.append(name, address);
+                button.addEventListener('click', () => {
+                    quickTripWorkLocation.value = item.name || '';
+                    quickTripWorkLocationId.value = item.place_id || '';
+                    setQuickTripPlaceStatus(`已通过高德选择：${item.name || ''}`, 'verified');
+                    hideQuickTripSuggestions();
+                });
+                quickTripPlaceSuggestions.appendChild(button);
+            });
+        }
+        quickTripPlaceSuggestions.hidden = false;
+    }
+
+    function quickTripDuration(startValue, endValue) {
+        const start = new Date(`${startValue}T00:00:00Z`);
+        const end = new Date(`${endValue}T00:00:00Z`);
+        if (!Number.isFinite(start.getTime()) || !Number.isFinite(end.getTime())) return 0;
+        return Math.floor((end - start) / 86400000) + 1;
+    }
+
+    function submitQuickTrip(event) {
+        event.preventDefault();
+        if (isProcessing || !quickTripForm.reportValidity()) return;
+        const origin = document.getElementById('quickTripOrigin').value.trim();
+        const destination = document.getElementById('quickTripDestination').value.trim();
+        const startDate = document.getElementById('quickTripStartDate').value;
+        const endDate = document.getElementById('quickTripEndDate').value;
+        const purpose = document.getElementById('quickTripPurpose').value.trim();
+        const workLocation = quickTripWorkLocation.value.trim();
+        const placeId = quickTripWorkLocationId.value.trim();
+        const duration = quickTripDuration(startDate, endDate);
+        if (duration < 1 || duration > 60) {
+            showToast('返程日期不能早于出发日期，且行程最多 60 天。');
+            return;
+        }
+        if (workLocation && !placeId) {
+            setQuickTripPlaceStatus('请从高德候选中选择具体工作地点。', 'error');
+            quickTripWorkLocation.focus();
+            return;
+        }
+        const capabilityInputs = Array.from(
+            quickTripForm.querySelectorAll('input[name="quick_capability"]')
+        );
+        const include = capabilityInputs.filter((item) => item.checked).map((item) => item.value);
+        const exclude = capabilityInputs.filter((item) => !item.checked).map((item) => item.value);
+        const tripInput = {
+            origin,
+            destination,
+            start_date: startDate,
+            end_date: endDate,
+            duration_days: duration,
+            trip_purpose: purpose,
+            work_location: workLocation,
+            work_location_note: document.getElementById('quickTripWorkNote').value.trim(),
+            work_location_place_id: placeId,
+        };
+        const summary = `${startDate} 从${origin}前往${destination}出差${duration}天，目的：${purpose}`
+            + (workLocation ? `，工作地点：${workLocation}` : '');
+        closeLayer('quickTripLayer');
+        hideQuickTripSuggestions();
+        sendMessage(summary, {
+            preserveComposer: true,
+            includeAttachments: false,
+            requestPayload: {
+                input_source: 'quick_trip_form',
+                trip_input: tripInput,
+                capability_selection: { include, exclude },
+            },
+        });
+    }
+
     async function sendMessage(explicitText, options = {}) {
         const hasExplicitText = typeof explicitText === 'string';
         const text = hasExplicitText ? explicitText.trim() : chatInput.value.trim();
@@ -1889,6 +2062,7 @@
                     client_request_id: currentRequestId,
                     session_id: activeSessionId || null,
                     retrieval_mode: retrievalMode,
+                    ...(options.requestPayload || {}),
                 }),
             });
             if (!response.ok) {

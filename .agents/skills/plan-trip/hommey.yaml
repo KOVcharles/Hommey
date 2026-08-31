@@ -1,4 +1,4 @@
-version: 1.1.0
+version: 1.2.0
 display_name: 合规差旅行程规划
 category: workflow
 intent: itinerary_planning
@@ -15,13 +15,13 @@ pause:
 answer:
   section_kind: trip
   require_section: true
-  suppress_agents: [event_collection, rag_knowledge, information_query, train_query]
+  suppress_agents: [event_collection, rag_knowledge, information_query, train_query, place_information]
   primary_agent: itinerary_planning
 memory_hooks:
   - agent: itinerary_planning
     effect: complete_trip
     require_field: itinerary
-tools: [active_trip_context, rag_retrieval, travel_information]
+tools: [active_trip_context, rag_retrieval, travel_information, place_search]
 input_schema: schemas/input.json
 output_schema: schemas/output.json
 requires:
@@ -31,6 +31,8 @@ requires:
     purpose: 获取公司差旅制度证据
   - skill: query-info
     purpose: 查询目的地天气和公开交通信息
+  - skill: place-query
+    purpose: 核验工作地点并查询附近酒店
   - skill: train-query
     purpose: 查询真实高铁/火车车次、时刻与余票，供行程编排引用
   - skill: check-trip-compliance
@@ -88,6 +90,22 @@ execution:
     result_rules:
       error_when_field: query_success
       error_code: TRAIN_QUERY_UNAVAILABLE
+  - skill: place-query
+    agent_name: place_information
+    priority: 2
+    on_failure: continue
+    max_retries: 1
+    reason: 基于明确的会议或客户地点查询附近酒店
+    expected_output: 最多三家带距离、评分和高德参考消费边界的酒店候选
+    query: 核验本次出差的工作地点并查询附近酒店
+    capabilities:
+      - name: nearby_hotels
+        default_enabled: true
+        aliases: [酒店, 住宿, 住哪里, 住哪, 附近酒店, 周边酒店, 工作地点, 会议地点, 客户地点, 园区, 写字楼, 会场]
+        query: 核验工作地点并查询附近酒店
+    result_rules:
+      error_when_field: query_success
+      error_code: PLACE_INFORMATION_UNAVAILABLE
   - skill: plan-trip
     agent_name: itinerary_planning
     priority: 3

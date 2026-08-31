@@ -50,6 +50,7 @@ from core.orchestration.policy import OrchestrationPolicy
 from core.orchestration.state_store import OrchestrationStateStore, StateConflictError
 from core.orchestration.turn_resolver import TurnResolver
 from core.orchestration.validator import supports_task_pipeline
+from webui_new.quick_trip import inject_trip_entities
 from core.execution_budget import (
     ExecutionBudget,
     ExecutionLimitExceeded,
@@ -481,6 +482,7 @@ class HommeyWebInstance:
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None,
         progress_callback=None,
     ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
@@ -507,6 +509,8 @@ class HommeyWebInstance:
                     "attachment_ids": attachment_ids,
                     "retrieval_mode": retrieval_mode,
                 }
+                if structured_trip_input is not None:
+                    implementation_kwargs["structured_trip_input"] = structured_trip_input
                 if progress_callback is not None:
                     implementation_kwargs["progress_callback"] = progress_callback
                 result = await asyncio.wait_for(
@@ -566,6 +570,7 @@ class HommeyWebInstance:
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None,
         progress_callback=None,
     ) -> dict:
         """处理用户消息，返回响应"""
@@ -620,6 +625,7 @@ class HommeyWebInstance:
             "attachment_ids": normalized.attachment_ids,
             "content_type": "attachment" if normalized.attachment_ids else "text",
             "retrieval_mode": retrieval_mode,
+            "input_source": "quick_trip_form" if structured_trip_input else "chat",
         }
         input_result = {
             "sources": [source.model_dump() for source in normalized.sources],
@@ -786,6 +792,8 @@ class HommeyWebInstance:
             conversation_context=policy_context,
         )
         intention_data = policy_evaluation.to_compatibility_dict(policy_query)
+        if structured_trip_input:
+            inject_trip_entities(intention_data, structured_trip_input)
 
         collector = current_collector()
         if collector is not None:
@@ -802,6 +810,7 @@ class HommeyWebInstance:
             "request_id": request_id or "",
             "attachment_sources": input_result["sources"],
             "attachment_warnings": input_result["warnings"],
+            "structured_trip_input": structured_trip_input or {},
         }
 
         # 所有已授权的 skill 意图都走统一 scoped DAG 管线。
@@ -1051,6 +1060,7 @@ class HommeyWebInstance:
         request_id: str | None = None,
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None,
     ):
         """Yield live orchestration progress and response events as NDJSON payloads."""
         queue: asyncio.Queue = asyncio.Queue()
@@ -1067,6 +1077,8 @@ class HommeyWebInstance:
                     "attachment_ids": attachment_ids,
                     "progress_callback": progress_callback,
                 }
+                if structured_trip_input is not None:
+                    request_kwargs["structured_trip_input"] = structured_trip_input
                 if retrieval_mode == "enhanced":
                     request_kwargs["retrieval_mode"] = "enhanced"
                 result_holder["result"] = await self.process_message(message, **request_kwargs)
@@ -1461,6 +1473,7 @@ class WebHommeyManager:
         attachment_ids: list[str] | None = None,
         session_id: str | None = None,
         retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None,
         progress_callback=None,
     ) -> dict:
         """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
@@ -1498,6 +1511,8 @@ class WebHommeyManager:
                 "attachment_ids": attachment_ids,
                 "progress_callback": progress_callback,
             }
+            if structured_trip_input is not None:
+                instance_kwargs["structured_trip_input"] = structured_trip_input
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             process_task = asyncio.create_task(instance.process_message(message, **instance_kwargs))
@@ -1534,6 +1549,7 @@ class WebHommeyManager:
         attachment_ids: list[str] | None = None,
         session_id: str | None = None,
         retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None,
     ):
         """SSE 流式入口：与 process_message 相同的取锁顺序，持锁到流结束。
 
@@ -1568,6 +1584,8 @@ class WebHommeyManager:
                 "request_id": request_id,
                 "attachment_ids": attachment_ids,
             }
+            if structured_trip_input is not None:
+                instance_kwargs["structured_trip_input"] = structured_trip_input
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             stream = instance.stream_message(message, **instance_kwargs)

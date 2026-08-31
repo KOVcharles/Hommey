@@ -120,6 +120,7 @@ def test_plan_workflow_is_declarative_and_ends_with_compliance():
         ("rag_knowledge", 2),
         ("information_query", 2),
         ("train_query", 2),
+        ("place_information", 2),
         ("itinerary_planning", 3),
         ("trip_compliance", 4),
     ]

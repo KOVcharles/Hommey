@@ -200,6 +200,46 @@ def test_event_collection_defaults_missing_start_date_to_beijing_today():
     assert "start_date" not in result["missing_required"]
 
 
+def test_event_collection_structured_form_facts_override_model_candidates():
+    script_path = Path(".agents/skills/event-collection/script/agent.py")
+    spec = importlib.util.spec_from_file_location("event_collection_structured_test", script_path)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    async def model(_messages):
+        return {"content": json.dumps({
+            "origin": "错误出发地", "destination": "错误目的地",
+            "start_date": None, "end_date": None, "duration_days": None,
+            "return_location": None, "trip_purpose": None,
+            "work_location": None, "work_schedule": None,
+        }, ensure_ascii=False)}
+
+    structured = {
+        "origin": "上海", "destination": "杭州",
+        "start_date": "2026-09-02", "end_date": "2026-09-04",
+        "duration_days": 3, "trip_purpose": "客户拜访",
+        "work_location": "阿里巴巴西溪园区",
+        "work_location_verified": {"provider_place_id": "P1"},
+    }
+    agent = module.EventCollectionAgent(model=model)
+    request = Msg(
+        name="orchestrator", role="user",
+        content=json.dumps({"context": {
+            "agent_query": "请规划本次公司差旅",
+            "structured_trip_input": structured,
+            "active_trip": {}, "recent_dialogue": [],
+        }}, ensure_ascii=False),
+    )
+
+    result = json.loads(asyncio.run(agent.reply(request)).content)
+
+    assert result["origin"] == "上海"
+    assert result["destination"] == "杭州"
+    assert result["work_location"] == "阿里巴巴西溪园区"
+    assert result["work_location_verified"] == {"provider_place_id": "P1"}
+    assert result["planning_ready"] is True
+
+
 def test_explicit_history_reference_produces_candidates_not_confirmed_facts():
     script_path = Path(".agents/skills/event-collection/script/agent.py")
     spec = importlib.util.spec_from_file_location("event_collection_history_test", script_path)

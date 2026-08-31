@@ -69,6 +69,7 @@ def test_plan_trip_declares_pause_and_side_effect():
     assert primary_agent_for_intent("itinerary_planning") == "itinerary_planning"
     assert suppress_agents_for_intent("itinerary_planning") == [
         "event_collection", "rag_knowledge", "information_query", "train_query",
+        "place_information",
     ]
 
 
@@ -87,6 +88,7 @@ def test_plan_trip_execution_template_matches_declared_steps():
         ("rag_knowledge", 2, "abort"),
         ("information_query", 2, "continue"),
         ("train_query", 2, "continue"),
+        ("place_information", 2, "continue"),
         ("itinerary_planning", 3, "abort"),
         ("trip_compliance", 4, "continue"),
     ]

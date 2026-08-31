@@ -136,7 +136,7 @@ class HommeySkillConfig(BaseModel):
     catalog_order: int = 100
     tools: List[Literal[
         "active_trip_context", "rag_retrieval", "travel_information",
-        "weather", "web_search", "memory", "mcp",
+        "weather", "web_search", "place_search", "memory", "mcp",
     ]] = Field(default_factory=list)
     requires: List[SkillDependency] = Field(default_factory=list)
     execution: List[SkillExecutionStep] = Field(default_factory=list)

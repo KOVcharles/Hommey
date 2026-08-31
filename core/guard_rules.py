@@ -98,6 +98,10 @@ TRAIN_KEYWORDS: Tuple[str, ...] = (
     "车票", "火车票", "高铁票", "动车票",
 )
 SEARCH_KEYWORDS: Tuple[str, ...] = ("查一下", "搜索", "查询", "了解一下")
+PLACE_INFORMATION_KEYWORDS: Tuple[str, ...] = (
+    "酒店", "住宿", "附近酒店", "周边酒店", "住哪里", "住哪",
+    "地址", "位置", "在哪", "附近有什么",
+)
 COMPLIANCE_KEYWORDS: Tuple[str, ...] = ("合规", "符合标准", "检查行程", "行程检查", "是否超标")
 MEMORY_KEYWORDS: Tuple[str, ...] = (
     "我去过", "我以前去过", "我之前去过", "我曾经去过", "我住过", "我坐过",

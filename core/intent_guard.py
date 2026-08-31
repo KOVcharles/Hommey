@@ -208,7 +208,10 @@ def has_clear_information_target(query: str) -> bool:
     if any(keyword in query for keyword in ("天气", "气温", "下雨", "预报")):
         return meaningful_length(query) >= 6
 
-    if any(keyword in query for keyword in ("开放时间", "门票", "航班", "高铁", "路线", "价格", "地址")):
+    if any(keyword in query for keyword in (
+        "开放时间", "门票", "航班", "高铁", "路线", "价格", "地址",
+        "酒店", "住宿", "附近", "周边", "位置", "在哪",
+    )):
         return True
 
     search_words = ("查一下", "搜索", "查询", "了解一下")

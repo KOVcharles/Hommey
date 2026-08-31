@@ -44,14 +44,22 @@ def apply_capability_selection(
     resolved = list(tasks)
     query = str(user_query or "")
     for task in resolved:
+        included = list(task.capability_selection.include)
         excluded = list(task.capability_selection.exclude)
         for step in execution_steps_for_intent(task.intent):
             for capability in step.capabilities:
                 aliases = capability.aliases or [capability.name]
-                if _explicitly_excluded(query, aliases):
+                explicitly_excluded = _explicitly_excluded(query, aliases)
+                if (
+                    not capability.default_enabled
+                    and any(alias in query for alias in aliases)
+                    and not explicitly_excluded
+                ):
+                    included.append(capability.name)
+                if explicitly_excluded:
                     excluded.append(capability.name)
         task.capability_selection = CapabilitySelection(
-            include=list(dict.fromkeys(task.capability_selection.include)),
+            include=list(dict.fromkeys(included)),
             exclude=list(dict.fromkeys(excluded)),
         )
     return resolved

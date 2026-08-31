@@ -164,6 +164,8 @@ def test_abort_failure_persists_downstream_skips_and_failed_run(tmp_path):
             return {"status": "success", "data": {
                 "query_success": True, "results": {"trains": []},
             }}
+        if kwargs["agent_name"] == "place_information":
+            return {"status": "success", "data": {"query_success": True, "skipped": True}}
         raise AssertionError(f"downstream must not run: {kwargs['agent_name']}")
 
     store = _store(tmp_path)
