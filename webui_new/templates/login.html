@@ -6,7 +6,7 @@
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260827-github-v2">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260906-altcha">
 </head>
 <body>
     <main class="auth-page">
@@ -64,6 +64,18 @@
                         <input id="password" class="auth-input" type="password" placeholder="密码" aria-describedby="passwordError" autocomplete="current-password" required>
                         <p id="passwordError" class="auth-field-error" aria-live="polite"></p>
                     </div>
+                    <div id="codeField" class="auth-field" hidden>
+                        <label class="sr-only" for="code">验证码</label>
+                        <div class="auth-code-row">
+                            <input id="code" class="auth-input" type="text" inputmode="numeric" maxlength="6" placeholder="验证码" aria-describedby="codeError" autocomplete="one-time-code">
+                            <button id="sendCodeBtn" class="auth-code-btn" type="button">获取验证码</button>
+                        </div>
+                        <div id="altchaField" class="auth-field auth-altcha">
+                            <altcha-widget challenge="/auth/altcha-challenge" name="altcha" id="altchaWidget"></altcha-widget>
+                            <p id="altchaError" class="auth-field-error" aria-live="polite"></p>
+                        </div>
+                        <p id="codeError" class="auth-field-error" aria-live="polite"></p>
+                    </div>
                     <button id="submitBtn" class="auth-submit" type="submit">继续</button>
                     <div id="errorMsg" class="auth-error" role="alert"></div>
                 </form>
@@ -74,6 +86,8 @@
     <footer class="icp-footer">
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">赣ICP备2026020278号</a>
     </footer>
-    <script src="/static/auth.js?v=20260803-auth2"></script>
+    <!-- ALTCHA 自托管人机验证组件；auth.js 监听其 statechange 事件读取 payload -->
+    <script src="/static/auth.js?v=20260906-altcha" defer></script>
+    <script async defer src="/static/vendor/altcha.min.js" type="module"></script>
 </body>
 </html>

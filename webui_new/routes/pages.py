@@ -14,7 +14,7 @@ def create_pages_router(render):
 
     @router.get("/", response_class=HTMLResponse)
     async def login_page():
-        """登录页"""
+        """登录页（自托管 ALTCHA 人机验证，challenge 由 /auth/altcha-challenge 提供）。"""
         return render("login.html")
 
     @router.get("/chat/{user_id}", response_class=HTMLResponse)

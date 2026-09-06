@@ -20,9 +20,12 @@ logger = logging.getLogger(__name__)
 
 _SECURITY_HEADERS = {
     "Content-Security-Policy": (
-        "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; "
-        "img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'self'; "
-        "frame-ancestors 'none'; form-action 'self'"
+        "default-src 'self'; script-src 'self'; "
+        "style-src 'self' 'unsafe-inline'; img-src 'self' data:; "
+        "connect-src 'self'; "
+        # ALTCHA 组件在 blob:/data: worker 内做 PoW 计算（自托管，无外部请求）。
+        "worker-src 'self' blob: data:; "
+        "object-src 'none'; base-uri 'self'; frame-ancestors 'none'; form-action 'self'"
     ),
     "X-Content-Type-Options": "nosniff",
     "Referrer-Policy": "strict-origin-when-cross-origin",

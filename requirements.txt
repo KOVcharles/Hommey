@@ -50,6 +50,7 @@ PyJWT>=2.8
 passlib[bcrypt]>=1.7.4
 bcrypt>=4.0,<4.1          # 收紧上限以规避 passlib 1.7 与 bcrypt≥4.1 的兼容告警（见 questions.md Q-F）
 email-validator>=2.0      # pydantic v2 EmailStr 所需
+altcha==2.1.0             # 自托管 ALTCHA 人机验证（challenge 签名/离线解校验）
 
 # Test runner
 pytest==8.3.4

@@ -59,14 +59,19 @@ def client(monkeypatch):
     monkeypatch.setattr(auth_routes, "get_user_by_email", store.get_user_by_email)
     monkeypatch.setattr(auth_routes, "create_user", store.create_user)
 
+    async def _fake_verify(email, code):
+        return "ok"  # 本套用例只测 register 的落库/查重/错误映射，验证码校验另测
+
+    monkeypatch.setattr(auth_routes, "verify_code", _fake_verify)
+
     app = FastAPI()
     register_error_handlers(app)
     app.include_router(create_auth_router())
     return TestClient(app), store
 
 
-def _register(c, email="alice@example.com", password="supersecret-123"):
-    return c.post("/auth/register", json={"email": email, "password": password})
+def _register(c, email="alice@example.com", password="supersecret-123", code="123456"):
+    return c.post("/auth/register", json={"email": email, "password": password, "code": code})
 
 
 # ---------------------------------------------------------------------------
@@ -95,14 +100,14 @@ def test_register_duplicate_email_is_409(client):
 
 def test_register_accepts_nonstandard_email_for_testing(client):
     c, _ = client
-    r = c.post("/auth/register", json={"email": "test-user", "password": "supersecret-123"})
+    r = c.post("/auth/register", json={"email": "test-user", "password": "supersecret-123", "code": "123456"})
     assert r.status_code == 201
     assert r.json()["email"] == "test-user"
 
 
 def test_register_accepts_short_password_for_testing(client):
     c, _ = client
-    r = c.post("/auth/register", json={"email": "x", "password": "1"})
+    r = c.post("/auth/register", json={"email": "x", "password": "1", "code": "123456"})
     assert r.status_code == 201
 
 
