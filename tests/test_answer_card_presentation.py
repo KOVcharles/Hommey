@@ -381,7 +381,7 @@ def test_login_route_animation_has_a_defined_keyframe_and_fresh_asset_version():
 
     assert "animation: auth-route-travel 7s ease-in-out infinite" in css
     assert "@keyframes auth-route-travel" in css
-    assert 'href="/static/hommey.css?v=20260827-github-v2"' in template
+    assert 'href="/static/hommey.css?v=20260906-altcha"' in template
 
 
 def test_frontend_uses_full_width_scroll_layer_and_nontransparent_idle_thumb():

@@ -422,4 +422,28 @@ AUTH_CONFIG = {
         for email in os.getenv("HOMMEY_ADMIN_EMAILS", "").split(",")
         if email.strip()
     ),
+    # 注册邮箱验证码参数（存 Redis，见 webui_new/auth/verification.py）
+    "verification_code_length": _int_env("HOMMEY_VERIFY_CODE_LENGTH", 6),
+    "verification_code_ttl_sec": _int_env("HOMMEY_VERIFY_CODE_TTL_SEC", 300),
+    "verification_code_max_attempts": _int_env("HOMMEY_VERIFY_CODE_MAX_ATTEMPTS", 5),
+    "verification_code_resend_cooldown_sec": _int_env("HOMMEY_VERIFY_CODE_RESEND_COOLDOWN_SEC", 60),
+    "verification_code_daily_limit": _int_env("HOMMEY_VERIFY_CODE_DAILY_LIMIT", 10),
+    # 同一 IP 发码限流（固定时间窗口，Redis INCR 原子计数）。
+    "verification_ip_rate_limit": _int_env("HOMMEY_VERIFY_IP_RATE_LIMIT", 5),
+    "verification_ip_rate_window_sec": _int_env("HOMMEY_VERIFY_IP_RATE_WINDOW_SEC", 60),
+}
+
+# ALTCHA 自托管人机验证（注册发码前必过，见 webui_new/auth/altcha.py）。
+# hmac_key 仅在后端用于 challenge 签名与解校验，绝不写入前端或日志。
+# 生成方式：python -c "import secrets; print(secrets.token_hex(32))"
+ALTCHA_CONFIG = {
+    "hmac_key": _optional_env("ALTCHA_HMAC_KEY"),
+    "challenge_expiry_sec": _int_env("ALTCHA_CHALLENGE_EXPIRY_SEC", 300),
+}
+
+# 事务邮件（Resend）。api_key 缺失时发送接口抛 ConfigError，绝不硬编码默认值。
+EMAIL_CONFIG = {
+    "resend_api_key": _optional_env("HOMMEY_RESEND_API_KEY"),
+    "resend_from": os.getenv("HOMMEY_RESEND_FROM", "onboarding@resend.dev"),
+    "resend_endpoint": os.getenv("HOMMEY_RESEND_ENDPOINT", "https://api.resend.com/emails"),
 }
