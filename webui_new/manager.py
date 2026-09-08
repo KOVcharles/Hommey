@@ -110,6 +110,7 @@ class HommeyWebInstance:
             )
 
             self.model = runtime.model
+            self.supervisor = getattr(runtime, "supervisor", None)
             self.memory_manager = runtime.memory_manager
             self.async_memory = AsyncMemoryFacade(self.memory_manager)
             self.session_id = self.memory_manager.session_id
@@ -362,6 +363,11 @@ class HommeyWebInstance:
         self, request_id: str, session_id: str | None = None,
     ) -> dict:
         """Interrupt the current turn without acquiring the request's long-held lock."""
+        if getattr(self, "supervisor", None) is not None:
+            from agent_runtime.contracts import Scope
+            scope = Scope(user_id=self.user_id, session_id=session_id or self.session_id, request_id=request_id)
+            if await self.supervisor.cancel(scope):
+                return {"run_id": request_id, "turn_id": request_id, "status": "INTERRUPTING", "revision": 0, "resumable": True}
         if self.state_store is None:
             raise BusinessError("NO_ACTIVE_RUN", "当前没有正在执行的任务")
         state = await self.state_store.get_active(session_id or self.session_id)
@@ -493,6 +499,11 @@ class HommeyWebInstance:
             max_external_calls=rc.get("max_external_calls_per_request", 16),
             max_external_calls_per_type=rc.get("max_external_calls_per_type", 6),
         )
+        if getattr(self, "supervisor", None) is not None:
+            from settings import SUPERVISOR_CONFIG
+            budget.max_agent_calls = SUPERVISOR_CONFIG["max_children"]
+            budget.max_external_calls = SUPERVISOR_CONFIG["max_external_calls"]
+            budget.max_external_calls_per_type = SUPERVISOR_CONFIG["max_calls_per_type"]
         collector = None
         collector_token = None
         if getattr(evaluation_sink, "enabled", False):
@@ -574,6 +585,82 @@ class HommeyWebInstance:
         progress_callback=None,
     ) -> dict:
         """处理用户消息，返回响应"""
+        if getattr(self, "supervisor", None) is not None:
+            active = await self.state_store.get_active(self.session_id) if self.state_store else None
+            if active is None:
+                return await self._process_supervisor_message(
+                    message, request_id=request_id, attachment_ids=attachment_ids,
+                    retrieval_mode=retrieval_mode, structured_trip_input=structured_trip_input,
+                    progress_callback=progress_callback,
+                )
+        return await self._process_legacy_message_impl(
+            message, request_id=request_id, attachment_ids=attachment_ids,
+            retrieval_mode=retrieval_mode, structured_trip_input=structured_trip_input,
+            progress_callback=progress_callback,
+        )
+
+    async def _process_supervisor_message(
+        self, message, *, request_id=None, attachment_ids=None,
+        retrieval_mode="standard", structured_trip_input=None, progress_callback=None,
+    ) -> dict:
+        from agent_runtime.contracts import Scope, ToolRejected
+        import json
+        import uuid
+
+        if not self.initialized:
+            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        started = time.perf_counter()
+        request_id = request_id or uuid.uuid4().hex
+        # Respect the explicitly selected session; do not rotate it on idle.
+        scope = Scope(user_id=self.user_id, session_id=self.session_id, request_id=request_id)
+        normalized = await run_blocking(self._normalize_input, message, attachment_ids)
+        user_text = message
+        agent_text = normalized.agent_query
+        if structured_trip_input:
+            structured = json.dumps(structured_trip_input, ensure_ascii=False)
+            user_text += "\n用户填写的行程表单：" + structured
+            agent_text += "\n用户填写的行程表单：" + structured
+        metadata = {"request_id": request_id, "engine": "supervisor", "attachment_ids": normalized.attachment_ids,
+            "content_type": "attachment" if normalized.attachment_ids else "text",
+            "retrieval_mode": retrieval_mode, "input_source": "quick_trip_form" if structured_trip_input else "chat"}
+        self.memory_manager.current_request_id = request_id
+        memory = self._ensure_async_memory()
+        # User persistence is already idempotent on (user, request, role).
+        if not await memory.add_message("user", normalized.display_message, metadata):
+            raise BusinessError("MEMORY_WRITE_FAILED", "消息未能保存，请稍后重试")
+        try:
+            output = await self.supervisor.run(scope, agent_text, user_text=user_text, progress=progress_callback)
+        except ToolRejected as exc:
+            raise BusinessError("SUPERVISOR_INPUT_REJECTED", str(exc)) from exc
+        except ExecutionLimitExceeded:
+            raise
+        except Exception as exc:
+            logger.error("Supervisor failed error_type=%s", type(exc).__name__)
+            raise UpstreamError("SUPERVISOR_FAILED", "本次任务未完成，请稍后继续。", retryable=True,
+                component=COMPONENT_LLM, debug_message=str(exc)) from exc
+        if not output.get("interrupted"):
+            if retrieval_mode == "enhanced" and output.get("answer_document"):
+                # The supervisor's policy leaf currently exposes the standard
+                # search adapter. Never label it as legacy enhanced retrieval.
+                output["answer_document"]["retrieval"] = RetrievalPresentation(
+                    requested_mode="enhanced", effective_mode="standard", status="fallback",
+                    fallback_reason="当前主 Agent 引擎使用标准制度检索",
+                ).model_dump(mode="json")
+            assistant_metadata = {**metadata, "answer_document": output.get("answer_document"),
+                "presentation_document": output.get("presentation_document")}
+            if not await memory.add_message("assistant", output["response"], assistant_metadata):
+                raise BusinessError("MEMORY_WRITE_FAILED", "结果已保存，但对话记录写入失败，请重试本次请求")
+        if not output.get("idempotent_replay"):
+            self._total_messages += 1
+        self._last_activity_monotonic = time.monotonic()
+        return {**output, "timings": {"total": round(time.perf_counter() - started, 3)},
+            "sources": [source.model_dump() for source in normalized.sources], "warnings": list(normalized.warnings)}
+
+    async def _process_legacy_message_impl(
+        self, message: str, request_id: str | None = None,
+        attachment_ids: list[str] | None = None, retrieval_mode: str = "standard",
+        structured_trip_input: dict | None = None, progress_callback=None,
+    ) -> dict:
         from agentscope.message import Msg
 
         start_time = time.perf_counter()

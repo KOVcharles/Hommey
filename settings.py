@@ -224,6 +224,23 @@ EVALUATION_CONFIG = {
 }
 
 
+SUPERVISOR_CONFIG = {
+    # New requests use the supervisor. Existing active legacy runs stay pinned.
+    # Set HOMMEY_AGENT_ENGINE=legacy and restart backend workers to roll back.
+    "engine": os.getenv("HOMMEY_AGENT_ENGINE", "supervisor").strip().lower(),
+    "main_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_MAIN_ROUNDS", 14), 24)),
+    "child_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_CHILD_ROUNDS", 6), 10)),
+    "max_children": max(1, min(_int_env("HOMMEY_SUPERVISOR_MAX_CHILDREN", 12), 20)),
+    "parallel_children": max(1, min(_int_env("HOMMEY_SUPERVISOR_PARALLEL_CHILDREN", 3), 4)),
+    "child_timeout_sec": _float_env("HOMMEY_SUPERVISOR_CHILD_TIMEOUT_SEC", 90.0),
+    "tool_timeout_sec": _float_env("HOMMEY_SUPERVISOR_TOOL_TIMEOUT_SEC", 35.0),
+    "max_external_calls": max(8, min(_int_env("HOMMEY_SUPERVISOR_MAX_EXTERNAL_CALLS", 64), 96)),
+    "max_calls_per_type": max(6, min(_int_env("HOMMEY_SUPERVISOR_MAX_CALLS_PER_TYPE", 48), 64)),
+}
+if SUPERVISOR_CONFIG["engine"] not in {"supervisor", "legacy"}:
+    raise ValueError("HOMMEY_AGENT_ENGINE must be supervisor or legacy")
+
+
 RESILIENCE_CONFIG = {
     "max_retries": _int_env("HOMMEY_MAX_RETRIES", 3),
     "agent_max_retries": _int_env("HOMMEY_AGENT_MAX_RETRIES", 1),

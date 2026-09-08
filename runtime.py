@@ -5,7 +5,7 @@ from typing import Dict, Optional
 from agents.intention_agent import IntentionAgent
 from agents.lazy_agent_registry import LazyAgentRegistry
 from agents.orchestration_agent import OrchestrationAgent
-from settings import COMPOSER_CONFIG, LLM_CONFIG, SYSTEM_CONFIG
+from settings import COMPOSER_CONFIG, LLM_CONFIG, SYSTEM_CONFIG, SUPERVISOR_CONFIG
 from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
 from utils.circuit_breaker import CircuitBreaker
@@ -23,6 +23,7 @@ class AgentRuntime:
     orchestrator: OrchestrationAgent
     agent_cache: Dict
     attachment_service: Optional[object] = None  # 多模态附件服务（共享单例）
+    supervisor: Optional[object] = None
 
 
 # 多模态附件服务单例：跨用户共享（按 user_id/attachment_id 隔离），惰性构造。
@@ -124,6 +125,17 @@ def create_agent_runtime(
         skill_store=SkillPlatformStore(),
     )
 
+    supervisor = None
+    if SUPERVISOR_CONFIG["engine"] == "supervisor":
+        from agent_runtime.engine import Supervisor
+        from agent_runtime.services import BusinessServices
+        from agent_runtime.store import RunStore
+
+        pool = getattr(memory_manager.long_term, "pool", None)
+        if pool is None:
+            raise ValueError("Supervisor requires PostgreSQL memory; use HOMMEY_AGENT_ENGINE=legacy for file-mode development")
+        supervisor = Supervisor(model, BusinessServices(memory_manager), RunStore(pool), SUPERVISOR_CONFIG)
+
     return AgentRuntime(
         model=model,
         composer_model=composer_model,
@@ -133,6 +145,7 @@ def create_agent_runtime(
         orchestrator=orchestrator,
         agent_cache=cache,
         attachment_service=get_shared_attachment_service(),
+        supervisor=supervisor,
     )
 
 

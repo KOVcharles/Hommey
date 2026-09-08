@@ -832,6 +832,8 @@ class PostgresCompatibilityStore:
         with self.pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
+                    cur.execute("DELETE FROM supervisor_runs WHERE user_id=%s AND session_id=%s", (self.user_id, sid))
+                    cur.execute("DELETE FROM supervisor_trip_records WHERE user_id=%s AND session_id=%s", (self.user_id, sid))
                     # Physical message deletion removes attachment links through the FK cascade.
                     cur.execute(
                         "DELETE FROM conversation_messages WHERE user_id = %s AND session_id = %s",
@@ -862,6 +864,9 @@ class PostgresCompatibilityStore:
         with self.pool.connection() as conn:
             with conn.transaction():
                 with conn.cursor() as cur:
+                    cur.execute("DELETE FROM supervisor_runs WHERE user_id=%s", (self.user_id,))
+                    cur.execute("DELETE FROM supervisor_trip_records WHERE user_id=%s", (self.user_id,))
+                    cur.execute("DELETE FROM active_trip_contexts WHERE user_id=%s", (self.user_id,))
                     # Keep session rows for audit, but remove messages, titles, and attachment links.
                     cur.execute(
                         "DELETE FROM conversation_messages WHERE user_id = %s",
