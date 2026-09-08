@@ -8,6 +8,11 @@
     const codeField = document.getElementById('codeField');
     const sendCodeBtn = document.getElementById('sendCodeBtn');
     const submitBtn = document.getElementById('submitBtn');
+    const submitLabel = document.getElementById('submitLabel');
+    const passwordToggle = document.getElementById('passwordToggle');
+    const passwordHint = document.getElementById('passwordHint');
+    const capsLockHint = document.getElementById('capsLockHint');
+    const authFormPanel = document.getElementById('authFormPanel');
     const errorMsg = document.getElementById('errorMsg');
     const loginModeBtn = document.getElementById('loginModeBtn');
     const registerModeBtn = document.getElementById('registerModeBtn');
@@ -40,18 +45,74 @@
     };
     let authMode = 'login';
     let modeAnimation = null;
+    let codeAnimation = null;
     let codeCooldownTimer = null;
+    let submitting = false;
+    let sendingCode = false;
+
+    function setPasswordVisible(visible) {
+        passwordInput.type = visible ? 'text' : 'password';
+        passwordToggle.setAttribute('aria-pressed', String(visible));
+        passwordToggle.setAttribute('aria-label', visible ? '隐藏密码' : '显示密码');
+    }
+
+    function updateSubmitLabel() {
+        submitLabel.textContent = authMode === 'register' ? '创建账户' : '登录';
+    }
+
+    function animateCodeField(visible, motionDisabled) {
+        // Read the in-flight geometry before cancelling so rapid reversals stay continuous.
+        const gap = parseFloat(getComputedStyle(form).rowGap) || 0;
+        const previous = codeField.hidden
+            ? { height: '0px', opacity: 0, marginBottom: `${-gap}px` }
+            : {
+                height: `${codeField.getBoundingClientRect().height}px`,
+                opacity: getComputedStyle(codeField).opacity,
+                marginBottom: getComputedStyle(codeField).marginBottom,
+            };
+        if (codeAnimation) codeAnimation.cancel();
+        codeAnimation = null;
+        codeField.inert = !visible;
+        codeField.setAttribute('aria-hidden', String(!visible));
+        codeField.style.overflow = '';
+        if (motionDisabled || typeof codeField.animate !== 'function') {
+            codeField.hidden = !visible;
+            return;
+        }
+        codeField.hidden = false;
+        const expandedHeight = codeField.getBoundingClientRect().height;
+        codeField.style.overflow = 'hidden';
+        const animation = codeField.animate([
+            previous,
+            { height: visible ? `${expandedHeight}px` : '0px', opacity: visible ? 1 : 0, marginBottom: visible ? '0px' : `${-gap}px` },
+        ], { duration: 360, easing: 'cubic-bezier(.22, .7, .25, 1)', fill: 'both' });
+        codeAnimation = animation;
+        animation.finished.then(() => {
+            if (codeAnimation !== animation) return;
+            codeField.hidden = !visible;
+            codeField.style.overflow = '';
+            animation.cancel();
+            codeAnimation = null;
+        }).catch(() => {}); // A new mode takes ownership when the user reverses mid-transition.
+    }
 
     function setMode(mode) {
-        if (mode === authMode) return;
+        if (mode === authMode || submitting || sendingCode) return;
         authMode = mode;
         const registering = mode === 'register';
         loginModeBtn.classList.toggle('active', !registering);
         registerModeBtn.classList.toggle('active', registering);
         loginModeBtn.setAttribute('aria-selected', String(!registering));
         registerModeBtn.setAttribute('aria-selected', String(registering));
+        loginModeBtn.tabIndex = registering ? -1 : 0;
+        registerModeBtn.tabIndex = registering ? 0 : -1;
+        authFormPanel.setAttribute('aria-labelledby', registering ? 'registerModeBtn' : 'loginModeBtn');
         authTabs.dataset.mode = mode;
+        document.title = registering ? '注册 · Hommey' : '登录 · Hommey';
         passwordInput.autocomplete = registering ? 'new-password' : 'current-password';
+        passwordHint.hidden = !registering;
+        setPasswordVisible(false);
+        updateSubmitLabel();
         authTitle.textContent = registering ? '创建账户' : '欢迎回来';
         authDescription.textContent = registering
             ? '注册后开始你的第一段差旅行程。'
@@ -59,17 +120,17 @@
         authFootnote.textContent = registering
             ? '创建账户即表示你同意仅将账户用于 Hommey 差旅服务。'
             : '登录即表示你同意仅将账户用于 Hommey 差旅服务。';
-        codeField.hidden = !registering;
-        if (!registering) resetCodeCooldown();
+        codeInput.required = registering;
         clearAllErrors();
 
         const motionDisabled = document.documentElement.dataset.motion === 'off'
             || window.matchMedia('(prefers-reduced-motion: reduce)').matches;
+        animateCodeField(registering, motionDisabled);
+        if (modeAnimation) modeAnimation.cancel();
         if (!motionDisabled && typeof authModeCopy.animate === 'function') {
-            if (modeAnimation) modeAnimation.cancel();
             modeAnimation = authModeCopy.animate([
-                { opacity: 0, transform: registering ? 'translateX(8px)' : 'translateX(-8px)' },
-                { opacity: 1, transform: 'translateX(0)' },
+                { opacity: .3, transform: 'translateY(4px)' },
+                { opacity: 1, transform: 'translateY(0)' },
             ], {
                 duration: 260,
                 easing: 'cubic-bezier(.2, .85, .25, 1)',
@@ -104,6 +165,7 @@
         if (name === 'code') {
             if (authMode !== 'register') return '';
             if (!codeInput.value.trim()) return '请输入验证码';
+            if (!/^\d{6}$/.test(codeInput.value.trim())) return '请输入 6 位数字验证码';
             return '';
         }
 
@@ -195,6 +257,7 @@
     }
 
     async function sendVerificationCode() {
+        if (sendingCode || codeCooldownTimer || submitting || authMode !== 'register') return;
         const email = emailInput.value.trim();
         if (!email) {
             setFieldError('email', '请先输入邮箱地址');
@@ -216,6 +279,9 @@
         }
         sendCodeBtn.disabled = true;
         sendCodeBtn.textContent = '发送中…';
+        sendingCode = true;
+        loginModeBtn.disabled = true;
+        registerModeBtn.disabled = true;
         try {
             const res = await fetch('/auth/send-verification-code', {
                 method: 'POST',
@@ -241,6 +307,9 @@
         } catch (err) {
             errorMsg.textContent = '网络错误，请检查连接后重试';
         } finally {
+            sendingCode = false;
+            loginModeBtn.disabled = submitting;
+            registerModeBtn.disabled = submitting;
             if (!codeCooldownTimer) {
                 sendCodeBtn.disabled = false;
                 sendCodeBtn.textContent = '获取验证码';
@@ -258,6 +327,24 @@
 
     loginModeBtn.addEventListener('click', () => setMode('login'));
     registerModeBtn.addEventListener('click', () => setMode('register'));
+    authTabs.addEventListener('keydown', (event) => {
+        if (!['ArrowLeft', 'ArrowRight', 'Home', 'End'].includes(event.key)) return;
+        event.preventDefault();
+        if (submitting || sendingCode) return;
+        const nextMode = event.key === 'Home' ? 'login' : event.key === 'End' ? 'register'
+            : authMode === 'login' ? 'register' : 'login';
+        setMode(nextMode);
+        (nextMode === 'login' ? loginModeBtn : registerModeBtn).focus();
+    });
+    passwordToggle.addEventListener('click', () => {
+        setPasswordVisible(passwordInput.type === 'password');
+    });
+    function updateCapsLock(event) {
+        capsLockHint.hidden = !event.getModifierState('CapsLock');
+    }
+    passwordInput.addEventListener('keydown', updateCapsLock);
+    passwordInput.addEventListener('keyup', updateCapsLock);
+    passwordInput.addEventListener('blur', () => { capsLockHint.hidden = true; });
     sendCodeBtn.addEventListener('click', sendVerificationCode);
     Object.entries(fields).forEach(([name, field]) => {
         field.input.addEventListener('input', () => {
@@ -270,14 +357,20 @@
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
+        if (submitting || sendingCode) return;
         errorMsg.textContent = '';
         if (!validateForm()) return;
 
         const email = emailInput.value.trim();
         const password = passwordInput.value;
 
+        submitting = true;
         submitBtn.disabled = true;
-        submitBtn.textContent = authMode === 'register' ? '正在创建账户…' : '正在登录…';
+        submitBtn.setAttribute('aria-busy', 'true');
+        loginModeBtn.disabled = true;
+        registerModeBtn.disabled = true;
+        sendCodeBtn.disabled = true;
+        submitLabel.textContent = authMode === 'register' ? '正在创建账户…' : '正在登录…';
         try {
             if (authMode === 'register') {
                 const registerRes = await fetch('/auth/register', {
@@ -326,14 +419,43 @@
         } catch (err) {
             errorMsg.textContent = '网络错误，请检查连接后重试';
         } finally {
+            submitting = false;
             submitBtn.disabled = false;
-            submitBtn.textContent = '继续';
+            submitBtn.setAttribute('aria-busy', 'false');
+            loginModeBtn.disabled = false;
+            registerModeBtn.disabled = false;
+            sendCodeBtn.disabled = Boolean(codeCooldownTimer);
+            updateSubmitLabel();
         }
     });
 
     // ALTCHA 自托管组件（login.html 引入 /static/vendor/altcha.min.js）。
     // 勾选组件触发 PoW 验证；statechange 事件携带 {state, payload}，
     // payload 随「获取验证码」请求提交，服务端离线校验。
+    customElements.whenDefined('altcha-widget').then(() => {
+        const i18n = globalThis.$altcha?.i18n;
+        if (!i18n) return;
+        i18n.set('zh-cn', {
+            ...i18n.get('en'),
+            ariaLinkLabel: 'ALTCHA 官方网站',
+            label: '点击完成人机验证',
+            verifying: '正在验证，请稍候…',
+            verified: '验证已通过',
+            verificationRequired: '请先完成人机验证',
+            waitAlert: '正在验证，请稍候',
+            error: '验证失败，请重试',
+            expired: '验证已过期，请重试',
+            loading: '正在加载…',
+            reload: '重新加载',
+            verify: '验证',
+            cancel: '取消',
+            enterCode: '请输入验证码',
+            enterCodeAria: '输入听到的验证码，按空格键播放音频。',
+            enterCodeFromImage: '请输入下方图片中的验证码。',
+            getAudioChallenge: '获取语音验证码',
+            footer: '由 <a href="https://altcha.org/" tabindex="-1" target="_blank" rel="noopener noreferrer" aria-label="ALTCHA 官方网站">ALTCHA</a> 提供验证',
+        });
+    });
     altchaWidget.addEventListener('statechange', (event) => {
         const detail = event.detail || {};
         altchaState = detail.state || 'unverified';

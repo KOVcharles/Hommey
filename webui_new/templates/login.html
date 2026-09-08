@@ -4,13 +4,20 @@
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <meta name="color-scheme" content="light dark">
-    <title>Hommey</title>
+    <title>登录 · Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260906-altcha">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260907-editorial">
+    <link rel="preload" href="/static/fonts/hommey-editorial.ttf" as="font" type="font/ttf" crossorigin>
+    <link rel="stylesheet" href="/static/auth.css?v=20260908-travel-refine">
 </head>
-<body>
+<body class="login-page">
+    <div class="auth-scenery" id="authScenery" aria-hidden="true">
+        <div class="auth-scene-layer is-current"><img src="/static/travel/airport.webp" width="1920" height="1200" alt="" decoding="async" fetchpriority="high"></div>
+        <div class="auth-scene-layer"><img width="1920" height="1200" alt="" decoding="async"></div>
+    </div>
+    <div class="auth-scene-wash" aria-hidden="true"></div>
     <main class="auth-page">
-        <section class="auth-visual">
+        <header class="auth-header">
             <div class="brand-stack">
                 <div class="auth-brand">
                     <span class="mini-logo" aria-hidden="true">
@@ -18,56 +25,61 @@
                     </span>
                     <span>Hommey</span>
                 </div>
+                <span class="auth-header-note">差旅，自有章法。</span>
                 <a class="github-icon-link" href="https://github.com/KOVcharles/Hommey" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 Hommey 项目" title="GitHub">
                     <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.8c.57.1.78-.25.78-.55v-2.15c-3.17.69-3.84-1.35-3.84-1.35-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.73-1.52-2.53-.29-5.19-1.27-5.19-5.65 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.17A10.9 10.9 0 0 1 12 5.08c.97 0 1.94.13 2.85.39 2.18-1.48 3.14-1.17 3.14-1.17.62 1.57.23 2.73.11 3.02.73.8 1.18 1.82 1.18 3.07 0 4.39-2.67 5.35-5.21 5.63.41.35.78 1.04.78 2.1v3.12c0 .3.21.66.79.55A11.4 11.4 0 0 0 12 .6Z"/></svg>
                 </a>
             </div>
+        </header>
+        <section class="auth-visual" aria-labelledby="authStoryTitle">
             <div class="auth-story">
-                <svg class="auth-route" viewBox="0 0 720 140" aria-hidden="true">
-                    <path d="M20 92 C145 92, 180 20, 314 47 S510 124, 700 34"/>
-                    <path class="active" d="M20 92 C145 92, 180 20, 314 47 S510 124, 700 34"/>
-                </svg>
-                <h1><span>把复杂差旅，</span><span>变成清楚的一程。</span></h1>
-                <p>行程、企业标准和个人偏好，由 Hommey 在需要时为你整理。</p>
+                <h1 id="authStoryTitle"><span>出发前<span class="auth-punctuation">，</span></span><span>把一切理清<span class="auth-punctuation">。</span></span></h1>
+            </div>
+            <div class="auth-scene-controls" id="sceneControls" hidden>
+                <span class="sr-only" id="sceneLabel">01 / 出发 · 机场晨光</span>
+                <div class="auth-scene-buttons" role="group" aria-label="背景场景">
+                    <button class="auth-scene-choice" type="button" data-scene="0" data-src="/static/travel/airport.webp" data-label="出发 · 机场晨光" aria-label="切换至机场晨光" aria-pressed="true"><span></span></button>
+                    <button class="auth-scene-choice" type="button" data-scene="1" data-src="/static/travel/train.webp" data-label="沿途 · 高铁窗外" aria-label="切换至高铁沿途" aria-pressed="false"><span></span></button>
+                    <button class="auth-scene-choice" type="button" data-scene="2" data-src="/static/travel/arrival.webp" data-label="抵达 · 城市傍晚" aria-label="切换至城市抵达" aria-pressed="false"><span></span></button>
+                    <button class="auth-scene-choice" type="button" data-scene="3" data-src="/static/travel/hotel.webp" data-label="停留 · 酒店时光" aria-label="切换至酒店休息" aria-pressed="false"><span></span></button>
+                    <button id="scenePause" class="auth-scene-pause" type="button" aria-label="暂停背景轮换" aria-pressed="false"><svg viewBox="0 0 20 20" fill="none" aria-hidden="true"><path class="scene-pause-icon" d="M7 5v10m6-10v10"/><path class="scene-play-icon" d="m7 4 8 6-8 6Z"/></svg></button>
+                </div>
+                <span class="sr-only" id="sceneStatus" role="status"></span>
             </div>
         </section>
 
-        <section class="auth-panel">
+        <section class="auth-panel" aria-labelledby="authTitle">
             <div class="auth-box">
-                <div class="brand-stack auth-mobile-brand" aria-label="Hommey">
-                    <div class="auth-brand">
-                        <span class="mini-logo" aria-hidden="true">
-                            <svg viewBox="0 -4 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
-                        </span>
-                        <span>Hommey</span>
-                    </div>
-                    <a class="github-icon-link" href="https://github.com/KOVcharles/Hommey" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 Hommey 项目" title="GitHub">
-                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.8c.57.1.78-.25.78-.55v-2.15c-3.17.69-3.84-1.35-3.84-1.35-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.73-1.52-2.53-.29-5.19-1.27-5.19-5.65 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.17A10.9 10.9 0 0 1 12 5.08c.97 0 1.94.13 2.85.39 2.18-1.48 3.14-1.17 3.14-1.17.62 1.57.23 2.73.11 3.02.73.8 1.18 1.82 1.18 3.07 0 4.39-2.67 5.35-5.21 5.63.41.35.78 1.04.78 2.1v3.12c0 .3.21.66.79.55A11.4 11.4 0 0 0 12 .6Z"/></svg>
-                    </a>
-                </div>
                 <div id="authModeCopy" class="auth-mode-copy">
                     <h2 id="authTitle">欢迎回来</h2>
                     <p id="authDescription">登录后继续你的差旅行程。</p>
                 </div>
                 <div id="authTabs" class="auth-tabs" data-mode="login" role="tablist" aria-label="登录或注册">
-                    <button id="loginModeBtn" class="auth-tab active" type="button" role="tab" aria-selected="true">登录</button>
-                    <button id="registerModeBtn" class="auth-tab" type="button" role="tab" aria-selected="false">注册</button>
+                    <button id="loginModeBtn" class="auth-tab active" type="button" role="tab" aria-selected="true" aria-controls="authFormPanel">登录</button>
+                    <button id="registerModeBtn" class="auth-tab" type="button" role="tab" aria-selected="false" aria-controls="authFormPanel" tabindex="-1">注册</button>
                 </div>
+                <div id="authFormPanel" role="tabpanel" aria-labelledby="loginModeBtn">
                 <form id="loginForm" class="auth-form" autocomplete="on" novalidate>
                     <div id="emailField" class="auth-field">
-                        <label class="sr-only" for="email">邮箱地址</label>
-                        <input id="email" class="auth-input" type="email" placeholder="邮箱地址" aria-describedby="emailError" autocomplete="username" required>
+                        <label class="auth-label" for="email">邮箱地址</label>
+                        <input id="email" name="email" class="auth-input" type="email" placeholder="name@example.com" aria-describedby="emailError" autocomplete="username" autocapitalize="none" spellcheck="false" required>
                         <p id="emailError" class="auth-field-error" aria-live="polite"></p>
                     </div>
                     <div id="passwordField" class="auth-field">
-                        <label class="sr-only" for="password">密码</label>
-                        <input id="password" class="auth-input" type="password" placeholder="密码" aria-describedby="passwordError" autocomplete="current-password" required>
+                        <label class="auth-label" for="password">密码<span id="passwordHint" class="auth-label-hint" hidden>至少 8 个字符</span></label>
+                        <div class="auth-password-wrap">
+                            <input id="password" name="password" class="auth-input" type="password" placeholder="请输入密码" aria-describedby="passwordHint passwordError capsLockHint" autocomplete="current-password" required>
+                            <button id="passwordToggle" class="auth-password-toggle" type="button" aria-label="显示密码" aria-pressed="false" aria-controls="password">
+                                <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="auth-eye-slash" d="m4 4 16 16"/></svg>
+                            </button>
+                        </div>
+                        <p id="capsLockHint" class="auth-input-hint" role="status" hidden>大写锁定已开启</p>
                         <p id="passwordError" class="auth-field-error" aria-live="polite"></p>
                     </div>
                     <div id="codeField" class="auth-field" hidden>
-                        <label class="sr-only" for="code">验证码</label>
+                        <label class="auth-label" for="code">邮箱验证码</label>
                         <div class="auth-code-row">
-                            <input id="code" class="auth-input" type="text" inputmode="numeric" maxlength="6" placeholder="验证码" aria-describedby="codeError" autocomplete="one-time-code">
+                            <input id="code" name="code" class="auth-input" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" aria-describedby="codeError" autocomplete="one-time-code">
                             <button id="sendCodeBtn" class="auth-code-btn" type="button">获取验证码</button>
                         </div>
                         <div id="altchaField" class="auth-field auth-altcha">
@@ -76,9 +88,10 @@
                         </div>
                         <p id="codeError" class="auth-field-error" aria-live="polite"></p>
                     </div>
-                    <button id="submitBtn" class="auth-submit" type="submit">继续</button>
+                    <button id="submitBtn" class="auth-submit" type="submit"><span id="submitLabel" aria-live="polite">登录</span><svg class="auth-submit-arrow" viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M5 12h14m-5-5 5 5-5 5"/></svg><span class="auth-submit-spinner" aria-hidden="true"></span></button>
                     <div id="errorMsg" class="auth-error" role="alert"></div>
                 </form>
+                </div>
                 <p id="authFootnote" class="auth-footnote">登录即表示你同意仅将账户用于 Hommey 差旅服务。</p>
             </div>
         </section>
@@ -87,7 +100,8 @@
         <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">赣ICP备2026020278号</a>
     </footer>
     <!-- ALTCHA 自托管人机验证组件；auth.js 监听其 statechange 事件读取 payload -->
-    <script src="/static/auth.js?v=20260906-altcha" defer></script>
+    <script src="/static/auth.js?v=20260908-travel-refine" defer></script>
+    <script src="/static/auth-background.js?v=20260908-travel-refine" defer></script>
     <script async defer src="/static/vendor/altcha.min.js" type="module"></script>
 </body>
 </html>
