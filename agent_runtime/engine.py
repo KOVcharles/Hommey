@@ -294,7 +294,7 @@ class Turn:
             selected = self.results(request.result_ids)
             if request.kind != "refuse":
                 for result in selected:
-                    proposal = result.role == "trip_context" and (result.data.get("trip") or result.data.get("trip_action", "update") != "update")
+                    proposal = result.role == "trip_context" and bool(result.data.get("trip") or result.data.get("trip_action", "update") != "update")
                     proposal |= result.role == "memory" and bool(result.data.get("preferences"))
                     if proposal and result.result_id not in self.state["applied_results"]:
                         raise ToolRejected("结果包含尚未提交的变更，请先 apply_changes；无法验证时重做专业任务，不要声称已保存")

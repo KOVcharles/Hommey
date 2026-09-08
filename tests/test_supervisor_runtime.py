@@ -288,3 +288,23 @@ def test_checkpoint_redaction_keeps_json_replayable():
     safe = safe_checkpoint(payload)
     value = json.loads(safe["messages"][0]["content"])
     assert "secret-password" not in value["note"] and value["city"] == "上海"
+
+
+@pytest.mark.asyncio
+async def test_partial_trip_renders_existing_intake_form_without_default_date():
+    class IntakeModel(JourneyModel):
+        async def __call__(self, messages, tools, tool_choice):
+            names = {t["function"]["name"] for t in tools}
+            out = outputs(messages)
+            if "delegate" in names and any(v.get("applied") for v in out):
+                result_id = next(v["result_id"] for v in out if v.get("role") == "trip_context")
+                return reply(("finish", {"kind": "ask", "result_ids": [result_id], "question": "从哪里出发？"}))
+            if "report" in names and PROFILES["trip_context"].instructions in messages[0]["content"]:
+                return reply(("report", {"status": "needs_input", "summary": "目的地是上海，其他信息待补充。",
+                    "data": {"trip": {"destination": "上海"}, "field_sources": {"destination": "到上海出差"}}, "missing_info": ["出发地", "日期"]}))
+            return await super().__call__(messages, tools, tool_choice)
+    services = FakeServices()
+    result = await Supervisor(IntakeModel(), services, FakeStore(services), CONFIG).run(SCOPE, "到上海出差")
+    assert "start_date" not in services.trip
+    assert result["answer_document"] is None
+    assert result["presentation_document"]["status"] == "collecting_required"
