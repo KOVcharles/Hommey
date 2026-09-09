@@ -161,7 +161,16 @@ async def test_six_role_journey_parallel_isolation_cards_and_idempotency():
     services, model = FakeServices(), JourneyModel()
     store = FakeStore(services)
     runtime = Supervisor(model, services, store, CONFIG)
-    result = await runtime.run(SCOPE, TEXT)
+    from evaluation.collector import TurnEvaluationCollector, set_current_collector, reset_current_collector
+    collector = TurnEvaluationCollector(request_id=SCOPE.request_id, session_id=SCOPE.session_id, user_message=TEXT)
+    token = set_current_collector(collector)
+    try:
+        result = await runtime.run(SCOPE, TEXT)
+    finally:
+        reset_current_collector(token)
+    assert set(collector.intents) == set(PROFILES)
+    assert collector.run_id == SCOPE.request_id
+    assert collector.evidence_items
     assert model.roles == set(PROFILES)
     assert services.peak == 3
     assert store.writes == 1
@@ -258,7 +267,7 @@ async def test_native_stream_uses_final_complete_call_and_rejects_repaired_json(
 
 
 @pytest.mark.asyncio
-async def test_web_entry_pins_old_runs_and_new_entry_persists_documents():
+async def test_web_entry_uses_only_supervisor_and_persists_documents():
     from unittest.mock import AsyncMock
     from webui_new.manager import HommeyWebInstance
     instance = HommeyWebInstance("employee-a")
@@ -269,11 +278,8 @@ async def test_web_entry_pins_old_runs_and_new_entry_persists_documents():
         add_message=lambda role, content, metadata: saved.append((role, metadata)) or "message-id")
     response = {"response": "差旅结果", "answer_document": None, "presentation_document": None, "agents": [], "preferences_updated": False}
     instance.supervisor = SimpleNamespace(run=AsyncMock(return_value=response))
-    instance.state_store = SimpleNamespace(get_active=AsyncMock(return_value=SimpleNamespace(status="WAITING_USER")))
-    instance._process_legacy_message_impl = AsyncMock(return_value={"engine": "legacy"})
-    assert (await instance._process_message_impl("继续", request_id="request-a"))["engine"] == "legacy"
-    instance.supervisor.run.assert_not_awaited()
-    instance.state_store.get_active.return_value = None
+    assert not hasattr(instance, "state_store")
+    assert not hasattr(instance, "_process_legacy_message_impl")
     result = await instance._process_message_impl("查询出差天气", request_id="request-a")
     assert result["response"] == "差旅结果"
     assert [role for role, _ in saved] == ["user", "assistant"]

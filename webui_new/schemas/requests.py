@@ -97,10 +97,6 @@ class InterruptRequest(BaseModel):
     session_id: str | None = None
 
 
-class SkillToggleRequest(BaseModel):
-    enabled: bool
-
-
 class OnboardingPreferenceRequest(BaseModel):
     key: str
     value: str

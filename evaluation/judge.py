@@ -8,7 +8,7 @@ from agentscope.agent import AgentBase
 from agentscope.message import Msg
 
 from core.llm_response import extract_text_from_response
-from core.intent_result import parse_json_object
+from core.json_output import parse_json_object
 from evaluation.models import JudgeResult, TurnEvaluationFacts, TurnEvaluationMetadata
 
 

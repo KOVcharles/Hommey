@@ -6,7 +6,7 @@ from core.skill_definition import SkillDefinition, load_skill_definition, parse_
 
 
 class SkillLoader:
-    """Discover standard SKILL.md packages and merge Hommey runtime extensions."""
+    """Read Skill guidance and display metadata; never load executable agents."""
 
     def __init__(self, skills_dir: Optional[str] = None):
         project_root = Path(__file__).parent.parent.resolve()
@@ -49,7 +49,6 @@ class SkillLoader:
                 continue
             skill_md = skill_path / "SKILL.md"
             if not skill_md.exists():
-                errors.append(f"Missing SKILL.md: {skill_path.name}")
                 continue
             try:
                 definition = load_skill_definition(skill_path)
@@ -66,14 +65,6 @@ class SkillLoader:
         if not self.definitions:
             self.load_definitions()
         return self.definitions.get(skill_name)
-
-    def load_manifests(self, strict: bool = True) -> Dict[str, SkillDefinition]:
-        """Compatibility alias; use :meth:`load_definitions` in new code."""
-        return self.load_definitions(strict=strict)
-
-    def get_manifest(self, skill_name: str) -> Optional[SkillDefinition]:
-        """Compatibility alias; use :meth:`get_definition` in new code."""
-        return self.get_definition(skill_name)
 
     def get_skill_prompt(self, skill_mapping: Optional[Dict[str, str]] = None) -> str:
         if not self.skills:

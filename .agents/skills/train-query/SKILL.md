@@ -3,17 +3,9 @@ name: train-query
 description: Query real China Railway (12306) train schedules, times, durations, fares and seat availability. Use for train-ticket (车票), train-number, high-speed-rail, or railway schedule questions; never general web search and never booking.
 ---
 
-# Query Train Schedules and Availability
+# 查询差旅车次
 
-Return structured train rows (train number, departure/arrival station and time, duration, seat availability, fares) with an official-verification reminder.
-
-- Public train-schedule lookups do not require a company-trip context.
-- Use origin, destination and travel date from the trip card when present.
-- When a complete company-trip card provides an end date or duration, query both the outbound and return legs. Calculate an inclusive return date as `start_date + duration_days - 1` when only duration is available, and use `return_location` or the original origin as the return destination.
-- Keep the compatible `results.trains` list and tag each round-trip row with `direction` and `travel_date`; also return `results.outbound` and `results.return_trip` segments. Never fabricate the missing leg when only one query succeeds.
-- If the travel date is missing, use today's date in the Asia/Shanghai timezone and query immediately; do not ask a follow-up question just for the date.
-- Prefer the official railway 12306 source over third-party snippets.
-- Treat a successful 12306 response with an empty result list as “no direct/remaining trains found”, not as an upstream outage.
-- Treat schedule, fare and availability data as advisory — tell the user to verify through the official 12306 app or authorized travel channels.
-- Never claim a booking or transaction was completed.
-- Never answer policy/RAG questions (制度/标准/报销) or act as general web search.
+由 travel_info 角色调用 search_trains，参数是明确的起点、终点与 YYYY-MM-DD 日期。
+read_source 回读真实结果后 report；不编造车次、时间、余票或价格。
+当前适配器提供时刻和余票，不提供真实票价。保留查询时间，余票以再次查询为准。
+地点或日期不明确则请主 Agent 补问；不购票、不改签、不退票。

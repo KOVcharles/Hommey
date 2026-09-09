@@ -1,25 +1,5 @@
 version: 1.0.0
 display_name: 差旅偏好管理
 category: capability
-intent: preference
-agent_name: preference
-user_facing: false
 risk_level: medium
 catalog_order: 80
-side_effect_allowed: true
-progress_key: preference_updating
-updates_preferences: true
-answer:
-  section_kind: preference
-memory_hooks:
-  - agent: preference
-    effect: save_preference
-tools: [memory]
-execution:
-  - skill: preference
-    agent_name: preference
-    priority: 1
-    on_failure: abort
-    max_retries: 0
-    reason: 更新用户差旅偏好
-    expected_output: 结构化差旅偏好变更

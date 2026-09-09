@@ -11,7 +11,7 @@ from typing import Any
 
 from agentscope.message import Msg
 
-from core.intent_result import parse_json_object
+from core.json_output import parse_json_object
 from evaluation.decision import decide
 from evaluation.facts import extract_facts
 from evaluation.models import JudgeResult, RuleResult, TurnEvaluationMetadata

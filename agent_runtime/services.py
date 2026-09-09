@@ -1,11 +1,8 @@
 """Scoped business adapters. No arbitrary MCP, URLs, filesystem or SQL tools."""
 from __future__ import annotations
 
-import importlib.util
 import json
 from datetime import date, datetime, timezone
-from pathlib import Path
-import sys
 from uuid import uuid4
 
 from context.memory_repository import stable_uuid
@@ -40,17 +37,6 @@ def plain(value):
     if isinstance(value, list):
         return [plain(v) for v in value]
     return value
-
-
-def load_train_backend():
-    name = "hommey_train_backend"
-    if name not in sys.modules:
-        path = Path(__file__).resolve().parents[1] / ".agents/skills/train-query/script/train_backend.py"
-        spec = importlib.util.spec_from_file_location(name, path)
-        module = importlib.util.module_from_spec(spec)
-        sys.modules[name] = module
-        spec.loader.exec_module(module)
-    return sys.modules[name].create_train_query_backend()
 
 
 class BusinessServices:
@@ -124,7 +110,8 @@ class BusinessServices:
         if name == "search_trains":
             date.fromisoformat(request.date)
             if self.trains is None:
-                self.trains = load_train_backend()
+                from core.integrations.trains import create_train_query_backend
+                self.trains = create_train_query_backend()
             rows = await self.trains.query_trains(request.origin, request.destination, request.date)
             return "train", [{**row, "travel_date": request.date} for row in rows[:12]]
         if self.travel is None:

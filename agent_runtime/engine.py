@@ -6,7 +6,6 @@ from copy import deepcopy
 from datetime import datetime, timezone
 import json
 import logging
-from pathlib import Path
 import time
 from uuid import uuid4
 
@@ -120,6 +119,7 @@ class Turn:
                     await asyncio.gather(work, monitor, return_exceptions=True)
             output.update({"agents": [{"name": r["role"], "display": PROFILES[r["role"]].title, "status": r["status"], "duration_sec": 0}
                 for r in self.state["results"].values()], "preferences_updated": self.state["preferences_updated"], "engine": "supervisor"})
+            self.capture_evaluation()
             await self.save(output, "completed")
             await self.emit("done")
             return output
@@ -133,6 +133,19 @@ class Turn:
             except Exception:
                 logger.exception("Unable to record supervisor stop")
             raise
+
+    def capture_evaluation(self):
+        # Post-processing must never fail the business turn.
+        from evaluation.collector import current_collector
+        collector = current_collector()
+        if collector is None:
+            return
+        try:
+            initial = json.loads(self.state["main"]["messages"][1]["content"])
+            collector.record_context(initial.get("context", {}).get("recent", []))
+            collector.record_runtime(self.scope.request_id, list(self.state["results"].values()))
+        except Exception:
+            logger.exception("Unable to capture supervisor evaluation metadata")
 
     async def monitor(self):
         while True:
@@ -236,32 +249,45 @@ class Turn:
             allowed = {s for p in PROFILES.values() for s in p.skills} if role is None else set(PROFILES[role].skills)
             if request.name not in allowed:
                 raise ToolRejected("该 Skill 不在本角色权限范围内")
-            path = Path(__file__).resolve().parents[1] / ".agents/skills" / request.name / "SKILL.md"
-            return {"skill": request.name, "guidance": (await run_blocking(path.read_text, encoding="utf-8"))[:12000]}
+            from utils.skill_loader import SkillLoader
+            guidance = await run_blocking(SkillLoader().get_skill_content, request.name)
+            if not guidance:
+                raise ToolRejected("该业务指南当前不可用")
+            return {"skill": request.name, "guidance": guidance[:12000]}
         if role is not None:
-            if name == "report":
-                request = Report.model_validate(raw)
-                if len(json.dumps(request.data, ensure_ascii=False)) > 12000:
-                    raise ToolRejected("结果过大，请压缩结构化数据")
-                validate_report(role, request, sources, dependencies)
-                if role in {"policy_rag", "memory", "travel_info"} and not request.evidence_refs and not (role == "memory" and request.data.get("preferences")):
-                    request = Report(status="needs_input" if request.missing_info else "unavailable",
-                        summary="本次未取得可核实的资料，无法给出确定结论。", missing_info=request.missing_info)
-                return {"_terminal": request.model_dump()}
-            if name not in PROFILES[role].tools:
-                raise ToolRejected("本角色没有该工具权限")
-            request = TOOLS[name][0].model_validate(raw)
-            if name == "read_source":
-                return sources.read(request.source_id)
-            try:
-                kind, data = await asyncio.wait_for(self.runtime.services.execute(self.scope, name, request), timeout=self.runtime.config["tool_timeout_sec"])
-            except (ExecutionLimitExceeded, RuntimeStopped, ToolRejected):
-                raise
-            except Exception as exc:
-                logger.warning("Specialist tool unavailable role=%s tool=%s error_type=%s", role, name, type(exc).__name__)
-                return {"status": "unavailable", "message": "该数据源本次查询不可用，请如实说明或缩小查询范围"}
-            entries = data if kind in {"policy", "memory"} and isinstance(data, list) else [data]
-            return {"sources": [sources.add(kind, item) for item in entries[:20]], "empty": not entries}
+            return await self.invoke_specialist(call, role, sources, dependencies)
+        return await self.invoke_main(state, call)
+
+    async def invoke_specialist(self, call, role, sources, dependencies):
+        """Leaves can query and report; they cannot delegate or commit changes."""
+        name, raw = call["name"], call["arguments"]
+        if name == "report":
+            request = Report.model_validate(raw)
+            if len(json.dumps(request.data, ensure_ascii=False)) > 12000:
+                raise ToolRejected("结果过大，请压缩结构化数据")
+            validate_report(role, request, sources, dependencies)
+            if role in {"policy_rag", "memory", "travel_info"} and not request.evidence_refs and not (role == "memory" and request.data.get("preferences")):
+                request = Report(status="needs_input" if request.missing_info else "unavailable",
+                    summary="本次未取得可核实的资料，无法给出确定结论。", missing_info=request.missing_info)
+            return {"_terminal": request.model_dump()}
+        if name not in PROFILES[role].tools:
+            raise ToolRejected("本角色没有该工具权限")
+        request = TOOLS[name][0].model_validate(raw)
+        if name == "read_source":
+            return sources.read(request.source_id)
+        try:
+            kind, data = await asyncio.wait_for(self.runtime.services.execute(self.scope, name, request), timeout=self.runtime.config["tool_timeout_sec"])
+        except (ExecutionLimitExceeded, RuntimeStopped, ToolRejected):
+            raise
+        except Exception as exc:
+            logger.warning("Specialist tool unavailable role=%s tool=%s error_type=%s", role, name, type(exc).__name__)
+            return {"status": "unavailable", "message": "该数据源本次查询不可用，请如实说明或缩小查询范围"}
+        entries = data if kind in {"policy", "memory"} and isinstance(data, list) else [data]
+        return {"sources": [sources.add(kind, item) for item in entries[:20]], "empty": not entries}
+
+    async def invoke_main(self, state, call):
+        """The supervisor owns delegation, review, commits and final selection."""
+        name, raw = call["name"], call["arguments"]
         if name not in MODELS:
             raise ToolRejected("主 Agent 只能委派、审阅和提交已验证结果")
         request = MODELS[name].model_validate(raw)

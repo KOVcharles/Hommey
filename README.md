@@ -75,55 +75,41 @@ Hommey 是一位面向企业差旅的 AI 助手。她在同一段对话里理解
 | 信息不完整 | 保存当前行程，生成可交互的补全卡片，补齐后自动续跑原任务 |
 | 一个问题包含多个意图 | 将天气、制度、规划等意图拆成边界明确的独立任务，按依赖关系执行 |
 | 制度与外部信息混在一起 | 公司制度只进入内部 RAG；天气与公共交通只进入外部信息查询，避免 Query 串扰 |
-| 用户主动终止 | 持久化 Run、Turn、Goal 和 Node 状态；再次表达“继续”时恢复未完成节点 |
-| 重复提交或并发请求 | 使用请求幂等、节点 `operation_id`、状态 `revision` 和用户级锁避免重复执行 |
+| 用户主动终止 | 取消当前执行并保留检查点；同一请求 ID 可恢复，新一轮通过工作摘要继续 |
+| 重复提交或并发请求 | 请求幂等、事务回执、版本校验和用户级锁保护写入 |
 | 长对话与跨会话使用 | Redis 保存短期上下文，PostgreSQL 保存会话、行程和用户差旅偏好 |
 
 ## 编排是怎样工作的
 
 ```mermaid
 flowchart LR
-    U[用户 Turn] --> I[意图识别与授权]
-    I --> D[拆分语义任务]
-    D --> V[校验并生成 DAG]
-    V --> S[(Run 状态机)]
-    S --> E[调度 Skill Agent]
-    E --> P[制度 RAG]
-    E --> Q[天气与交通]
-    E --> M[行程与记忆]
-    P --> S
-    Q --> S
-    M --> S
-    S --> C[答案合成]
-    C --> UI[持久化卡片]
+    U[用户消息] --> C[鉴权与有界上下文]
+    C --> M[Hommey 主 Agent]
+    M --> S[按需委派专业子 Agent]
+    S --> R[摘要 / 结构化结果 / 证据]
+    R --> M
+    M --> V[校验并事务提交变更]
+    V --> M
+    M --> UI[答案或行程补充卡片]
+    M --- DB[(工具边界检查点)]
 ```
 
-职责边界保持明确：意图 Agent 只识别和授权；任务分解器产出隔离后的语义任务；编排层创建并维护状态机；子 Agent 只提交执行结果，不直接修改全局状态；Composer 最后生成统一的答案文档。
+主 Agent 决定调用谁、传哪些结果、何时补问和结束。六类专业子 Agent 分别负责行程整理、
+制度 RAG、个人记忆、出行信息、方案规划和合规检查。独立查询可并发，有依赖的任务显式传入
+已完成结果。子 Agent 不继承主对话和兄弟日志，也不能继续创建 Agent。
 
-| 阶段 | 主要实现 |
+| 实现 | 职责 |
 | --- | --- |
-| 意图识别 | `agents/intention_agent.py` |
-| 任务计划 | `core/orchestration/decomposer.py` |
-| 计划校验与依赖图 | `core/orchestration/validator.py`、`graph_builder.py` |
-| 运行与恢复 | `core/orchestration/pipeline.py`、`lifecycle.py` |
-| 状态持久化 | `core/orchestration/state.py`、`state_store.py` |
-| 节点执行 | `core/orchestration/executor.py` |
-| 答案合成 | `core/orchestration/composer.py` |
+| `agent_runtime/engine.py` | 主/子原生工具循环、调度与恢复 |
+| `agent_runtime/profiles.py` | 六角色与实际权限边界 |
+| `agent_runtime/services.py` | 上下文和受控业务查询 |
+| `agent_runtime/validation.py` | 来源、字段和原文依据校验 |
+| `agent_runtime/store.py` | PostgreSQL 检查点、版本校验和幂等写入 |
+| `agent_runtime/render.py` | 结果到前端文档 |
 
-### 状态模型
-
-编排状态的权威快照是 PostgreSQL 中的 JSONB。它不是一段任意 JSON，而是由 Pydantic 模型约束的版本化结构：
-
-```text
-Run       一次可暂停、可恢复的完整工作流
-└─ Turn   用户的一次输入或一次继续操作
-   └─ Goal   一个独立业务意图，例如查制度或规划行程
-      └─ Node   DAG 中可实际执行和重试的步骤
-```
-
-每次影响恢复语义的状态变更都会持久化，并通过 `revision` 做并发冲突检测。过程中的展示事件仍使用流式传输，不会把每一个 UI 进度字样都写入数据库。快速路由只处理没有上下文依赖的安全请求；存在待补充或可恢复 Run 时，输入会先交给 Turn Resolver 判断是继续、修订还是新任务。
-
-更完整的设计见 [任务编排 v2](docs/task-orchestration-v2.md) 和 [行程收集体验](docs/trip-intake-experience.md)。
+运行器只有这一套。旧意图 Agent、DAG、动态 Skill 执行器及 Composer 已删除，回滚使用 Git
+检查点。Skill 是按需读取的业务指南，不能扩展权限或动态加载代码。
+完整边界和验证范围见 [架构与回滚](docs/plans/2026-09-08-supervisor-implementation-and-rollback.md)。
 
 ## 内置能力
 
@@ -139,17 +125,16 @@ Run       一次可暂停、可恢复的完整工作流
 | `check-trip-compliance` | 根据已检索的制度证据检查合规性 |
 | `memory-query` | 查询当前用户自己的差旅记录 |
 | `preference` | 保存酒店、航司、座位等差旅偏好 |
-| `chitchat` | 处理简短问候和能力说明 |
-| `mcp-tool` | 路由已经明确授权的 MCP 调用，默认停用 |
+| `place-query` | 工作地点定位和附近酒店信息，供出行信息角色使用 |
 
-Skill 可以独立声明输入输出、风险、依赖和执行步骤，并由平台统一发现、校验、启停和记录执行轨迹。详细说明见 [Skill 系统](docs/skill-system.md)。
+Skill 保存业务方法和展示元数据；工具权限和执行契约由运行器代码校验，管理员目录只读。详细说明见 [Skill 系统](docs/skill-system.md)。
 
 ## 技术组成
 
 | 层 | 实现 |
 | --- | --- |
 | Web | FastAPI、Uvicorn、Jinja2、原生 JavaScript 与 CSS |
-| Agent | AgentScope、自研多意图编排流水线、声明式 Skill |
+| Agent | AgentScope 模型适配器、Supervisor 原生工具循环、六个专业角色 |
 | 状态与记忆 | PostgreSQL 16、Redis 7 |
 | 检索 | PostgreSQL + pgvector、BM25、RRF、BGE Embedding |
 | 传输 | NDJSON 流式响应 |
@@ -203,9 +188,9 @@ Compose 默认启动两个 Uvicorn worker，并另启 `rag-worker` 处理 Postgr
 ## 项目结构
 
 ```text
-.agents/skills/          业务 Skill 包及其契约
-agents/                  意图识别与 Agent 适配层
-core/orchestration/      任务拆分、DAG、执行、状态与合成
+.agents/skills/          业务指南与展示元数据
+agent_runtime/          统一主/子 Agent、上下文、工具、校验和检查点
+core/integrations/      天气、地图、12306 适配器
 core/presentation/       行程补全卡片和答案文档协议
 context/                 会话、记忆、偏好与 PostgreSQL 仓储
 rag/                     内部制度的混合检索
@@ -226,13 +211,13 @@ docker compose \
   exec hommey pytest -q
 ```
 
-编排状态机、终止恢复、并发幂等和持久化卡片都有独立回归用例。需要真实 PostgreSQL 或 Redis 的测试会根据运行环境自动执行或跳过。
+六角色流程、上下文隔离、终止恢复、并发幂等和卡片有独立回归用例。完整集成测试需要独立 PostgreSQL 和 Redis；离线命令与已知限制见架构文档。
 
 ## 进一步阅读
 
 | 文档 | 内容 |
 | --- | --- |
-| [任务编排 v2](docs/task-orchestration-v2.md) | 多意图拆分、DAG、状态机与恢复流程 |
+| [架构与回滚](docs/plans/2026-09-08-supervisor-implementation-and-rollback.md) | 单一 Supervisor、上下文、六角色和回滚检查点 |
 | [Skill 系统](docs/skill-system.md) | Skill 包结构、加载、治理与观测 |
 | [记忆系统](docs/memory-system.md) | 短期上下文、长期记忆与隐私边界 |
 | [行程收集体验](docs/trip-intake-experience.md) | 缺失信息收集和自动续跑 |

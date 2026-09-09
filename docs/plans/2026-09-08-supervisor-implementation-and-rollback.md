@@ -2,16 +2,15 @@
 
 本次在 `codex/enterprise-travel-agent` 分支实现。原始代码基线为
 `87674841963f6a0c6ef53d0a60ead06afe6e83ca`，另保留分支
-`codex/rollback-before-agent-rebuild`。设计文档检查点为 `9131513`。
+`codex/rollback-before-agent-rebuild`。设计文档检查点为 `9131513`。删除旧执行链之前的检查点为
+`codex/checkpoint-before-single-runtime`（`6165ce1`）。2026-09-09 起只保留 Supervisor 执行链。
 
 ## 实际执行流程
 
 ```mermaid
 flowchart TD
     U[用户消息 / 行程表单 / 附件] --> W[现有鉴权与用户锁]
-    W --> E{当前会话有未结束的旧任务?}
-    E -->|有| L[原 DAG 引擎完成原任务]
-    E -->|没有| C[会话上下文与请求检查点]
+    W --> C[会话上下文与请求检查点]
     C --> M[Hommey 主 Agent 原生工具循环]
     M --> S[按需委派六类专业子 Agent]
     S --> R[短摘要 / 结构化数据 / 来源引用]
@@ -45,7 +44,7 @@ flowchart TD
   不继承主 Agent 对话、兄弟子 Agent 日志、其他用户资料，也不能创建子 Agent。
 - 来源注册表按子任务隔离。只能回读自己查询到的或被显式作为依赖传入的来源。
   主 Agent 的普通读取只拿结构化结果，不拿原始来源正文。
-- 本次不调用旧的“读取时自动推进水位”的会话摘要生成路径；使用已有摘要和有界工作摘要。
+- 已删除读取时自动生成长期摘要的模型路径；使用已有摘要和有界工作摘要。
   更久的原始对话由 memory 按关键词检索。没有新建向量化个人记忆服务。
 - 同轮最多并行 3 个独立子任务；默认最多委派 12 次、主循环 14 轮、每个子循环 6 轮。
   总请求沿用 240 秒超时，子任务默认 90 秒、业务工具 35 秒。
@@ -77,59 +76,64 @@ flowchart TD
 沿用 Python/FastAPI、AgentScope 的 OpenAI 兼容模型适配器、PostgreSQL、Redis，
 以及现有 RAG、12306、高德服务和前端 DTO。没有新增第三方依赖或部署服务。
 
-新增 `0022_supervisor_runs.sql` 仅创建 `supervisor_runs` 和
-`supervisor_trip_records` 及索引；旧 DAG 表、历史和业务工具都保留。
+`0022_supervisor_runs.sql` 创建 `supervisor_runs` 和 `supervisor_trip_records`。
+`0023_retire_dag_runs.sql` 将旧 DAG 未结束任务标为 ABANDONED，保留快照供审计；
+现有消息、偏好和活动行程保留，新消息统一进入 Supervisor。旧 DAG Python 执行器、
+意图 Agent、动态注册器、Composer、memory hooks 和引擎开关均已删除。
 偏好继续写现有宽表与 EAV 回滚镜像，活动行程保持旧引擎可读。
 
-新引擎要求 PostgreSQL。文件记忆开发模式须显式选 `legacy`，不会静默切换引擎。
+运行入口要求 PostgreSQL；文件/内存存储类仅用于独立存储测试，不能作为聊天引擎。
 RAG 目前使用本部署固定企业知识库；不声称支持多个企业共享集合的租户隔离。
-网页的“增强检索”在新引擎下会明确展示使用标准检索；原增强检索流程仍在旧引擎中。
+网页请求“增强检索”时会明确展示实际使用标准检索；当前专业工具尚未接入 HyDE。
 酒店为附近 POI 与参考消费，12306 当前适配器不提供真实票价，也不执行交易。
+
+## Skill 与评估
+
+Skill 仅包含业务指南和展示元数据。工具白名单在 `agent_runtime/profiles.py` 中，
+输入/输出契约在 `contracts.py` 和 `services.py` 中；不存在 YAML 生成 DAG 或动态导入
+`script/agent.py`。管理员页面只读，已删除无实际效力的启停、执行图和旧执行轨迹界面。
+离线评估从同一请求的专业结果采集角色、摘要与制度证据，不参与业务调度，也不能写业务数据。
 
 ## 启用和回滚
 
-代码默认 `HOMMEY_AGENT_ENGINE=supervisor`。先在测试部署验证模型原生工具调用、
-企业知识库、12306/高德配置；再构建运行镜像。生产数据库迁移由原启动机制应用。
-本次工作只修改并提交分支，没有替换运行中的生产服务。
+本次只修改代码分支，没有替换生产服务。部署前在测试环境验证所配模型的原生工具调用、
+企业知识库、12306/高德服务；备份数据库后再使用现有启动迁移机制和 Docker 构建流程。
 
-功能回滚：把根目录 `.env` 中这一行设为：
-
-```dotenv
-HOMMEY_AGENT_ENGINE=legacy
-```
-
-然后重新创建所有 Web worker，让配置一致。若使用仓库 Docker Compose：
+不再有运行时引擎切换。回滚要使用 Git 检查点并重建所有 Web worker：
 
 ```powershell
-docker compose --env-file .env -f docker/docker-compose.yml up -d --force-recreate hommey
-```
-
-若还需回到改造前代码，在保留其他工作区改动后切换检查点分支并重新构建：
-
-```powershell
-git switch codex/rollback-before-agent-rebuild
+# 保留当前工作区改动后，再选择一个检查点；不要执行 reset --hard。
+git switch codex/checkpoint-before-single-runtime
+# 或回到整个改造之前：git switch codex/rollback-before-agent-rebuild
 docker compose --env-file .env -f docker/docker-compose.yml up -d --build hommey
 ```
 
-不需要删除新增表，也不要用 `reset --hard` 或反向删除迁移恢复代码。
-引擎/代码回滚不会撤销已经保存的用户偏好或行程变更；上线前按现有流程备份数据库，
-确需回退业务数据时根据备份与请求回执单独处理。旧引擎不能执行新引擎检查点，
-切回新引擎后才可继续该检查点；两种检查点不互相翻译。
+代码回滚不会自动恢复数据库。不要删除新表或反向执行迁移：0023 已终止的旧 DAG 任务
+不会因切分支重新激活，需要重新提交业务需求；保存的行程和偏好仍然存在。
+旧版本不能执行 Supervisor 检查点。若需回退业务数据，应另用部署前备份和写入回执处理。
+回滚点用于代码恢复，不表示两套流程可互相转换。
 
-## 本次简单测试
+## 本次简单测试（2026-09-09）
 
-33 项通过，1 项按原测试条件跳过。包括六角色完整模拟行程、并行隔离、来源校验、
-日期/偏好写入校验、中断恢复、取消、领域拒绝、网页入口旧任务固定、卡片持久化、
-JSON 检查点脱敏，以及现有预算/模型配置/行程表单/异步门面轻量回归。
+最终合并回归 107 项通过、1 项跳过，包含 Web API 错误/会话/表单契约。
+全测试目录收集通过（417 项），仅表示导入和发现正常，不代表运行了全部集成测试。
+覆盖六角色完整模拟行程、并行隔离、来源验证、日期与偏好写入、断点恢复、取消、
+领域拒绝、单一运行工厂、Skill 无执行入口、评估采集、模型配置及数据服务适配器。
+管理员页面 JavaScript 通过 `node --check`。
 
-另在专门启动的临时 PostgreSQL 测试容器中实际应用迁移，验证事务写入、
-幂等回执、版本冲突、旧 owner 失效、后续消息保护和会话删除。测试后移除该容器。
-未调用真实商业模型、真实企业知识库、高德或 12306；未做压力测试。
+跳过的是依赖旧版 TXT 语料文件名的 RAG golden 校准：仓库现有语料已经替换，不能把
+它冒充原校准集，也未为通过测试调整生产证据阈值。新语料检索质量需要另行校准。
+
+当前 Docker 引擎未启动，未重新执行 PostgreSQL 烟测，0023 迁移也未在实际数据库应用。
+此前阶段曾验证过 0022 的事务与恢复，但这不等同于本轮数据库验证。
+未调用真实商业模型、企业知识库、高德或 12306，未做压力测试。
 
 ```powershell
-# 离线关键流程
-.venv\Scripts\python.exe -m pytest tests/test_supervisor_runtime.py -q
+# 仅给离线测试使用内存 RAG，避免导入服务器时连接本机数据库。
+$env:HOMMEY_RAG_VECTOR_BACKEND = 'memory'
+.venv\Scripts\python.exe -m pytest tests/test_single_runtime.py tests/test_supervisor_runtime.py tests/test_runtime_thinking.py tests/test_train_query_backend.py tests/test_intent_guard.py tests/test_memory_p0.py tests/test_place_information.py tests/test_rag_hyde_mode.py tests/test_rag_phase4_evidence.py tests/test_evaluation.py tests/test_llm_response_helpers.py tests/test_execution_budget.py tests/test_webui_error_responses.py -q
+.venv\Scripts\python.exe -m pytest tests --collect-only -q
 
-# PostgreSQL 烟测：HOMMEY_TEST_POSTGRES_DSN 必须指向独立测试库
+# 数据库验证必须在独立测试库配置 HOMMEY_TEST_POSTGRES_DSN 后执行。
 .venv\Scripts\python.exe -m pytest tests/test_supervisor_postgres.py -q
 ```

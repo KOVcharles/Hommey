@@ -64,19 +64,6 @@ LLM_CONFIG = {
 }
 
 
-COMPOSER_CONFIG = {
-    "enabled": _bool_env("HOMMEY_COMPOSER_ENABLED", True),
-    "api_key": os.getenv("HOMMEY_COMPOSER_API_KEY") or LLM_CONFIG["api_key"],
-    "model_name": os.getenv("HOMMEY_COMPOSER_MODEL_NAME") or LLM_CONFIG["model_name"],
-    "base_url": os.getenv("HOMMEY_COMPOSER_BASE_URL") or LLM_CONFIG["base_url"],
-    "temperature": _float_env("HOMMEY_COMPOSER_TEMPERATURE", 0.2),
-    "max_tokens": _int_env("HOMMEY_COMPOSER_MAX_TOKENS", 4096),
-    "enable_thinking": _optional_bool_env(
-        "HOMMEY_COMPOSER_ENABLE_THINKING", LLM_CONFIG["enable_thinking"],
-    ),
-}
-
-
 TRIP_INTAKE_CONFIG = {
     "enabled": _bool_env("HOMMEY_TRIP_INTAKE_CARD", True),
 }
@@ -225,9 +212,6 @@ EVALUATION_CONFIG = {
 
 
 SUPERVISOR_CONFIG = {
-    # New requests use the supervisor. Existing active legacy runs stay pinned.
-    # Set HOMMEY_AGENT_ENGINE=legacy and restart backend workers to roll back.
-    "engine": os.getenv("HOMMEY_AGENT_ENGINE", "supervisor").strip().lower(),
     "main_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_MAIN_ROUNDS", 14), 24)),
     "child_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_CHILD_ROUNDS", 6), 10)),
     "max_children": max(1, min(_int_env("HOMMEY_SUPERVISOR_MAX_CHILDREN", 12), 20)),
@@ -237,20 +221,7 @@ SUPERVISOR_CONFIG = {
     "max_external_calls": max(8, min(_int_env("HOMMEY_SUPERVISOR_MAX_EXTERNAL_CALLS", 64), 96)),
     "max_calls_per_type": max(6, min(_int_env("HOMMEY_SUPERVISOR_MAX_CALLS_PER_TYPE", 48), 64)),
 }
-if SUPERVISOR_CONFIG["engine"] not in {"supervisor", "legacy"}:
-    raise ValueError("HOMMEY_AGENT_ENGINE must be supervisor or legacy")
-
-
 RESILIENCE_CONFIG = {
-    "max_retries": _int_env("HOMMEY_MAX_RETRIES", 3),
-    "agent_max_retries": _int_env("HOMMEY_AGENT_MAX_RETRIES", 1),
-    "retry_base_delay_sec": _float_env("HOMMEY_RETRY_BASE_DELAY_SEC", 1.0),
-    "retry_max_delay_sec": _float_env("HOMMEY_RETRY_MAX_DELAY_SEC", 30.0),
-    "max_agent_calls_per_request": _int_env("HOMMEY_MAX_AGENT_CALLS_PER_REQUEST", 8),
-    "max_external_calls_per_request": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_REQUEST", 16),
-    "max_external_calls_per_type": _int_env("HOMMEY_MAX_EXTERNAL_CALLS_PER_TYPE", 6),
-    # Full planning may include intent recognition, collection, parallel
-    # policy/public-info retrieval, planning, and compliance verification.
     "request_timeout_sec": _float_env("HOMMEY_REQUEST_TIMEOUT_SEC", 240.0),
     "circuit_failure_threshold": _int_env("HOMMEY_CIRCUIT_FAILURE_THRESHOLD", 5),
     "circuit_recovery_timeout_sec": _float_env(

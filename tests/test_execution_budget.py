@@ -9,7 +9,7 @@ from core.execution_budget import (
     consume_external_call,
     execution_budget_scope,
 )
-from settings import RESILIENCE_CONFIG
+from settings import RESILIENCE_CONFIG, SUPERVISOR_CONFIG
 from webui_new.core.errors import UpstreamError
 from webui_new.manager import HommeyWebInstance
 
@@ -93,12 +93,13 @@ async def test_request_timeout_is_converted_to_public_error(monkeypatch):
 
 @pytest.mark.anyio
 async def test_request_budget_error_is_not_retryable(monkeypatch):
+    monkeypatch.setitem(SUPERVISOR_CONFIG, "max_calls_per_type", 2)
     instance = HommeyWebInstance("u1")
 
     async def exhaust_budget(
         _message, request_id=None, attachment_ids=None, retrieval_mode="standard"
     ):
-        for _ in range(17):
+        for _ in range(3):
             consume_external_call("weather")
         return {}
 
