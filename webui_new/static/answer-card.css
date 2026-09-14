@@ -94,6 +94,8 @@
 .answer-fact.is-wide { grid-column: 1 / -1; }
 .answer-fact-label { color: var(--ink-3); font-size: 11px; font-weight: 560; letter-spacing: .015em; }
 .answer-fact-value { font-size: 14px; font-weight: 650; line-height: 1.55; }
+.answer-activities { margin: 0; padding-left: 18px; font-size: 13px; font-weight: 400; line-height: 1.85; grid-column: 2; }
+.answer-activities li + li { margin-top: 7px; }
 .answer-fact-detail { max-width: 660px; overflow: hidden; color: var(--ink-2); font-size: 12px; line-height: 1.65; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 .answer-section.is-overview:not(.is-expanded) .answer-fact.is-wide .answer-fact-value { overflow: hidden; display: -webkit-box; -webkit-box-orient: vertical; -webkit-line-clamp: 2; }
 

@@ -112,8 +112,8 @@ class JourneyModel:
         self.fail_once = False
 
     async def __call__(self, messages, tools, tool_choice):
-        assert tool_choice == "required"
         names = {t["function"]["name"] for t in tools}
+        assert tool_choice == (next(iter(names)) if len(names) == 1 else "required")
         out = outputs(messages)
         if "delegate" in names:
             self.main_round += 1
@@ -137,7 +137,10 @@ class JourneyModel:
         system = messages[0]["content"]
         role = next(role for role, profile in PROFILES.items() if profile.instructions in system)
         self.roles.add(role)
-        assert names == set(PROFILES[role].tools) | {"read_skill", "report"}
+        if role in {"policy_rag", "memory", "travel_info"}:
+            assert names <= set(PROFILES[role].tools) | {"report"}
+        else:
+            assert names == {"report"}
         if role == "trip_context":
             trip = {"origin": "北京", "destination": "上海", "start_date": "2026-09-15", "duration_days": 2, "trip_purpose": "拜访客户"}
             return reply(("report", {"summary": "北京至上海出差两天，拜访客户。", "data": {"trip": trip, "field_sources": {k: TEXT for k in trip}}}))
@@ -147,7 +150,9 @@ class JourneyModel:
                 return reply(query)
             if len(out) == 1:
                 return reply(("read_source", {"source_id": out[0]["sources"][0]["source_id"]}))
-            return reply(("report", {"summary": "已查询资料，具体适用条件仍需核对。", "evidence_refs": [out[1]["id"]]}))
+            fact = {"policy_rag": ("住宿", "住宿需符合企业预算并保留发票"), "memory": ("座位偏好", "靠窗"), "travel_info": ("天气", "上海晴，22至29度")}[role]
+            data = {"findings": [{"item": fact[0], "conclusion": fact[1], "evidence_refs": [out[1]["id"]]}]}
+            return reply(("report", {"summary": "已查询资料，具体适用条件仍需核对。", "data": data, "evidence_refs": [out[1]["id"]]}))
         context = json.loads(messages[1]["content"])
         if role == "trip_planner":
             assert {r["role"] for r in context["dependencies"]} == {"trip_context", "policy_rag", "memory", "travel_info"}
@@ -172,6 +177,7 @@ async def test_six_role_journey_parallel_isolation_cards_and_idempotency():
     assert collector.run_id == SCOPE.request_id
     assert collector.evidence_items
     assert model.roles == set(PROFILES)
+    assert all(a["status"] not in {"error", "unavailable"} for a in result["agents"])
     assert services.peak == 3
     assert store.writes == 1
     assert services.trip["status"] == "active"  # planning never means travelled/completed
@@ -186,16 +192,17 @@ async def test_six_role_journey_parallel_isolation_cards_and_idempotency():
 
 
 @pytest.mark.asyncio
-async def test_checkpoint_resumes_after_model_disconnect():
+async def test_model_disconnect_delivers_committed_partial_result_and_idempotent_replay():
     services, model = FakeServices(), JourneyModel()
     model.fail_once = True
     store = FakeStore(services)
     runtime = Supervisor(model, services, store, CONFIG)
-    with pytest.raises(OSError):
-        await runtime.run(SCOPE, TEXT)
+    partial = await runtime.run(SCOPE, TEXT)
+    assert partial["outcome"] == "degraded" and partial["stop_reason"] == "UPSTREAM_UNAVAILABLE"
+    assert services.trip["destination"] == "上海" and store.writes == 1
     assert len(store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]["results"]) == 1
     output = await runtime.run(SCOPE, TEXT)
-    assert output["engine"] == "supervisor" and store.writes == 1
+    assert output["idempotent_replay"] and output["response"] == partial["response"] and store.writes == 1
 
 
 @pytest.mark.asyncio
@@ -229,7 +236,7 @@ def test_sources_are_private_and_policy_cannot_report_unread_evidence():
     ref = a.add("policy", {"content": "制度"})["source_id"]
     with pytest.raises(ToolRejected):
         b.read(ref)
-    report = Report(summary="制度结论", evidence_refs=[ref])
+    report = Report(summary="制度结论", evidence_refs=[ref], data={"findings": [{"item": "制度", "conclusion": "制度条款", "evidence_refs": [ref]}]})
     with pytest.raises(ToolRejected):
         validate_report("policy_rag", report, a, [])
     a.read(ref)

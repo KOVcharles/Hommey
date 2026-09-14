@@ -8,13 +8,12 @@
     const pauseButton = document.getElementById('scenePause');
     const label = document.getElementById('sceneLabel');
     const status = document.getElementById('sceneStatus');
-    const panel = document.querySelector('.auth-panel');
     if (!scenery || !controls || !choices.length) return;
 
     const layers = [...scenery.querySelectorAll('.auth-scene-layer')];
     const reducedMotion = window.matchMedia('(prefers-reduced-motion: reduce)');
     const connection = navigator.connection;
-    const dwell = 9000;
+    const dwell = 6000;
     const transitionDuration = 1400;
     const cache = new Map();
     const failed = new Set();
@@ -33,7 +32,7 @@
     }
 
     function isPaused() {
-        return userPaused || limitedMotion() || document.hidden || panel.contains(document.activeElement);
+        return userPaused || limitedMotion() || document.hidden;
     }
 
     function nextIndex() {
@@ -187,8 +186,6 @@
 
     choices.forEach((button, index) => button.addEventListener('click', () => select(index, true)));
     pauseButton.addEventListener('click', () => { userPaused = !userPaused; syncMotion(); });
-    panel.addEventListener('focusin', syncMotion);
-    panel.addEventListener('focusout', () => queueMicrotask(syncMotion));
     document.addEventListener('visibilitychange', syncMotion);
     reducedMotion.addEventListener('change', syncMotion);
     connection?.addEventListener('change', syncMotion);

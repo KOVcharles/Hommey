@@ -30,6 +30,8 @@ def build_quick_trip_message(
         lines.append(f"工作地点：{data['work_location']}")
     if data.get("work_location_note"):
         lines.append(f"地点备注：{data['work_location_note']}")
+    if data.get("work_schedule"):
+        lines.append(f"工作时间：{data['work_schedule']}")
 
     selection = capability_selection or {}
     included = [

@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from uuid import uuid4
 
 from context.memory_repository import stable_uuid
@@ -28,6 +29,10 @@ def safe_checkpoint(value):
     if isinstance(value, list):
         return [safe_checkpoint(v) for v in value]
     if isinstance(value, str):
+        # Opaque protocol IDs can contain eleven consecutive digits. Redacting
+        # them as phone numbers breaks tool-call pairs and evidence references.
+        if re.fullmatch(r"(?:call_|src_|result_)[a-fA-F0-9]{8,64}", value):
+            return value
         if value.lstrip().startswith(("{", "[")):
             try:
                 parsed = json.loads(value)
@@ -97,11 +102,12 @@ class RunStore:
             if not cur.fetchone():
                 raise RuntimeStopped("本次执行已停止或被新的执行替代")
 
-    def _stop(self, scope, owner, status):
+    def _stop(self, scope, owner, status, checkpoint=None):
+        from psycopg.types.json import Jsonb
         with self.pool.connection() as conn, conn.cursor() as cur:
-            cur.execute("""UPDATE supervisor_runs SET status=%s, updated_at=NOW()
+            cur.execute("""UPDATE supervisor_runs SET status=%s, checkpoint=COALESCE(%s,checkpoint), updated_at=NOW()
                 WHERE user_id=%s AND request_id=%s AND session_id=%s AND owner=%s AND status='running'""",
-                (status, *self._key(scope), owner))
+                (status, Jsonb(safe_checkpoint(checkpoint)) if checkpoint is not None else None, *self._key(scope), owner))
 
     def _cancel(self, scope):
         with self.pool.connection() as conn, conn.cursor() as cur:
@@ -115,6 +121,27 @@ class RunStore:
                 WHERE user_id=%s AND session_id=%s AND request_id<>%s AND retention_until>NOW()
                 ORDER BY created_at DESC LIMIT 1""", (scope.user_id, self._key(scope)[2], scope.request_id))
             return cur.fetchone()
+
+    def _public_plans(self, user_id, session_id):
+        # Read-only recovery never acquires the turn lease or returns raw context.
+        with self.pool.connection() as conn, conn.cursor() as cur:
+            cur.execute("""SELECT checkpoint->'public_plan' AS plan, status FROM supervisor_runs
+                WHERE user_id=%s AND session_id=%s AND retention_until>NOW()
+                AND checkpoint ? 'public_plan' ORDER BY created_at DESC LIMIT 50""",
+                (user_id, stable_uuid(session_id, namespace="session")))
+            plans = []
+            for row in reversed(cur.fetchall()):
+                plan = row["plan"]
+                # A superseding worker may have fenced the old run before it
+                # could persist final step transitions. Reflect that DB fact.
+                if row["status"] in {"interrupted", "failed"} and plan["status"] == "running":
+                    status = "cancelled" if row["status"] == "interrupted" else "failed"
+                    plan.update(status=status, revision=plan["revision"] + 1, change_reason="本次执行已停止。")
+                    for step in plan["steps"]:
+                        if step["status"] in {"pending", "running"}:
+                            step.update(status=status, summary="此步骤未完成。")
+                plans.append(plan)
+            return plans
 
     def _apply(self, scope, owner, operation, expected_version, trip, preferences, action="update"):
         """Receipt and business data commit together; models cannot supply identities or SQL."""

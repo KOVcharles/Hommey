@@ -47,7 +47,7 @@ def test_factory_builds_one_model_and_one_supervisor(monkeypatch):
     supervisor = object()
     supervisor_factory = Mock(return_value=supervisor)
     monkeypatch.setattr(runtime, "init_agentscope", lambda: None)
-    monkeypatch.setattr(agentscope.model, "OpenAIChatModel", model_factory)
+    monkeypatch.setattr(runtime, "create_tool_model", model_factory)
     monkeypatch.setattr(runtime, "MemoryManager", memory_factory)
     monkeypatch.setattr(runtime, "BusinessServices", lambda manager: services)
     monkeypatch.setattr(runtime, "RunStore", lambda value: store)

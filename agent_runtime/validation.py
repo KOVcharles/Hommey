@@ -45,9 +45,9 @@ def validated_changes(result, user_text, current_trip, current_preferences):
     if action != "update":
         quote = result.data.get("action_source", "")
         if not isinstance(quote, str) or not quote or quote not in user_text:
-            raise ToolRejected("开始新行程或取消行程需要用户原文依据")
+            raise ToolRejected("替换现有行程或取消行程需要 action_source 用户原文；仅补充当前行程请用 trip_action=update", code="ACTION_NOT_AUTHORIZED", fields=["data.trip_action", "data.action_source"])
         if action == "new" and not any(word in quote for word in ("新行程", "新的出差", "新出差", "另一次出差", "重新开始")):
-            raise ToolRejected("请确认是开始新行程还是修改现有行程")
+            raise ToolRejected("用户未明确要求替换现有行程；应使用 trip_action=update 修改当前行程", code="ACTION_NOT_AUTHORIZED", fields=["data.trip_action"])
         if action == "cancel" and not ("取消" in quote and any(word in quote for word in ("出差", "行程"))):
             raise ToolRejected("缺少明确取消出差的依据")
         if action == "cancel" and (trip or preferences):
@@ -55,7 +55,7 @@ def validated_changes(result, user_text, current_trip, current_preferences):
         if action == "cancel" and not current_trip:
             raise ToolRejected("当前会话没有可取消的出差行程")
     if not isinstance(trip, dict) or not isinstance(preferences, dict) or not (trip or preferences or action != "update"):
-        raise ToolRejected("该结果没有可提交的行程或偏好变更")
+        raise ToolRejected("该结果没有可提交的行程或偏好变更", code="EMPTY_CHANGESET", next_action="ask_user", fields=["data.trip", "data.preferences"])
     if action == "new":
         current_trip = {}
     if set(trip) - TRIP_FIELDS or set(preferences) - (PREFERENCE_SCALAR_COLUMNS.keys() | PREFERENCE_LIST_COLUMNS.keys()):
@@ -104,18 +104,33 @@ def validated_changes(result, user_text, current_trip, current_preferences):
 def validate_report(role, report, source_scope, dependencies):
     known = source_scope.sources
     if set(report.evidence_refs) - known.keys():
-        raise ToolRejected("报告引用了本任务不存在的来源")
+        raise ToolRejected("报告引用了本任务不存在的来源", code="UNKNOWN_EVIDENCE", fields=["evidence_refs"])
+    if role in {"policy_rag", "memory", "travel_info"} and not set(report.evidence_refs) <= source_scope.read_ids:
+        raise ToolRejected("报告引用的来源尚未回读；不要把检索摘要作为已核实证据", code="UNREAD_EVIDENCE", fields=["evidence_refs"])
+    if role in {"policy_rag", "memory", "travel_info"} and report.evidence_refs:
+        from .contracts import PolicyData
+        if not report.data.get("findings"):
+            raise ToolRejected("请在 data.findings 中提供具体标准或事实、适用条件及来源，不能只说已查到资料",
+                               code="MISSING_FINDINGS", fields=["data.findings"])
+        findings = PolicyData.model_validate({"findings": report.data["findings"]}).findings
+        if any(not set(item.evidence_refs) <= set(report.evidence_refs) for item in findings):
+            raise ToolRejected("每条事实的 evidence_refs 必须包含在报告引用中", code="INVALID_FINDING_EVIDENCE", fields=["data.findings.evidence_refs"])
+        if any(not item.evidence_refs for item in findings):
+            raise ToolRejected("确定事实必须提供直接来源，未知事项应放入 missing_info", code="MISSING_EVIDENCE", fields=["data.findings.evidence_refs"])
     if role in {"policy_rag", "memory", "travel_info"} and report.status == "success":
         # An explicit preference proposal requires no retrieval. Other factual
         # retrieval answers must retain an actually read source.
         preference_only = role == "memory" and bool(report.data.get("preferences"))
         if not preference_only and (not report.evidence_refs or not set(report.evidence_refs) <= source_scope.read_ids):
-            raise ToolRejected("请先回读来源再报告成功，或如实返回资料不足")
+            raise ToolRejected("成功报告缺少 evidence_refs；请填写已读来源 ID，无证据时返回 unavailable，不要重复读取已经读过的来源",
+                               code="MISSING_EVIDENCE", fields=["evidence_refs"])
     if role == "compliance":
         verdict = report.data.get("verdict", "unknown")
         if verdict not in {"compliant", "non_compliant", "partial", "unknown"}:
             raise ToolRejected("合规结论格式不正确")
         if verdict != "unknown":
+            if not report.data.get("checks"):
+                raise ToolRejected("确定合规结论必须提供逐项检查", code="MISSING_CHECKS", fields=["data.checks"])
             if not any(r.role == "policy_rag" and r.evidence_refs for r in dependencies) or not report.evidence_refs:
                 raise ToolRejected("缺少政策证据，合规结论只能为 unknown")
             for item in report.data.get("checks", []):

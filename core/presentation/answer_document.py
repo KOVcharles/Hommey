@@ -4,6 +4,7 @@ from __future__ import annotations
 from typing import Dict, List, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+from .trip_options import TripOptions
 
 # 结构性上限（单一数据源）：fallback 渲染按 goal / 按行程天数产出分区，
 # 上限必须高于任何现实组合，否则长行程 / 多 goal 会把整条管线打崩。
@@ -37,6 +38,7 @@ class AnswerItem(BaseModel):
     # Additive field: old clients keep rendering value/detail, while rich
     # clients can avoid reparsing model-authored punctuation.
     transport_legs: List[TransportLeg] = Field(default_factory=list, max_length=4)
+    activities: List[str] = Field(default_factory=list, description="每日安排的完整活动文本；富卡片与纯文本均保留，不拼接后截断")
 
 
 class WeatherDay(BaseModel):
@@ -120,6 +122,7 @@ class AnswerDocument(BaseModel):
     version: Literal["1.0"] = "1.0"
     title: str = Field(min_length=1, max_length=100)
     summary: str = Field(default="", max_length=500)
+    trip_options: TripOptions | None = None
     sections: List[AnswerSection] = Field(min_length=1, max_length=ANSWER_SECTION_CAP)
     notices: List[str] = Field(default_factory=list, max_length=10)
     sources: List[AnswerSource] = Field(default_factory=list, max_length=ANSWER_SOURCE_CAP)
@@ -138,7 +141,7 @@ def render_plain_text(document: AnswerDocument) -> str:
         if section.body:
             lines.append(section.body)
         for item in section.items:
-            value = f"{item.label}：{item.value}"
+            value = f"{item.label}：" + ("\n  " + "\n  ".join(item.activities) if item.activities else item.value)
             if item.detail:
                 value += f"（{item.detail}）"
             lines.append(f"- {value}")

@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 from datetime import date, datetime, timezone
 from uuid import uuid4
 
@@ -17,9 +18,9 @@ from .contracts import (
 
 
 TOOLS = {
-    "search_policy": (Query, "检索本部署企业差旅制度，返回来源摘要；使用 read_source 回读后总结"),
+    "search_policy": (Query, "检索企业差旅制度：短来源直接返回完整 evidence（等同回读），长来源只给索引，需 read_source；不要重复读取已有完整 evidence"),
     "search_memory": (MemorySearch, "仅检索当前用户的偏好、历史计划和对话；支持关键词过滤"),
-    "read_source": (SourceRequest, "回读本任务已检索或明确传入的来源"),
+    "read_source": (SourceRequest, "回读本任务来源；大来源按 offset/limit 分页，next_offset 非空表示还有内容；不得把部分页当成完整条款"),
     "search_trains": (TrainRequest, "查询真实车次和余票；日期必须明确，不支持购票"),
     "get_weather": (WeatherRequest, "查询差旅城市天气"),
     "find_hotels": (PlaceRequest, "查询工作地点附近酒店 POI；仅参考消费，不是实时房价"),
@@ -46,6 +47,10 @@ class BusinessServices:
         self.retriever = retriever
         self.travel = travel
         self.trains = trains
+
+    async def prepare_trip_options(self, trip, *, selection=None, user_text=""):
+        from .trip_options import collect_options
+        return await collect_options(self, trip, selection=selection, user_text=user_text)
 
     def _policy(self, query):
         if self.retriever is None:
@@ -141,23 +146,56 @@ class SourceScope:
     def __init__(self, sources=()):
         self.sources = {s["id"]: dict(s) for s in sources}
         self.read_ids: set[str] = set()
+        self._identities = {self._identity(s["kind"], s["data"]): s["id"] for s in self.sources.values()}
+
+    @staticmethod
+    def _identity(kind, data):
+        # Retrieval scores/trace IDs vary between searches for the same chunk.
+        if kind == "policy" and isinstance(data, dict):
+            data = {k: data[k] for k in ("content", "metadata", "chunk_id") if k in data}
+        return hashlib.sha256(json.dumps([kind, data], ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+
+    @staticmethod
+    def _view(source):
+        data = source["data"]
+        if source["kind"] == "policy" and isinstance(data, dict):
+            metadata = data.get("metadata") or {}
+            # Retrieval diagnostics and duplicate display/retrieval text are
+            # archived with the raw source, but never repeated in model input.
+            redundant = {"retrieval_text", "display_text", "embedding", "vector", "retrieval_trace"}
+            data = {"content": data.get("content", ""), "chunk_id": data.get("chunk_id") or metadata.get("chunk_id"),
+                    "metadata": {k: v for k, v in metadata.items() if k not in redundant}}
+        return {**source, "data": data}
 
     def add(self, kind, data):
         data = json.loads(json.dumps(data, ensure_ascii=False, default=str))
-        source_id = "src_" + uuid4().hex[:16]
-        self.sources[source_id] = {"id": source_id, "kind": kind, "data": data,
-            "retrieved_at": datetime.now(timezone.utc).isoformat()}
-        # Search returns excerpts; full raw source stays in this isolated scope.
-        excerpt = json.dumps(data, ensure_ascii=False, default=str)[:2200]
-        return {"source_id": source_id, "kind": kind, "excerpt": excerpt, "truncated": len(json.dumps(data, default=str)) > 2200}
+        identity = self._identity(kind, data)
+        source_id = self._identities.get(identity)
+        if source_id is None:
+            source_id = "src_" + uuid4().hex[:16]
+            self._identities[identity] = source_id
+            self.sources[source_id] = {"id": source_id, "kind": kind, "data": data,
+                "retrieved_at": datetime.now(timezone.utc).isoformat()}
+        view = self._view(self.sources[source_id])["data"]
+        # Excerpts are discovery hints, never complete or verified evidence.
+        excerpt = view.get("content") if isinstance(view, dict) else None
+        excerpt = str(excerpt) if excerpt is not None else json.dumps(view, ensure_ascii=False, default=str)
+        return {"source_id": source_id, "kind": kind, "excerpt": excerpt[:450],
+                "truncated": len(excerpt) > 450, "already_read": source_id in self.read_ids}
 
-    def read(self, source_id):
+    def read(self, source_id, offset=0, limit=4000):
         if source_id not in self.sources:
             raise ToolRejected("来源不属于本任务，无法读取")
+        source = self._view(self.sources[source_id])
+        encoded = json.dumps(source["data"], ensure_ascii=False, default=str)
+        if offset < 0 or offset >= max(1, len(encoded)) or not 500 <= limit <= 6000:
+            raise ToolRejected("来源分页范围无效")
         self.read_ids.add(source_id)
-        source = self.sources[source_id]
-        encoded = json.dumps(source, ensure_ascii=False, default=str)
-        # Never silently cut JSON facts. Fail explicitly if an adapter violates its bound.
-        if len(encoded) > 24000:
-            raise ToolRejected("来源过大，请缩小检索问题")
-        return source
+        if offset == 0 and len(encoded) <= limit:
+            return source
+        end = min(len(encoded), offset + limit)
+        return {"id": source_id, "kind": source["kind"], "retrieved_at": source["retrieved_at"],
+                "data_fragment": encoded[offset:end], "format": "json_fragment",
+                "offset": offset, "next_offset": end if end < len(encoded) else None,
+                "total_chars": len(encoded), "partial": True,
+                "notice": "这是来源的一页，前后页可能包含适用条件和例外；仅总结已读内容，未核实部分标为未知。"}

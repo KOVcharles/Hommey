@@ -212,6 +212,8 @@ EVALUATION_CONFIG = {
 
 
 SUPERVISOR_CONFIG = {
+    "turn_timeout_sec": max(5.0, min(_float_env("HOMMEY_SUPERVISOR_TURN_TIMEOUT_SEC", 60.0), 120.0)),
+    "max_role_tasks": max(1, min(_int_env("HOMMEY_SUPERVISOR_MAX_ROLE_TASKS", 2), 3)),
     "main_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_MAIN_ROUNDS", 14), 24)),
     "child_rounds": max(2, min(_int_env("HOMMEY_SUPERVISOR_CHILD_ROUNDS", 6), 10)),
     "max_children": max(1, min(_int_env("HOMMEY_SUPERVISOR_MAX_CHILDREN", 12), 20)),

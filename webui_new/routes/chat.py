@@ -29,6 +29,7 @@ from webui_new.core.errors import (
 from webui_new.schemas.requests import ChatRequest, InterruptRequest, SessionRenameRequest
 from webui_new.quick_trip import build_quick_trip_message
 from core.integrations.places.amap import AMapError
+from core.integrations.places.service import place_matches_city
 
 logger = logging.getLogger(__name__)
 
@@ -62,6 +63,8 @@ def create_chat_router(manager, place_service=None):
             }
             if structured_trip_input is not None:
                 kwargs["structured_trip_input"] = structured_trip_input
+            if data.intake_request_id:
+                kwargs["intake_request_id"] = data.intake_request_id
             if data.session_id:
                 kwargs["session_id"] = data.session_id
             if data.retrieval_mode == "enhanced":
@@ -107,6 +110,8 @@ def create_chat_router(manager, place_service=None):
                 }
                 if structured_trip_input is not None:
                     kwargs["structured_trip_input"] = structured_trip_input
+                if data.intake_request_id:
+                    kwargs["intake_request_id"] = data.intake_request_id
                 if data.session_id:
                     kwargs["session_id"] = data.session_id
                 if data.retrieval_mode == "enhanced":
@@ -170,6 +175,12 @@ def create_chat_router(manager, place_service=None):
             user_id, lambda instance: instance.start_new_chat_session()
         )
         return {"session_id": session_id}
+
+    @router.get("/api/{user_id}/sessions/{session_id}/execution-plans")
+    async def execution_plans(user_id: str, session_id: str, current_user: User = Depends(require_path_user)):
+        instance = await manager.get_initialized_user(user_id)
+        plans = await instance.supervisor.store.call("public_plans", user_id, session_id)
+        return {"plans": plans}
 
     @router.get("/api/{user_id}/sessions/{session_id}")
     async def get_session(
@@ -262,10 +273,13 @@ async def _prepare_chat_input(data: ChatRequest, place_service):
             raise BusinessError("PLACE_VERIFICATION_FAILED", "工作地点校验失败，请重新选择") from exc
         if verified is None:
             raise BusinessError("PLACE_NOT_FOUND", "工作地点已失效，请重新选择")
+        if not place_matches_city(verified, trip_input["destination"]):
+            raise BusinessError("PLACE_CITY_MISMATCH", "所选地点不属于目的地城市，请在目的地范围内重新选择")
         trip_input["work_location"] = verified.name
         trip_input["work_location_verified"] = verified.model_dump(mode="json")
     selection = (
         data.capability_selection.model_dump(mode="json")
         if data.capability_selection is not None else {"include": ["nearby_hotels"], "exclude": []}
     )
+    trip_input["capability_selection"] = selection
     return build_quick_trip_message(trip_input, selection), trip_input, selection

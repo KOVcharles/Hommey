@@ -155,6 +155,7 @@ class FileLongTermMemory:
             "request_id": request_id,
             "answer_document": metadata.get("answer_document"),
             "presentation_document": metadata.get("presentation_document"),
+            "content_type": metadata.get("content_type", "text"),
         })
         stats = self.data.setdefault("statistics", {})
         stats["total_messages"] = int(stats.get("total_messages", 0)) + 1
@@ -506,6 +507,7 @@ class LegacyAutocommitPostgresLongTermMemory:
             cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS request_id TEXT;")
             cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS answer_document JSONB;")
             cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS presentation_document JSONB;")
+            cur.execute("ALTER TABLE chat_history ADD COLUMN IF NOT EXISTS content_type TEXT NOT NULL DEFAULT 'text';")
             cur.execute("ALTER TABLE trip_history ADD COLUMN IF NOT EXISTS request_id TEXT;")
             cur.execute(
                 """
@@ -830,9 +832,9 @@ class LegacyAutocommitPostgresLongTermMemory:
                 """
                 INSERT INTO chat_history (
                     user_id, session_id, role, content, request_id,
-                    answer_document, presentation_document, created_at
+                    answer_document, presentation_document, content_type, created_at
                 )
-                VALUES (%s, %s, %s, %s, %s, %s, %s, NOW())
+                VALUES (%s, %s, %s, %s, %s, %s, %s, %s, NOW())
                 ON CONFLICT (user_id, request_id, role)
                 WHERE request_id IS NOT NULL
                 DO NOTHING
@@ -846,6 +848,7 @@ class LegacyAutocommitPostgresLongTermMemory:
                     request_id,
                     self._jsonb(answer_document) if answer_document else None,
                     self._jsonb(presentation_document) if presentation_document else None,
+                    metadata.get("content_type", "text"),
                 ),
             )
             inserted = cur.fetchone()
@@ -882,7 +885,7 @@ class LegacyAutocommitPostgresLongTermMemory:
         """
         sql = """
             SELECT id, role, content, created_at, session_id, request_id,
-                   answer_document, presentation_document
+                   answer_document, presentation_document, content_type
             FROM chat_history
             WHERE user_id = %s
         """
@@ -914,6 +917,7 @@ class LegacyAutocommitPostgresLongTermMemory:
                 "request_id": row["request_id"],
                 "answer_document": row.get("answer_document"),
                 "presentation_document": row.get("presentation_document"),
+                "content_type": row.get("content_type", "text"),
             }
             for row in rows
         ]

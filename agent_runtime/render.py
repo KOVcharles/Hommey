@@ -19,6 +19,10 @@ def render(finish, results):
             title=PROFILES[result.role].title, status=status, body=result.summary)
         if result.missing_info:
             section.body = (section.body + "\n待确认：" + "、".join(result.missing_info))[:4000]
+        if result.role in {"policy_rag", "memory", "travel_info"}:
+            for finding in result.data.get("findings", []):
+                section.items.append(AnswerItem(label=finding["item"][:60],
+                    value=finding["conclusion"][:300], detail=finding.get("applicability", "")[:500]))
         for source in result.sources:
             if source["id"] not in result.evidence_refs:
                 continue
@@ -30,7 +34,9 @@ def render(finish, results):
                 title = str(metadata.get("title") or metadata.get("file_name") or metadata.get("source") or source["kind"])
                 title = title.replace("\\", "/").rsplit("/", 1)[-1]
                 detail = " · ".join(f"{key}: {metadata[key]}" for key in ("page", "section", "version", "effective_date") if metadata.get(key))
-                sources.append(AnswerSource(title=(title + " · " + source["id"])[:200], detail=detail[:500], updated_at=source.get("retrieved_at", "")))
+                if title == "policy":
+                    title = "企业差旅制度"
+                sources.append(AnswerSource(title=title[:200], detail=detail[:500], updated_at=source.get("retrieved_at", "")))
             data = source.get("data")
             if source["kind"] == "train" and isinstance(data, list) and result.role == "travel_info":
                 section.kind = "train"
@@ -51,11 +57,11 @@ def render(finish, results):
         if result.role == "trip_planner":
             itinerary = result.data.get("itinerary", {})
             days = itinerary.get("days", []) if isinstance(itinerary, dict) else []
-            for day in days[:30]:
+            for day in days[:90]:
                 if isinstance(day, dict):
-                    activities = day.get("activities", [])
+                    activities = [str(x) for x in day.get("activities", [])]
                     section.items.append(AnswerItem(label=str(day.get("date") or "行程")[:60],
-                        value="；".join(str(x) for x in activities)[:300] or "待补充"))
+                        value=f"{len(activities)} 项安排" if activities else "待补充", activities=activities))
         sections.append(section)
     if finish.kind == "ask":
         sections.append(AnswerSection(kind="notice", title="需要补充的信息", status="partial", body=finish.question))

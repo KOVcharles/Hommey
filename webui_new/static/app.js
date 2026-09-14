@@ -91,10 +91,11 @@
     let routeMotionController = null;
     let quickTripSearchTimer = null;
     let quickTripSearchController = null;
+    let quickTripMap = null;
 
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
-        tasks_decomposing: '正在拆分差旅标准与外部信息',
+        tasks_decomposing: '正在准备这次出行所需的信息',
         policy_searching: '正在检索适用的差旅制度',
         travel_info_searching: '正在查询目的地天气与出行信息',
         train_query_searching: '正在查询高铁车次与余票',
@@ -105,7 +106,7 @@
         compliance_checking: '正在核对差旅合规性',
         task_completed: '一项信息已经准备好，继续整理中',
         task_failed: '部分信息暂时不可用，继续处理其他内容',
-        answer_composing: '正在把结果整理成清晰的卡片',
+        answer_composing: '正在整理出行建议',
         answer_ready: '信息已整理完成',
         task_running: '正在处理相关信息',
         queued: '任务已经排好，马上开始',
@@ -123,6 +124,7 @@
         trip_compliance: '合规检查',
     };
     let dynamicAgentLabels = null;
+    let followConversation = true;
 
     function getAgentLabel(intent) {
         if (dynamicAgentLabels && dynamicAgentLabels[intent]) return dynamicAgentLabels[intent];
@@ -145,6 +147,7 @@
     let pendingAttachments = [];
     let currentRequestId = '';
     let retryRequestPending = false;
+    let submissionRetry = null;
     let interruptPending = false;
 
     // 语音输入（Mode A）：MediaRecorder → 16kHz mono WAV → ASR 转写文本回填。
@@ -554,7 +557,41 @@
         promptRotator.addEventListener('focusout', startPromptRotation);
         document.addEventListener('hommey:fill-composer', handlePresentationFill);
         document.addEventListener('hommey:submit-message', handlePresentationSubmit);
-        chatMessages.addEventListener('scroll', markConversationScrolling, { passive: true });
+        window.HommeyTripChoices?.configure({ searchPlaces: async (city, keyword, signal) => {
+            const params = new URLSearchParams({ city, keyword });
+            const response = await authFetch(`/api/${encodeURIComponent(userId)}/places/suggest?${params}`, { signal });
+            const data = await response.json();
+            if (!response.ok) throw createApiError(data, '地点查询失败', response.status);
+            return data.items || [];
+        } });
+        window.HommeyJourneyMap?.configure({ loadMap: async (city, place_id, zoom, signal) => {
+            const params = new URLSearchParams({city, place_id, zoom});
+            const response = await authFetch(`/api/${encodeURIComponent(userId)}/places/map?${params}`, {signal});
+            if (!response.ok) throw new Error('地图暂时不可用');
+            return response.blob();
+        } });
+        const quickMapMount = document.getElementById('quickTripMapPreview');
+        if (quickMapMount && window.HommeyJourneyMap) { quickTripMap=window.HommeyJourneyMap.create(); quickMapMount.append(quickTripMap); }
+        quickTripWorkLocation.closest('.place-picker').addEventListener('keydown', event => {
+            if (event.key==='Escape') {hideQuickTripSuggestions();quickTripWorkLocation.focus();return;}
+            if (!['ArrowDown','ArrowUp'].includes(event.key) || quickTripPlaceSuggestions.hidden) return;
+            const options=[...quickTripPlaceSuggestions.querySelectorAll('button')]; if(!options.length)return;
+            event.preventDefault(); const index=options.indexOf(document.activeElement);
+            options[(index+(event.key==='ArrowDown'?1: index<0?0:-1)+options.length)%options.length].focus();
+        });
+        document.getElementById('quickTripDestination').addEventListener('input', () => {
+            clearTimeout(quickTripSearchTimer);
+            quickTripSearchController?.abort();
+            quickTripWorkLocationId.value = '';
+            quickTripWorkLocation.value = '';
+            quickTripMap?.setData({anchor:null}); if(quickMapMount)quickMapMount.hidden=true;
+            hideQuickTripSuggestions();
+            setQuickTripPlaceStatus('目的地已改变，请在新的城市范围内重新选择工作地点。');
+        });
+        chatMessages.addEventListener('scroll', () => {
+            markConversationScrolling();
+            followConversation = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 96;
+        }, { passive: true });
 
         document.addEventListener('click', (event) => {
             if (!event.target.closest('[data-retrieval-mode-control]')) closeRetrievalModeMenus();
@@ -718,7 +755,7 @@
 
     function handlePresentationSubmit(event) {
         const text = String(event.detail?.text || '').trim();
-        if (!text || isProcessing || isOnboarding) {
+        if (!text || isProcessing || isOnboarding || event.detail?.card?.dataset.archived === 'true') {
             event.preventDefault();
             if (isProcessing) showToast('当前任务正在处理，请完成后再提交。');
             return;
@@ -729,6 +766,9 @@
             preserveComposer: true,
             includeAttachments: false,
             inlineSubmission: true,
+            silentSubmission: event.detail?.source === 'trip_intake',
+            requestPayload: {...(event.detail?.requestPayload || {}),
+                ...(event.detail?.interactionId ? {intake_request_id: event.detail.interactionId} : {})},
         }).then((success) => {
             if (typeof event.detail?.complete === 'function') event.detail.complete(success);
         });
@@ -1312,6 +1352,7 @@
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
             activeSessionId = data.session_id || '';
             setRetrievalMode('standard', { persist: true });
+            followConversation = true;
             chatMessages.replaceChildren();
             setComposerContext('');
             showHome();
@@ -1330,20 +1371,34 @@
             );
             activeSessionId = sessionId;
             restoreRetrievalMode();
+            followConversation = true;
             chatMessages.replaceChildren();
             const messages = data.messages || [];
+            let plans = [];
+            try {
+                plans = (await fetchJson(`/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/execution-plans`)).plans || [];
+            } catch (_) { /* Chat history remains usable if progress recovery is unavailable. */ }
             messages.forEach((message) => {
                 const role = message.role === 'assistant' ? 'ai' : message.role;
+                if (role === 'user' && message.content_type === 'trip_submission') {
+                    collapseTripIntakeCards();
+                    return;
+                }
+                if (role === 'ai') {
+                    const plan = plans.find(item => item.run_id === message.request_id);
+                    if (plan) window.ExecutionPlan?.update(chatMessages, plan);
+                }
                 if (role === 'ai' || role === 'user') {
                     if (role === 'ai' && message.answer_document) {
                         addAnswerMessage(message.answer_document, message.timestamp);
                     } else if (role === 'ai' && message.presentation_document) {
-                        addPresentationMessage(message.presentation_document, message.timestamp);
+                        addPresentationMessage({...message.presentation_document, interaction_id: message.presentation_document.interaction_id || message.request_id}, message.timestamp);
                     } else {
                         addMessage(role, message.content || '', message.timestamp, message.attachments);
                     }
                 }
             });
+            plans.forEach(plan => window.ExecutionPlan?.update(chatMessages, plan));
             const latest = messages[messages.length - 1];
             setComposerContext(
                 latest?.presentation_document?.type === 'trip_intake'
@@ -1430,7 +1485,8 @@
                 { method: 'DELETE' }
             );
             if (selectedSessionId === activeSessionId) {
-                chatMessages.replaceChildren();
+                followConversation = true;
+            chatMessages.replaceChildren();
                 setMainView('home');
             }
             await loadSessions();
@@ -1441,6 +1497,7 @@
     function confirmClearHistory() {
         openConfirm('清空全部聊天记录？', '所有历史会话都会被删除，此操作无法恢复。', async () => {
             await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
+            followConversation = true;
             chatMessages.replaceChildren();
             closeSettings();
             setMainView('home');
@@ -1899,10 +1956,16 @@
 
     function handleQuickTripPlaceInput() {
         quickTripWorkLocationId.value = '';
-        setQuickTripPlaceStatus('选择后将默认查询附近前三家酒店；价格为高德参考消费。');
+        setQuickTripPlaceStatus('请从目的地城市的高德结果中选择准确地点。');
+        quickTripMap?.setData({anchor:null}); document.getElementById('quickTripMapPreview').hidden=true;
         clearTimeout(quickTripSearchTimer);
         quickTripSearchController?.abort();
         const keyword = quickTripWorkLocation.value.trim();
+        if (!document.getElementById('quickTripDestination').value.trim()) {
+            hideQuickTripSuggestions();
+            setQuickTripPlaceStatus('请先填写目的地城市，再搜索工作地点。');
+            return;
+        }
         if (keyword.length < 2) {
             hideQuickTripSuggestions();
             return;
@@ -1922,7 +1985,7 @@
             );
             const data = await response.json();
             if (!response.ok) throw createApiError(data, '地点查询失败', response.status);
-            if (quickTripWorkLocation.value.trim() !== keyword) return;
+            if (quickTripWorkLocation.value.trim() !== keyword || document.getElementById('quickTripDestination').value.trim() !== city) return;
             renderQuickTripPlaces(data.items || []);
         } catch (err) {
             if (err.name === 'AbortError') return;
@@ -1932,6 +1995,7 @@
     }
 
     function renderQuickTripPlaces(items) {
+        const searchCity=document.getElementById('quickTripDestination').value.trim();
         quickTripPlaceSuggestions.replaceChildren();
         if (!items.length) {
             const empty = document.createElement('div');
@@ -1950,8 +2014,10 @@
                 address.textContent = [item.city, item.district, item.address].filter(Boolean).join(' · ');
                 button.append(name, address);
                 button.addEventListener('click', () => {
+                    if(searchCity!==document.getElementById('quickTripDestination').value.trim() || String(item.city).replace(/市$/,'')!==searchCity.replace(/市$/,''))return;
                     quickTripWorkLocation.value = item.name || '';
                     quickTripWorkLocationId.value = item.place_id || '';
+                    if(quickTripMap){document.getElementById('quickTripMapPreview').hidden=false;quickTripMap.setData({anchor:item,city:searchCity});}
                     setQuickTripPlaceStatus(`已通过高德选择：${item.name || ''}`, 'verified');
                     hideQuickTripSuggestions();
                 });
@@ -1983,7 +2049,7 @@
             showToast('返程日期不能早于出发日期，且行程最多 60 天。');
             return;
         }
-        if (workLocation && !placeId) {
+        if (!workLocation || !placeId) {
             setQuickTripPlaceStatus('请从高德候选中选择具体工作地点。', 'error');
             quickTripWorkLocation.focus();
             return;
@@ -2025,14 +2091,23 @@
         const includeAttachments = options.includeAttachments !== false;
         const hasAttachments = includeAttachments && pendingAttachments.some((a) => a.status === 'ready');
         if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
+        if (options.retryRequestId) currentRequestId = options.retryRequestId;
+        else if (submissionRetry) resetRequestId();
+        submissionRetry = null;
+        chatMessages.querySelector('.submission-retry')?.remove();
+        clearTimeout(toastTimer);
+        toast.classList.remove('visible');
         const sendingEntries = includeAttachments
             ? pendingAttachments.filter((a) => a.status === 'ready')
             : [];
         const sendingAttachmentIds = sendingEntries.map((a) => a.id);
         const sendingAttachments = sendingEntries.map((a) => ({ filename: a.filename, kind: a.kind }));
         let requestCompleted = false;
+        let submissionAccepted = false;
         enterChatView();
-        addMessage('user', text, undefined, sendingAttachments);
+        followConversation = true;
+        const silentSubmission = options.silentSubmission || options.requestPayload?.input_source === 'quick_trip_form';
+        if (!silentSubmission) addMessage('user', text, undefined, sendingAttachments);
         if (!options.preserveComposer) {
             chatInput.value = '';
             resizeInput(chatInput);
@@ -2070,6 +2145,8 @@
                 throw createApiError(error, '请求失败，请重试', response.status);
             }
             if (!response.body) throw new Error('当前浏览器不支持流式响应');
+            submissionAccepted = true;
+            collapseTripIntakeCards();
 
             let streamMessage = null;
             let presentationRendered = false;
@@ -2091,6 +2168,11 @@
                     const event = parseStreamLine(line);
                     if (!event) continue;
                     if (event.type === 'error') throw createApiError(event, '处理失败，请重试');
+                    if (event.type === 'execution_plan') {
+                        window.ExecutionPlan?.update(chatMessages, event);
+                        removeProcessingIndicator();
+                    }
+                    if (event.type === 'done' && event.public_plan) window.ExecutionPlan?.update(chatMessages, event.public_plan);
                     if (event.type === 'status' || event.type === 'task_status') updateProcessingStatus(event);
                     if (event.type === 'attachment_context') {
                         responseSources = event.sources || [];
@@ -2111,7 +2193,7 @@
                     }
                     if (event.type === 'presentation_document') {
                         removeProcessingIndicator();
-                        addPresentationMessage(event.document);
+                        addPresentationMessage({...event.document, interaction_id: event.document?.interaction_id || currentRequestId});
                         presentationRendered = true;
                         nextPlaceholder = event.document?.input_placeholder || '';
                     }
@@ -2129,6 +2211,9 @@
             }
 
             const tail = parseStreamLine(buffer);
+            if (tail?.type === 'error') throw createApiError(tail, '处理失败，请重试');
+            if (tail?.type === 'execution_plan') window.ExecutionPlan?.update(chatMessages, tail);
+            if (tail?.type === 'done' && tail.public_plan) window.ExecutionPlan?.update(chatMessages, tail.public_plan);
             if (tail && (tail.type === 'status' || tail.type === 'task_status')) updateProcessingStatus(tail);
             if (tail && tail.type === 'answer_document') {
                 removeProcessingIndicator();
@@ -2137,7 +2222,7 @@
             }
             if (tail && tail.type === 'presentation_document') {
                 removeProcessingIndicator();
-                addPresentationMessage(tail.document);
+                addPresentationMessage({...tail.document, interaction_id: tail.document?.interaction_id || currentRequestId});
                 presentationRendered = true;
                 nextPlaceholder = tail.document?.input_placeholder || '';
             }
@@ -2164,9 +2249,13 @@
             requestCompleted = true;
         } catch (err) {
             removeProcessingIndicator();
+            window.ExecutionPlan?.connectionLost(chatMessages, currentRequestId);
             const errorText = formatDisplayError(err, '网络错误，请检查连接后重试。');
             if (options.inlineSubmission) showToast(errorText);
             else addMessage('ai', errorText);
+            if (options.inlineSubmission && submissionAccepted && (!(err instanceof ApiError) || err.retryable)) {
+                showSubmissionRetry(text, options, currentRequestId);
+            }
             // Preserve the body and request ID so an explicit retry remains
             // idempotent. Inline card submissions retain their values in-card
             // and never overwrite an unrelated composer draft.
@@ -2195,6 +2284,25 @@
             chatInput.focus();
         }
         return requestCompleted;
+    }
+
+    function showSubmissionRetry(text, options, requestId) {
+        const pending = {text, options, requestId, sessionId: activeSessionId};
+        submissionRetry = pending;
+        const row = document.createElement('div');
+        row.className = 'submission-retry';
+        const copy = document.createElement('span');
+        copy.textContent = '本次提交暂未完成，填写内容已保留';
+        const retry = document.createElement('button');
+        retry.type = 'button';
+        retry.textContent = '重试';
+        retry.addEventListener('click', () => {
+            if (isProcessing || submissionRetry !== pending || activeSessionId !== pending.sessionId) return;
+            sendMessage(text, {...options, retryRequestId: requestId});
+        });
+        row.append(copy, retry);
+        chatMessages.appendChild(row);
+        scrollToBottom();
     }
 
     async function interruptCurrentTurn() {
@@ -2230,6 +2338,8 @@
         row.className = `message-row ${role}`;
         const avatar = document.createElement('div');
         avatar.className = `msg-avatar ${role}`;
+        avatar.setAttribute('aria-label', 'Hommey');
+        avatar.setAttribute('role', 'img');
         const stack = document.createElement('div');
         stack.className = 'msg-stack';
         row.append(avatar, stack);
@@ -2237,7 +2347,7 @@
     }
 
     function addMessage(role, text, timestamp, attachments) {
-        if (role === 'ai') collapseTripIntakeCards();
+        collapseTripIntakeCards();
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
         const visibleText = role === 'user' ? userMessageText(text, attachments) : String(text || '');
@@ -2291,7 +2401,9 @@
         collapseTripIntakeCards();
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
-        stack.appendChild(window.HommeyTripIntakeCard.create(documentData));
+        const card = window.HommeyTripIntakeCard.create(documentData);
+        stack.appendChild(card);
+        if (documentData.archived) card.archive?.();
         if (timestamp) stack.appendChild(createTime(timestamp));
         chatMessages.appendChild(row);
         scrollToBottom();
@@ -2299,31 +2411,7 @@
     }
 
     function collapseTripIntakeCards() {
-        document.querySelectorAll('.trip-intake-card:not(.is-collapsed)').forEach((card) => {
-            const title = card.querySelector('.trip-intake-heading h2');
-            if (title && !card.dataset.originalTitle) card.dataset.originalTitle = title.textContent || '行程信息';
-            card.classList.add('is-collapsed');
-            if (title) title.textContent = '已更新行程信息';
-            card.setAttribute('aria-label', '已更新行程信息，点击展开');
-            const header = card.querySelector('.trip-intake-header');
-            if (header && !header.dataset.toggleBound) {
-                header.dataset.toggleBound = 'true';
-                header.setAttribute('role', 'button');
-                header.tabIndex = 0;
-                const toggle = () => {
-                    const collapsed = card.classList.toggle('is-collapsed');
-                    if (title) title.textContent = collapsed ? '已更新行程信息' : card.dataset.originalTitle;
-                    card.setAttribute('aria-label', collapsed ? '已更新行程信息，点击展开' : card.dataset.originalTitle);
-                };
-                header.addEventListener('click', toggle);
-                header.addEventListener('keydown', (event) => {
-                    if (event.key === 'Enter' || event.key === ' ') {
-                        event.preventDefault();
-                        toggle();
-                    }
-                });
-            }
-        });
+        chatMessages.querySelectorAll('.trip-intake-card').forEach(card => card.archive?.());
     }
 
     function showProcessingIndicator(agents) {
@@ -2342,7 +2430,7 @@
         const dots = document.createElement('div');
         dots.className = 'typing-dots';
         dots.innerHTML = '<i class="typing-dot"></i><i class="typing-dot"></i><i class="typing-dot"></i>';
-        box.append(tags, text, dots);
+        box.append(text, dots);
         stack.appendChild(box);
         chatMessages.appendChild(row);
         scrollToBottom();
@@ -2365,7 +2453,7 @@
             flushProcessingStatus();
         }
         if (event.type === 'task_status' && event.intent && event.phase === 'running') {
-            const label = getAgentLabel(event.intent);
+            const label = event.display || getAgentLabel(event.intent);
             if (label) updateAgentTags([{ name: event.intent, display: label }]);
         }
     }
@@ -2653,7 +2741,7 @@
     }
 
     function scrollToBottom() {
-        chatMessages.scrollTop = chatMessages.scrollHeight;
+        if (followConversation) chatMessages.scrollTo({top: chatMessages.scrollHeight, behavior: 'instant'});
     }
 
     function openSidebar() {

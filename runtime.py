@@ -10,6 +10,7 @@ from core.execution_budget import BudgetedModel
 from agent_runtime.engine import Supervisor
 from agent_runtime.services import BusinessServices
 from agent_runtime.store import RunStore
+from agent_runtime.model_client import create_tool_model
 
 
 @dataclass
@@ -62,19 +63,9 @@ def create_agent_runtime(
     """Create the agent runtime used by the FastAPI backend."""
     init_agentscope()
 
-    from agentscope.model import OpenAIChatModel
-
     timeout_sec = SYSTEM_CONFIG.get("timeout", 60)
     def create_model(config):
-        raw = OpenAIChatModel(
-            model_name=config["model_name"],
-            api_key=config["api_key"],
-            client_kwargs={
-                "base_url": config["base_url"],
-                "timeout": float(timeout_sec),
-            },
-            generate_kwargs=_generate_kwargs(config),
-        )
+        raw = create_tool_model(config, _generate_kwargs(config), timeout_sec)
         return BudgetedModel(raw)
 
     model = create_model(LLM_CONFIG)

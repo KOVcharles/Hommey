@@ -25,6 +25,7 @@ from utils.redis_coordination import (
     create_redis_semaphore,
 )
 from redis.exceptions import RedisError
+from utils.memory_safety import redact_sensitive_text
 from utils.logging_safety import sanitize_for_log
 from utils.io_executor import IoExecutorSaturated, run_blocking
 from utils.observability import COMPONENT_LLM
@@ -169,12 +170,38 @@ class HommeyWebInstance:
             session_id=session_id,
         )
         rows = self._recover_legacy_presentation_documents(rows)
+        # Derive archival from the durable conversation order, including hidden submissions.
+        for index, row in enumerate(rows):
+            document = row.get("presentation_document")
+            if row.get("role") == "assistant" and document and document.get("type") == "trip_intake":
+                row["presentation_document"] = {**document,
+                    "interaction_id": document.get("interaction_id") or row.get("request_id"),
+                    "archived": index != len(rows) - 1 or not (document.get("interaction_id") or row.get("request_id"))}
+
         titles = self.memory_manager.long_term.get_chat_session_titles()
         return {
             "session_id": session_id,
             "title": titles.get(session_id),
             "messages": self._with_attachments(rows),
         }
+
+    def _validate_intake_submission(self, source_id, request_id, message):
+        """Called inside the existing per-user lock, before any message or trip write."""
+        rows = self.memory_manager.long_term.get_chat_history(limit=None, session_id=self.session_id)
+        rows = self._recover_legacy_presentation_documents(rows)
+        source_index = next((i for i, row in enumerate(rows)
+            if row.get("role") == "assistant"
+            and (row.get("presentation_document") or {}).get("type") == "trip_intake"
+            and str((row.get("presentation_document") or {}).get("interaction_id") or row.get("request_id")) == source_id), None)
+        if source_index is None:
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
+        following = rows[source_index + 1:]
+        # Retry only this exact durable submission; a newer turn always expires the card.
+        retry = bool(following) and all(str(row.get("request_id")) == request_id for row in following)
+        retry = retry and any(row.get("role") == "user" and row.get("content_type") == "trip_submission"
+                              and row.get("content") == redact_sensitive_text(message) for row in following)
+        if following and not retry:
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
 
     def _recover_legacy_presentation_documents(self, rows: list[dict]) -> list[dict]:
         """Repair typed intake cards that older canonical rows stored as text."""
@@ -347,6 +374,7 @@ class HommeyWebInstance:
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
         progress_callback=None,
     ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
@@ -375,6 +403,8 @@ class HommeyWebInstance:
                 }
                 if structured_trip_input is not None:
                     implementation_kwargs["structured_trip_input"] = structured_trip_input
+                if intake_request_id:
+                    implementation_kwargs["intake_request_id"] = intake_request_id
                 if progress_callback is not None:
                     implementation_kwargs["progress_callback"] = progress_callback
                 result = await asyncio.wait_for(
@@ -431,7 +461,7 @@ class HommeyWebInstance:
 
     async def _process_message_impl(
         self, message, *, request_id=None, attachment_ids=None,
-        retrieval_mode="standard", structured_trip_input=None, progress_callback=None,
+        retrieval_mode="standard", structured_trip_input=None, progress_callback=None, intake_request_id=None,
     ) -> dict:
         from agent_runtime.contracts import Scope, ToolRejected
         import json
@@ -443,6 +473,8 @@ class HommeyWebInstance:
         request_id = request_id or uuid.uuid4().hex
         # Respect the explicitly selected session; do not rotate it on idle.
         scope = Scope(user_id=self.user_id, session_id=self.session_id, request_id=request_id)
+        if intake_request_id:
+            await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message)
         normalized = await run_blocking(self._normalize_input, message, attachment_ids)
         user_text = message
         agent_text = normalized.agent_query
@@ -451,7 +483,7 @@ class HommeyWebInstance:
             user_text += "\n用户填写的行程表单：" + structured
             agent_text += "\n用户填写的行程表单：" + structured
         metadata = {"request_id": request_id, "engine": "supervisor", "attachment_ids": normalized.attachment_ids,
-            "content_type": "attachment" if normalized.attachment_ids else "text",
+            "content_type": "trip_submission" if intake_request_id or structured_trip_input else ("attachment" if normalized.attachment_ids else "text"),
             "retrieval_mode": retrieval_mode, "input_source": "quick_trip_form" if structured_trip_input else "chat"}
         self.memory_manager.current_request_id = request_id
         memory = self._ensure_async_memory()
@@ -463,7 +495,10 @@ class HommeyWebInstance:
         if not saved:
             raise BusinessError("MEMORY_WRITE_FAILED", "消息未能保存，请稍后重试")
         try:
-            output = await self.supervisor.run(scope, agent_text, user_text=user_text, progress=progress_callback)
+            run_kwargs = {"user_text": user_text, "progress": progress_callback}
+            if structured_trip_input:
+                run_kwargs["trip_input"] = structured_trip_input
+            output = await self.supervisor.run(scope, agent_text, **run_kwargs)
         except ToolRejected as exc:
             raise BusinessError("SUPERVISOR_INPUT_REJECTED", str(exc)) from exc
         except ExecutionLimitExceeded:
@@ -480,7 +515,9 @@ class HommeyWebInstance:
                     requested_mode="enhanced", effective_mode="standard", status="fallback",
                     fallback_reason="当前主 Agent 引擎使用标准制度检索",
                 ).model_dump(mode="json")
-            assistant_metadata = {**metadata, "answer_document": output.get("answer_document"),
+            if (output.get("presentation_document") or {}).get("type") == "trip_intake":
+                output["presentation_document"]["interaction_id"] = request_id
+            assistant_metadata = {**metadata, "content_type": "text", "answer_document": output.get("answer_document"),
                 "presentation_document": output.get("presentation_document")}
             if not await memory.add_message("assistant", output["response"], assistant_metadata):
                 raise BusinessError("MEMORY_WRITE_FAILED", "结果已保存，但对话记录写入失败，请重试本次请求")
@@ -498,6 +535,7 @@ class HommeyWebInstance:
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
     ):
         """Yield live orchestration progress and response events as NDJSON payloads."""
         queue: asyncio.Queue = asyncio.Queue()
@@ -516,6 +554,8 @@ class HommeyWebInstance:
                 }
                 if structured_trip_input is not None:
                     request_kwargs["structured_trip_input"] = structured_trip_input
+                if intake_request_id:
+                    request_kwargs["intake_request_id"] = intake_request_id
                 if retrieval_mode == "enhanced":
                     request_kwargs["retrieval_mode"] = "enhanced"
                 result_holder["result"] = await self.process_message(message, **request_kwargs)
@@ -539,11 +579,13 @@ class HommeyWebInstance:
             await asyncio.gather(request_task, return_exceptions=True)
         await request_task
         result = result_holder["result"]
+        completion = {"outcome": result.get("outcome"), "stop_reason": result.get("stop_reason"),
+                      "public_plan": result.get("public_plan")}
 
         if result.get("interrupted"):
             yield {"type": "interrupted", "resumable": True}
             yield {
-                "type": "done", "interrupted": True,
+                "type": "done", **completion, "interrupted": True,
                 "preferences_updated": False,
                 "timings": result.get("timings", {}),
             }
@@ -564,7 +606,7 @@ class HommeyWebInstance:
         if answer_document:
             yield {"type": "answer_document", "document": answer_document}
             yield {
-                "type": "done",
+                "type": "done", **completion,
                 "preferences_updated": result.get("preferences_updated", False),
                 "timings": result.get("timings", {}),
             }
@@ -574,7 +616,7 @@ class HommeyWebInstance:
         if presentation_document:
             yield {"type": "presentation_document", "document": presentation_document}
             yield {
-                "type": "done",
+                "type": "done", **completion,
                 "preferences_updated": result.get("preferences_updated", False),
                 "timings": result.get("timings", {}),
             }
@@ -586,7 +628,7 @@ class HommeyWebInstance:
             await asyncio.sleep(0.01)
 
         yield {
-            "type": "done",
+            "type": "done", **completion,
             "preferences_updated": result.get("preferences_updated", False),
             "timings": result.get("timings", {}),
             "sources": result.get("sources", []),
@@ -831,6 +873,7 @@ class WebHommeyManager:
         session_id: str | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
         progress_callback=None,
     ) -> dict:
         """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
@@ -870,6 +913,8 @@ class WebHommeyManager:
             }
             if structured_trip_input is not None:
                 instance_kwargs["structured_trip_input"] = structured_trip_input
+            if intake_request_id:
+                instance_kwargs["intake_request_id"] = intake_request_id
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             process_task = asyncio.create_task(instance.process_message(message, **instance_kwargs))
@@ -907,6 +952,7 @@ class WebHommeyManager:
         session_id: str | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
     ):
         """SSE 流式入口：与 process_message 相同的取锁顺序，持锁到流结束。
 
@@ -943,6 +989,8 @@ class WebHommeyManager:
             }
             if structured_trip_input is not None:
                 instance_kwargs["structured_trip_input"] = structured_trip_input
+            if intake_request_id:
+                instance_kwargs["intake_request_id"] = intake_request_id
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             stream = instance.stream_message(message, **instance_kwargs)

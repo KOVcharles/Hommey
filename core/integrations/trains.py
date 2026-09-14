@@ -26,7 +26,7 @@ import time
 from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Protocol
 
-from core.execution_budget import consume_external_call
+from core.execution_budget import consume_external_call, ExecutionLimitExceeded
 from settings import TRAIN_QUERY_CONFIG
 from utils.llm_resilience import retry_with_backoff
 
@@ -143,6 +143,36 @@ class Train12306Backend:
         result, names = await self._left_ticket(origin_code, destination_code, date)
         return self._normalize_rows(result, names, origin, destination)
 
+    async def query_city_trains(self, origin: str, destination: str, date: str) -> List[Dict[str, Any]]:
+        """Expand city inputs to a bounded set of real stations from 12306's table.
+
+        Explicit station names stay exact. Major hubs are preferred for city
+        inputs; at most four station pairs are queried, never invented codes.
+        """
+        station_map = await self._station_map()
+        hubs = {"北京": ["北京南", "北京"], "上海": ["上海虹桥", "上海"],
+                "南京": ["南京南", "南京"], "重庆": ["重庆北", "重庆西"],
+                "杭州": ["杭州东", "杭州"], "成都": ["成都东", "成都西"]}
+        def stations(value):
+            value = value.strip().removesuffix("市").removesuffix("站")
+            choices = hubs.get(value, [value])
+            return [name for name in choices if name in station_map]
+        origins, destinations = stations(origin), stations(destination)
+        if not origins or not destinations:
+            raise TrainQueryError("无法识别出发地或目的地，请填写城市名或具体火车站名")
+        rows, successes = [], 0
+        for left in origins:
+            for right in destinations:
+                try:
+                    result, names = await self._left_ticket(station_map[left], station_map[right], date)
+                    rows.extend(self._normalize_rows(result, names, left, right))
+                    successes += 1
+                except TrainQueryError:
+                    continue
+        if not successes:
+            raise TrainQueryError("12306 本次查询未成功")
+        return rows
+
     async def _station_map(self) -> Dict[str, str]:
         now = time.monotonic()
         if self._station_map_cache and (now - self._station_map_at) < self.config.station_cache_ttl_sec:
@@ -202,6 +232,8 @@ class Train12306Backend:
                     detail = "；".join(str(item) for item in detail if item)
                 last_error = TrainQueryError(f"leftTicket/{suffix} 返回无效响应：{detail}")
                 logger.warning("leftTicket/%s returned invalid payload: %s", suffix, detail)
+            except ExecutionLimitExceeded:
+                raise
             except Exception as exc:  # noqa: BLE001 — 后缀轮询本身就是重试
                 last_error = exc
                 logger.warning("leftTicket/%s failed: %s", suffix, exc)
