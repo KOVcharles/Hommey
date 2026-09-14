@@ -1,22 +1,12 @@
 """train-query 后端测试：配置接缝、12306 解析、未知站名降级、juhe 预留。"""
 import asyncio
 import sys
-from pathlib import Path
 
 import pytest
 
-SCRIPT_PATH = Path(".agents/skills/train-query/script/train_backend.py")
-
-
 def _load_module():
-    # 通过正常导入机制加载：train_backend 用了 @dataclass + from __future__ import
-    # annotations，spec_from_file_location 不注册 sys.modules 会破坏字符串注解解析。
-    script_dir = str(SCRIPT_PATH.parent)
-    if script_dir not in sys.path:
-        sys.path.insert(0, script_dir)
-    import train_backend
-
-    return train_backend
+    from core.integrations import trains
+    return trains
 
 
 def _row_12306(overrides=None):

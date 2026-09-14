@@ -623,7 +623,12 @@
                 fact.classList.add('is-wide');
             }
             if (!isTrain || !legs.length) fact.appendChild(element('span', 'answer-fact-label', item.label));
-            if (hasStructuredTransport || (isTrain && legs.length) || (isOverview && fact.classList.contains('is-transport'))) {
+            if (item.activities?.length) {
+                fact.classList.add('is-wide');
+                const activities = element('ul', 'answer-activities');
+                item.activities.forEach(text => activities.appendChild(element('li', '', text)));
+                fact.appendChild(activities);
+            } else if (hasStructuredTransport || (isTrain && legs.length) || (isOverview && fact.classList.contains('is-transport'))) {
                 renderTransportValue(item, fact, legs);
             } else {
                 fact.appendChild(element('strong', 'answer-fact-value', item.value));
@@ -839,6 +844,8 @@
     }
 
     function create(documentData) {
+        if (documentData?.trip_options && window.HommeyTripChoices) return window.HommeyTripChoices.create(documentData);
+        if (documentData?.sections?.length && documentData.sections.every(s => s.kind === 'policy') && window.HommeyPolicyCard) return window.HommeyPolicyCard.create(documentData);
         const normalized = normalizeMachinePlaceholders(documentData);
         const timeline = upgradeLegacyTripTimeline(normalized);
         const data = localizeWeatherPresentation(upgradeLegacyPreDeparture(timeline));
@@ -847,7 +854,9 @@
 
         const header = element('header', 'answer-card-header');
         const eyebrow = element('div', 'answer-card-eyebrow');
-        eyebrow.appendChild(element('span', 'answer-card-route'));
+        const logo = element('span', 'hommey-card-logo');
+        logo.setAttribute('aria-hidden', 'true');
+        eyebrow.appendChild(logo);
         eyebrow.appendChild(element('span', '', 'Hommey · 已整理'));
         if (data.retrieval?.requested_mode === 'enhanced') {
             const enhanced = data.retrieval.effective_mode === 'enhanced';

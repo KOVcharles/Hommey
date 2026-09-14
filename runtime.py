@@ -1,27 +1,23 @@
 """Internal backend factory for the Docker-hosted FastAPI application."""
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Optional
 
-from agents.intention_agent import IntentionAgent
-from agents.lazy_agent_registry import LazyAgentRegistry
-from agents.orchestration_agent import OrchestrationAgent
-from settings import COMPOSER_CONFIG, LLM_CONFIG, SYSTEM_CONFIG
+from settings import LLM_CONFIG, SYSTEM_CONFIG, SUPERVISOR_CONFIG
 from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
 from utils.circuit_breaker import CircuitBreaker
-from core.skill_store import SkillPlatformStore
 from core.execution_budget import BudgetedModel
+from agent_runtime.engine import Supervisor
+from agent_runtime.services import BusinessServices
+from agent_runtime.store import RunStore
+from agent_runtime.model_client import create_tool_model
 
 
 @dataclass
 class AgentRuntime:
     model: object
-    composer_model: object
     memory_manager: MemoryManager
-    intention_agent: IntentionAgent
-    agent_registry: LazyAgentRegistry
-    orchestrator: OrchestrationAgent
-    agent_cache: Dict
+    supervisor: Supervisor
     attachment_service: Optional[object] = None  # 多模态附件服务（共享单例）
 
 
@@ -63,76 +59,32 @@ def get_shared_attachment_service():
 def create_agent_runtime(
     user_id: str,
     session_id: str,
-    agent_cache: Optional[Dict] = None,
-    mcp_manager=None,
 ) -> AgentRuntime:
     """Create the agent runtime used by the FastAPI backend."""
     init_agentscope()
 
-    from agentscope.model import OpenAIChatModel
-
     timeout_sec = SYSTEM_CONFIG.get("timeout", 60)
     def create_model(config):
-        raw = OpenAIChatModel(
-            model_name=config["model_name"],
-            api_key=config["api_key"],
-            client_kwargs={
-                "base_url": config["base_url"],
-                "timeout": float(timeout_sec),
-            },
-            generate_kwargs=_generate_kwargs(config),
-        )
+        raw = create_tool_model(config, _generate_kwargs(config), timeout_sec)
         return BudgetedModel(raw)
 
     model = create_model(LLM_CONFIG)
-    composer_uses_main_model = all(
-        COMPOSER_CONFIG.get(key) == LLM_CONFIG.get(key)
-        for key in (
-            "model_name", "api_key", "base_url", "temperature", "max_tokens",
-            "enable_thinking",
-        )
-    )
-    composer_model = (
-        model
-        if composer_uses_main_model
-        else create_model(COMPOSER_CONFIG)
-    ) if COMPOSER_CONFIG.get("enabled", True) else None
 
     memory_manager = MemoryManager(
         user_id=user_id,
         session_id=session_id,
-        llm_model=model,
     )
 
-    intention_agent = IntentionAgent(
-        name="IntentionAgent",
-        model=model,
-    )
-
-    cache = agent_cache if agent_cache is not None else {}
-    agent_registry = LazyAgentRegistry(
-        model=model,
-        cache=cache,
-        memory_manager=memory_manager,
-        mcp_manager=mcp_manager,
-    )
-
-    orchestrator = OrchestrationAgent(
-        name="OrchestrationAgent",
-        agent_registry=agent_registry,
-        memory_manager=memory_manager,
-        skill_store=SkillPlatformStore(),
-    )
+    pool = getattr(memory_manager.long_term, "pool", None)
+    if pool is None:
+        raise ValueError("The travel agent requires PostgreSQL memory")
+    supervisor = Supervisor(model, BusinessServices(memory_manager), RunStore(pool), SUPERVISOR_CONFIG)
 
     return AgentRuntime(
         model=model,
-        composer_model=composer_model,
         memory_manager=memory_manager,
-        intention_agent=intention_agent,
-        agent_registry=agent_registry,
-        orchestrator=orchestrator,
-        agent_cache=cache,
         attachment_service=get_shared_attachment_service(),
+        supervisor=supervisor,
     )
 
 

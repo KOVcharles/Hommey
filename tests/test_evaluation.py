@@ -81,10 +81,8 @@ def test_collector_bounds_and_redacts_snapshot():
         session_id="session-1",
         user_message="手机号 13800138000 " + "x" * 13_000,
     )
-    collector.record_routing({
-        "routing": {"intent": "rag_knowledge", "should_call_skill": True},
-        "intents": [{"type": "rag_knowledge", "should_call_skill": True}],
-    })
+    collector.record_runtime("req-1", [{"role": "policy_rag", "result_id": "r1",
+        "task": "查制度", "status": "success", "summary": "制度摘要"}])
     snapshot = collector.freeze({
         "response": "请查看制度",
         "answer_document": None,

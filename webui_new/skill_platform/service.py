@@ -1,67 +1,19 @@
-"""Application service for the administrator skill platform."""
-from __future__ import annotations
-
-from collections import defaultdict
-from typing import Any, Dict, List, Optional
-
-from core.skill_store import SkillPlatformStore
+"""Read-only catalog of guidance used by the supervisor and specialists."""
+from agent_runtime.profiles import PROFILES
 from utils.skill_loader import SkillLoader
 
 
 class SkillPlatformService:
-    def __init__(self, loader: Optional[SkillLoader] = None, store: Optional[SkillPlatformStore] = None):
+    def __init__(self, loader=None):
         self.loader = loader or SkillLoader()
-        self.store = store or SkillPlatformStore()
 
-    def list_skills(self) -> List[Dict[str, Any]]:
+    def list_skills(self):
         definitions = self.loader.load_definitions()
-        settings = self.store.settings()
-        runs = self.store.recent_runs(limit=500)
-        metrics: Dict[str, Dict[str, Any]] = defaultdict(lambda: {"total": 0, "success": 0, "duration": 0})
-        for run in runs:
-            metric = metrics[run["skill_name"]]
-            metric["total"] += 1
-            metric["success"] += int(run["status"] == "success")
-            metric["duration"] += int(run.get("duration_ms") or 0)
+        return [{**item.model_dump(), "roles": [role for role, profile in PROFILES.items() if item.name in profile.skills]}
+                for item in sorted(definitions.values(), key=lambda item: (item.catalog_order, item.name))]
 
-        result = []
-        runtime_definitions = (
-            item for item in definitions.values() if item.hommey_configured
-        )
-        for definition in sorted(runtime_definitions, key=lambda item: (item.catalog_order, item.name)):
-            setting = settings.get(definition.name, {})
-            metric = metrics[definition.name]
-            total = metric["total"]
-            result.append({
-                **definition.model_dump(),
-                "enabled": setting.get("enabled", definition.enabled_by_default),
-                "metrics": {
-                    "runs": total,
-                    "success_rate": round(metric["success"] / total, 4) if total else None,
-                    "average_duration_ms": round(metric["duration"] / total) if total else None,
-                },
-            })
-        return result
-
-    def get_skill(self, skill_name: str) -> Optional[Dict[str, Any]]:
+    def get_skill(self, skill_name):
         skill = next((item for item in self.list_skills() if item["name"] == skill_name), None)
-        if not skill:
-            return None
-        skill["instructions"] = self.loader.get_skill_content(skill_name) or ""
-        skill["recent_runs"] = self.store.recent_runs(limit=20, skill_name=skill_name)
+        if skill is not None:
+            skill["instructions"] = self.loader.get_skill_content(skill_name) or ""
         return skill
-
-    def dependency_graph(self) -> Dict[str, Any]:
-        definitions = self.loader.load_definitions()
-        nodes = [
-            {"id": item.name, "label": item.display_name, "category": item.category}
-            for item in definitions.values()
-            if item.hommey_configured
-        ]
-        edges = []
-        for item in definitions.values():
-            if not item.hommey_configured:
-                continue
-            for dependency in item.requires:
-                edges.append({"source": dependency.skill, "target": item.name, "purpose": dependency.purpose})
-        return {"nodes": nodes, "edges": edges}

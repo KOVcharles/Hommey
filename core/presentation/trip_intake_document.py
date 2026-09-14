@@ -7,6 +7,7 @@ from typing import Any, Dict, List, Literal
 from pydantic import BaseModel, ConfigDict, Field
 
 from core.trip_intake import FIELD_SPECS, OPTIONAL_KEYS, REQUIRED_KEYS, evaluate_trip_intake
+from core.integrations.places.service import validated_trip_anchor
 
 
 class TripRoute(BaseModel):
@@ -67,6 +68,10 @@ class TripIntakeDocument(BaseModel):
     input_placeholder: str = ""
     suggested_reply: str = ""
     plain_text: str = ""
+    home_location: str = ""
+    trip_input: Dict[str, Any] = Field(default_factory=dict)
+    place_selection_required: bool = True
+    capability_selection: Dict[str, List[str]] = Field(default_factory=dict)
 
 
 _VALUE_KEYS = {
@@ -115,8 +120,14 @@ def _suggested_reply(missing: List[str]) -> str:
     return "，".join(examples[key] for key in missing if key in examples)
 
 
-def build_trip_intake_document(raw: Dict[str, Any]) -> TripIntakeDocument:
-    data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+def build_trip_intake_document(raw: Dict[str, Any], *, home_location: str = "") -> TripIntakeDocument:
+    raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
+    data = raw_data
+    home = str(home_location or "").strip()
+    if home and not str(raw_data.get("origin") or "").strip():
+        # 常驻城市就是默认出发地：用户已在档案里回答过一次，不再当作新问题追问。
+        # 复制而非就地改写，避免展示层反向修改调用方的行程状态。
+        data = {**raw_data, "origin": home, "origin_inferred": True}
     state = evaluate_trip_intake(data)
     missing = state["missing_required"]
     errors = {item["key"]: item["message"] for item in state["invalid_fields"]}
@@ -159,7 +170,7 @@ def build_trip_intake_document(raw: Dict[str, Any]) -> TripIntakeDocument:
         summary = "正在继续生成详细的公司差旅方案。"
     else:
         status = "collecting_required"
-        title = "行程框架已保存"
+        title = "补充出差信息" if not collected else "行程框架已保存"
         summary = f"还差 {len(missing)} 项，即可生成详细方案。"
 
     next_question = prompts[0].help_text if prompts else ""
@@ -183,8 +194,31 @@ def build_trip_intake_document(raw: Dict[str, Any]) -> TripIntakeDocument:
         next_question=next_question,
         input_placeholder=placeholder,
         suggested_reply=_suggested_reply(missing),
+        home_location=str(home_location or "").strip(),
+        trip_input={key: data[key] for key in ("origin", "destination", "start_date", "end_date", "duration_days",
+                    "trip_purpose", "work_location", "work_schedule") if data.get(key)},
+        place_selection_required="nearby_hotels" not in (data.get("_capability_selection") or {}).get("exclude", []),
+        capability_selection=data.get("_capability_selection") or {},
     )
+    anchor = validated_trip_anchor(data)
+    if document.place_selection_required:
+        document.progress.total += 1
+        document.progress.completed += int(anchor is not None)
+        document.optional = [field for field in document.optional if field.key != "work_location"]
+        if not anchor:
+            document.collected = [field for field in document.collected if field.key != "work_location"]
+        if not anchor and missing and not state["conflicts"] and not state["invalid_fields"]:
+            document.summary = f"补充 {len(missing)} 项基本信息，并确认会议或办公地点。"
+    if anchor:
+        document.trip_input.update(work_location_place_id=anchor.provider_place_id,
+                                   work_location_verified=anchor.model_dump(mode="json"))
+    elif document.place_selection_required and state["planning_ready"]:
+        document.status = "collecting_required"
+        document.title = "确认会议或办公地点"
+        document.summary = "从目的地城市的高德结果中选择准确地址，再查询车次和附近酒店。"
     document.plain_text = render_trip_intake_text(document)
+    if document.place_selection_required and not anchor:
+        document.plain_text += "\n会议或办公地点：请在目的地城市的高德搜索结果中选择准确地址。"
     return document
 
 

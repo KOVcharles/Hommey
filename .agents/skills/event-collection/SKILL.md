@@ -3,16 +3,11 @@ name: event-collection
 description: Collect and incrementally update the employee's current company trip, including origin, destination, dates, purpose, work location, work schedule, and missing information. Use when a user starts or supplements a business-trip task.
 ---
 
-# Collect Current Business Trip
+# 整理当前出差事项
 
-Use `active_trip_context` to preserve one current trip per conversation session.
-
-1. Merge new facts into the current trip instead of replacing known values with nulls.
-2. Extract origin, destination, dates, duration, return location, purpose, work location, and work schedule.
-3. Preferences may directly shape non-factual recommendations such as hotel brand, airline, or seat choice. A saved home location or an explicitly referenced historical trip may only produce a marked candidate location; require the user to confirm it before treating it as a current-trip fact.
-4. If neither the user nor the active trip specifies a start date, deterministically use today's date in the `Asia/Shanghai` timezone. Never replace an explicit start date with this default.
-5. For planning, require origin, destination, the explicit-or-defaulted start date, trip purpose, and either duration or return date. Treat work location and work schedule as optional information; do not invent other precise dates, addresses, or work commitments.
-6. Keep private tourism outside the trip task.
-7. Never read a current trip or ordinary dialogue context from another conversation session.
-
-Return structured JSON matching `schemas/output.json`.
+由 trip_context 角色整理事实，通过 report 提出变更，不直接写记忆。
+只整理 origin、destination、start_date、end_date、duration_days、trip_purpose、work_location、work_schedule。
+每个变更放在 data.trip 中，data.field_sources 引用本轮用户原文。未知日期不能默认今天。
+新行程用 trip_action=new，取消出差用 cancel，并提供 action_source；修改已有行程用 update。
+新行程不继承旧行程字段。缺少的必填项交给主 Agent 统一补问。
+主 Agent 审阅后调用 apply_changes；不要在提交前声称已经保存。

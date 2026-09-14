@@ -35,6 +35,7 @@ class TripInput(BaseModel):
     work_location: str = Field(default="", max_length=200)
     work_location_note: str = Field(default="", max_length=300)
     work_location_place_id: str = Field(default="", max_length=80)
+    work_schedule: str = Field(default="", max_length=300)
 
     @model_validator(mode="after")
     def validate_trip_range(self):
@@ -78,6 +79,8 @@ class ChatRequest(BaseModel):
     input_source: Literal["chat", "quick_trip_form"] = "chat"
     trip_input: TripInput | None = None
     capability_selection: CapabilitySelectionRequest | None = None
+    # The assistant turn that owns the currently editable intake card.
+    intake_request_id: str | None = Field(default=None, min_length=1, max_length=128)
 
     @model_validator(mode="after")
     def validate_input_source(self):
@@ -95,10 +98,6 @@ class SessionRenameRequest(BaseModel):
 class InterruptRequest(BaseModel):
     client_request_id: str
     session_id: str | None = None
-
-
-class SkillToggleRequest(BaseModel):
-    enabled: bool
 
 
 class OnboardingPreferenceRequest(BaseModel):

@@ -7,7 +7,7 @@ from contextvars import ContextVar
 from functools import lru_cache
 from typing import Any, Iterable
 
-from core.intent_catalog import intent_to_skill
+from agent_runtime.profiles import PROFILES
 from evaluation.models import (
     AnswerSnapshot,
     ConversationSnapshot,
@@ -92,54 +92,27 @@ class TurnEvaluationCollector:
             })
         self.previous_messages = snapshots
 
-    def record_routing(self, intention_data: dict[str, Any]) -> None:
-        groups = intention_data.get("groups") or []
-        intents = [
-            str(item.get("intent")) for item in groups
-            if isinstance(item, dict) and item.get("intent")
-        ]
-        raw_intents = intention_data.get("intents") or []
-        if not intents:
-            intents = [
-                str(item.get("type")) for item in raw_intents
-                if isinstance(item, dict) and item.get("type")
-            ]
-        if not intents:
-            primary = (intention_data.get("routing") or {}).get("intent")
-            intents = [str(primary)] if primary else []
-        self.intents = list(dict.fromkeys(intents))
-        decisions = intention_data.get("policy_decisions") or []
-        callable_intents = [
-            str(item.get("intent")) for item in decisions
-            if isinstance(item, dict) and item.get("intent") and item.get("authorized")
-        ]
-        if not decisions:
-            callable_intents = [
-                str(item.get("type")) for item in raw_intents
-                if isinstance(item, dict) and item.get("type")
-                and item.get("should_call_skill") is not False
-            ]
-        if not callable_intents and (intention_data.get("routing") or {}).get("should_call_skill"):
-            callable_intents = intents
+    def record_runtime(self, request_id: str, results: list[dict[str, Any]]) -> None:
+        """Capture completed specialist work without serializing private tool logs."""
+        self.run_id = self.turn_id = request_id
+        self.intents = list(dict.fromkeys(r["role"] for r in results))
         self.selected_skills = list(dict.fromkeys(
-            skill for intent in callable_intents if (skill := intent_to_skill(intent))
+            skill for role in self.intents if role in PROFILES for skill in PROFILES[role].skills
         ))
-
-    def record_pipeline(self, output: Any) -> None:
-        tasks = list(getattr(output, "execution_tasks", None) or getattr(output, "tasks", None) or [])
-        results = list(getattr(output, "results", None) or [])
-        if len(tasks) > self.MAX_TASKS:
-            self.truncated_fields.add("execution.tasks")
         if len(results) > self.MAX_RESULTS:
             self.truncated_fields.add("execution.agent_results")
-        self.tasks = [self._dump(item) for item in tasks[:self.MAX_TASKS]]
-        self.agent_results = [self._result_summary(item) for item in results[:self.MAX_RESULTS]]
-        for result in results:
-            for evidence in list(getattr(result, "evidence", None) or []) + self._result_sources(result):
-                self._add_evidence(evidence)
-        state = getattr(output, "state", None)
-        self.run_id = str(getattr(state, "run_id", "") or "")
-        self.turn_id = str(getattr(state, "current_turn_id", "") or "")
+        bounded = results[:self.MAX_RESULTS]
+        self.tasks = [{"task_id": r["result_id"], "intent": r["role"],
+            "description": self._text(r.get("task"), 500, "execution.tasks")} for r in bounded]
+        self.agent_results = [{"task_id": r["result_id"], "intent": r["role"],
+            "agent_name": r["role"], "status": r["status"],
+            "missing_info": self._strings(r.get("missing_info")),
+            "summary": self._text(r.get("summary"), 1000, "execution.agent_results")} for r in bounded]
+        for result in bounded:
+            for source in result.get("sources", []):
+                # Only company-policy evidence belongs in the evaluation corpus.
+                if source.get("kind") == "policy" and isinstance(source.get("data"), dict):
+                    self._add_evidence(source["data"])
 
     def freeze(self, result: dict[str, Any], *, session_id: str) -> TurnEvaluationMetadata:
         terminal_state = self._terminal_state(result)
@@ -201,36 +174,9 @@ class TurnEvaluationCollector:
         if result.get("presentation_document"):
             return "waiting_user"
         agents = result.get("agents") or []
-        if any(item.get("status") == "error" for item in agents if isinstance(item, dict)):
+        if any(item.get("status") in {"error", "unavailable"} for item in agents if isinstance(item, dict)):
             return "degraded"
         return "completed"
-
-    def _result_summary(self, result: Any) -> dict[str, Any]:
-        raw = self._dump(result)
-        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
-        return {
-            "task_id": raw.get("task_id", ""),
-            "intent": raw.get("intent", ""),
-            "agent_name": raw.get("agent_name", ""),
-            "status": raw.get("status", ""),
-            "duration_sec": raw.get("duration_sec"),
-            "error_code": raw.get("error_code"),
-            "missing_info": self._strings(data.get("missing_info")),
-            "present_fields": self._present_trip_fields(data),
-        }
-
-    @staticmethod
-    def _present_trip_fields(data: dict[str, Any]) -> list[str]:
-        nested = data.get("data") if isinstance(data.get("data"), dict) else data
-        fields = ("origin", "destination", "start_date", "end_date", "purpose", "work_location")
-        return [field for field in fields if nested.get(field)]
-
-    def _result_sources(self, result: Any) -> list[dict[str, Any]]:
-        raw = self._dump(result)
-        data = raw.get("data") if isinstance(raw.get("data"), dict) else {}
-        nested = data.get("data") if isinstance(data.get("data"), dict) else data
-        sources = nested.get("sources") or nested.get("retrieved_documents") or []
-        return [item for item in sources if isinstance(item, dict)]
 
     def _answer_sources(self, answer_document: Any) -> list[dict[str, Any]]:
         if not isinstance(answer_document, dict):

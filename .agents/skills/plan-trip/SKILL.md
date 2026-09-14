@@ -1,30 +1,25 @@
 ---
 name: plan-trip
-description: Build a company business-trip itinerary from the current trip, internal policy evidence, and available travel information. Use for route, lodging-area, work-schedule, budget, and reimbursement-preparation advice; do not use for private tourism or transaction execution.
+description: Deliver a complete company business trip with policy evidence, real transport and nearby hotel choices, a verified meeting place, daily arrangements and unresolved conditions. Use for a trip plan, confirmed trip form, or venue revision; not standalone policy or ticket queries, tourism, or booking.
 ---
 
-# 规划合规公司差旅
+# 规划企业差旅行程
 
-## 流程
+交付目标是一份可执行的企业差旅行程：真实交通与住宿候选、准确会场、适用制度、每日安排及必要待确认项。查到车次和酒店只完成了资料查询，不能据此宣称完整规划完成。
 
-1. 调用 `event-collection` 获取结构化出差事项；缺少出发地、目的地、出发日期、行程天数/返程日期或出差目的时，只追问缺失信息，不生成行程。
-2. 信息完整后，调用 `ask-question` 检索适用的公司差旅制度；默认调用 `query-info` 查询目的地天气和公开交通信息、调用 `train-query` 查询真实车次。用户明确排除天气、普通交通或车次时，只跳过对应可选能力；制度检索和合规检查不得跳过。
-3. 按工作时间可靠性、门到门耗时、换乘、成本、天气和制度约束比较交通方式；`transport_recommendation.preferred` 优先引用 `all_info.train_query.results.trains` 中的真实车次（含时刻与历时）。
-   同一 Agent 返回多个能力结果时，以 `all_info.agent_results` 为完整记录，并使用已合并的 `all_info.<agent_name>`，不得只采用最后一个结果。
-4. 生成工作优先的日程、交通缓冲和住宿区域建议。若 `all_info.place_information.results.hotels`
-   存在，只能引用其中最多三家酒店及其原始距离、评分和参考消费；不得新增酒店或金额。
-5. 输出报销材料清单和缺失信息；外部信息不可用时提供路线级建议，并提醒通过官方渠道核验。
-6. 调用 `check-trip-compliance` 检查拟定方案；没有适用制度证据时，仅提示需要人工确认，不输出确定的合规结论。
+完整差旅、提交行程表单或修改会场时，按需读取 `references/complete-trip.md`。主 Agent 使用 `prepare_trip_options` 进入完整交付分支：运行时查询真实选项，调用 policy_rag，再把制度与选项明确传给 trip_planner，合并输出。无需用户额外说“差旅标准”。此分支会加载完整交付参考给规划角色。单独咨询制度、只查车票等仍走对应任务，不扩展为完整规划。
 
-## 可靠性
+城市、出发日期、天数和出差目的不足时，整理并保存已知字段，交给现有行程卡片收集；不猜日期或继承其他会话。
+首次确认行程时，在行程卡片内让用户从目的地城市的高德结果中选择会议或办公地点。主 Agent 调用 `prepare_trip_options` 时，若缺少已验证地点，运行时会先返回地点确认卡片；用户明确不查询住宿时不以会场阻塞查询。不要反复提取已保存字段，也不用自由文本假装地点已确认。
+地点确认后查询真实车次，并把会场与按偏好排序的附近酒店放在同一张地图和结果卡片内。卡片修改会场时提交新的 POI ID，服务端重新验证城市并更新行程，再按新坐标重新查询，生成新的结果卡片；不能把旧酒店挂到新会场上。地图加载失败保留地址与酒店信息。
+单独咨询制度或记忆时使用对应任务，不额外查询车次酒店。明确排除的查询继续排除。偏好不等于报销资格，未知差标不阻止展示真实候选，也不能宣称整体合规。
 
-- 不得编造真实车次、航班号、余票、价格、酒店价格或公司制度。
-- 高德 `reference_cost` 只能描述为“高德参考消费”，不等同于指定日期实时房价、库存或可订状态；
-  `reference_cost` 缺失时写“价格待确认”。
-- 车次/时刻/余票只可来自 `all_info.train_query`；train_query 不可用或未声明车次时，`transport_recommendation` 只给路线级建议并要求官方核验。
-- 没有实时数据时只提供路线级建议，并要求通过官方渠道核验。
-- 没有制度证据时将相关字段标记为未知。
-- 除非工作任务直接要求，否则不添加景点。
-- 仅提供建议，不执行预订、付款、审批或提交。
+按需读取：地点歧义、切换城市或确认地点时，使用 `read_skill(name="plan-trip", resource="references/place-selection.md")`；筛选车次酒店或解释失败时，使用 `read_skill(name="plan-trip", resource="references/travel-choices.md")`。不要默认加载所有参考文件。
 
-返回符合 `schemas/output.json` 的 JSON；行程中应包含 `transport_recommendation`、`lodging_advice`、`reimbursement_checklist` 和 `missing_info`。
+以下日程编排由 trip_planner 角色完成，只使用明确传入的行程与专业结果，不调用主 Agent 专用工具。
+核对工作日程、已知制度、交通、天气、酒店候选和用户排除项，再给出安排。
+缺少输入时报告 missing_info，由主 Agent 决定查询或补问；不能自行调度其他 Agent。
+以工作安排和可靠到达为先，保留通勤与换乘缓冲。酒店参考消费不等于可预订房价。
+车次、余票、金额必须来自输入资料；没有真实车次就不编造车次编号。
+data.itinerary.days 每天包含 date 和 activities 文本数组，data.decision_basis 说明选择依据。
+方案生成不代表真实出行完成，不自行断言整体合规，不执行任何交易。

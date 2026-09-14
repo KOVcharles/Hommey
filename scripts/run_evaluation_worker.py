@@ -10,7 +10,7 @@ from pathlib import Path
 project_root = Path(__file__).resolve().parent.parent
 sys.path.insert(0, str(project_root))
 
-from agents.lazy_agent_registry import LazyAgentRegistry
+from evaluation.judge import TurnEvaluatorAgent
 from config_agentscope import init_agentscope
 from evaluation.repository import EvaluationRepository
 from evaluation.reconciler import TurnEvaluationReconciler
@@ -37,13 +37,7 @@ def _judge_agent():
         },
         generate_kwargs={"temperature": 0.0, "max_tokens": 3000},
     )
-    registry = LazyAgentRegistry(
-        model=model,
-        cache={},
-        memory_manager=None,
-        mcp_manager=None,
-    )
-    return registry["turn_evaluator"]
+    return TurnEvaluatorAgent(model=model)
 
 
 async def _main(once: bool, reconcile: bool) -> None:

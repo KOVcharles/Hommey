@@ -3,30 +3,10 @@ name: preference
 description: Record or update the current user's business-travel preferences, including hotel brands, airlines, home location, and seat choices. Use when the user explicitly states, appends, or replaces a travel preference.
 ---
 
-# Preference (偏好管理)
+# 提出差旅偏好变更
 
-## 流程
-
-1. 提取用户明确表达的差旅偏好，不从普通行程描述中推断长期偏好。
-2. 将“还、也、另外、以及”识别为 `append`。
-3. 将“搬家到、改成、现在是、换成”识别为 `replace`。
-4. 首次设置某类偏好时使用 `replace`。
-5. 返回结构化 `preferences` 列表，由 Hommey 协调器或调用方写入当前用户记忆。
-
-常见类型包括 `home_location`、`hotel_brands`、`airlines`、`seat_preference`、`meal_preference`、`budget_level` 和 `transportation_preference`。
-
-## 输出
-
-```json
-{
-  "preferences": [
-    {"type": "hotel_brands", "value": "汉庭", "action": "append"},
-    {"type": "home_location", "value": "上海", "action": "replace"}
-  ],
-  "has_preferences": true
-}
-```
-
-- `action` 只能是 `append` 或 `replace`。
-- 用户没有表达偏好时返回空列表和 `has_preferences=false`。
-- 不记录证件、支付、认证、健康等敏感信息。
+由 memory 角色处理。需要追加偏好时先查询并回读原有偏好，再合并用户明确表达的新值。
+仅处理常驻地、交通偏好、酒店品牌、航司、座位、餐食和预算偏好。
+在 report 的 data.preferences 提出变更，preference_sources 为每个字段引用本轮用户原文。
+酒店品牌和航司用文本数组。一次临时选择不能自动变为长期偏好。
+主 Agent 审阅并 apply_changes 后才算保存。不得保存身份凭证或秘密。

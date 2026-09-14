@@ -1,86 +1,28 @@
-# Project Structure
+# 项目结构
 
-This repository is currently a modular monolith for the Hommey travel agent.
-The first cleanup pass keeps the existing runtime layout intact, but makes the
-main boundaries explicit so later refactors can be done safely.
+Hommey 是模块化单体：FastAPI + 一个 Supervisor 运行器 + 六类按需创建的专业角色。
+没有单独的 Agent 服务、消息总线或 DAG 执行器。
 
-## Current Runtime Boundaries
+| 目录/文件 | 职责 |
+| --- | --- |
+| runtime.py | 构造共享模型、MemoryManager、Supervisor 和附件服务 |
+| agent_runtime/engine.py | 主/子工具循环、调度、恢复、终止 |
+| agent_runtime/profiles.py | 六角色指令及工具/Skill 白名单 |
+| agent_runtime/contracts.py、validation.py | 结构化契约、证据及写入校验 |
+| agent_runtime/services.py | 受控业务查询和上下文构建 |
+| agent_runtime/store.py | PostgreSQL 检查点与业务事务 |
+| agent_runtime/render.py | 专业结果到前端文档的转换 |
+| .agents/skills/ | 业务指南与展示元数据 |
+| context/ | 用户消息、会话、偏好和行程存储 |
+| core/integrations/ | 天气、地图、12306 等适配器 |
+| core/presentation/ | 答案和行程补充卡片协议 |
+| rag/ | 企业知识库检索、入库和刷新 |
+| evaluation/ | 异步评估，不能影响业务结果或发起业务操作 |
+| webui_new/ | HTTP、鉴权、NDJSON、管理页面 |
+| webui_new/skill_platform/ | 只读 Skill 目录 |
+| docker/ | 镜像与部署配置 |
+| tests/ | 离线模拟、契约、数据库集成测试 |
 
-- `agents/`: core orchestration layer.
-  - `intention_agent.py` classifies user intent and builds the execution plan.
-  - `orchestration_agent.py` schedules skill-backed agents and aggregates results.
-  - `lazy_agent_registry.py` discovers and lazily loads skill plugins.
-- `.agents/skills/`: canonical runtime skill plugin directory for this branch.
-  - Each skill owns a standard `SKILL.md`, an optional validated `hommey.yaml` extension, and an optional `script/agent.py` implementation.
-  - `SKILL.md` declares portable discovery metadata and instructions; `hommey.yaml` declares runtime versions, intent mapping, tool declarations, dependencies, schemas, and execution stages. Tool declarations are metadata, not an enforcement boundary.
-  - The runtime path is configurable with `HOMMEY_SKILLS_ROOT`.
-- `context/`: short-term and long-term memory implementations.
-- `hommey_mcp/`: project-owned MCP client integration. This name avoids
-  shadowing the third-party `mcp` protocol package.
-- `webui_new/`: current FastAPI web application.
-- `webui_new/skill_platform/`: administrator Skill registry, graph, settings, and trace service.
-- `core/skill_definition.py`: standard Skill metadata and Hommey runtime-extension contract.
-- `core/skill_store.py`: PostgreSQL-backed Skill settings and sanitized execution traces.
-- `runtime.py`: internal backend factory for model, memory, registry, and orchestrator wiring.
-- `settings.py`: tracked runtime configuration that reads environment variables.
-- `utils/`: shared infrastructure helpers.
-- `data/`: local runtime data and large assets. New runtime data should not be
-  committed.
-
-## Cleanup Decisions In This Branch
-
-- Skill discovery now resolves paths from the project root instead of the
-  process working directory.
-- Skill metadata loading and skill agent loading now use the same configured
-  root: `HOMMEY_SKILLS_ROOT`, defaulting to `.agents/skills`.
-- `.agents/skills/` is versioned with the application; other local agent output
-  should remain untracked.
-- Secrets are removed from `config.py`; runtime configuration is read from
-  environment variables.
-- New memory files, local model assets, test reports, and `.env` files are
-  ignored for future commits.
-
-## Skill Platform Runtime
-
-```text
-User request
-  -> domain guard
-  -> SKILL.md-derived capability catalog
-  -> hommey.yaml-derived intent and execution schedule
-  -> lazy skill agent loading
-  -> optional Skill enablement policy
-  -> orchestration and sanitized trace recording
-```
-
-The current business workflow first composes `event-collection`, then—once
-planning facts are complete—runs `ask-question` and `query-info` in parallel,
-followed by `plan-trip` and `check-trip-compliance`. Company policy remains RAG
-data; the Skill stores the reusable procedure for retrieving, evaluating, and
-citing it.
-
-## Target Structure For A Later Refactor
-
-The next larger refactor should move runtime code into a package without
-changing behavior:
-
-```text
-src/
-  hommey/
-    app/
-      web/
-    core/
-      agents/
-      memory/
-      resilience/
-    skills/
-    integrations/
-      mcp/
-    config/
-tests/
-docs/
-scripts/
-```
-
-That migration should be done only after the current runtime boundaries and
-Skill compatibility contracts are stable, so it can remain a packaging change
-instead of changing business behavior at the same time.
+旧 `agents/`、`core/orchestration/`、Skill 内 `script/agent.py` 已删除。
+通用基础设施和历史数据表不构成备用业务流程。业务查询只能经 profiles 中允许的工具到达。
+详细边界见 [架构与回滚说明](plans/2026-09-08-supervisor-implementation-and-rollback.md)。

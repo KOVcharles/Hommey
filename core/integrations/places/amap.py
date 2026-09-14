@@ -2,10 +2,12 @@
 from __future__ import annotations
 
 from datetime import datetime
+from collections import OrderedDict
 import asyncio
 import copy
 import json
 import logging
+import re
 import time
 from typing import Any
 
@@ -29,6 +31,12 @@ from .models import (
 
 logger = logging.getLogger(__name__)
 
+# Bounds for the static map zoom. AMap itself serves 1-17; level 3 is the coarsest that
+# still renders China as a country rather than a continent, and 15 is the street detail
+# the hotel cards need. Exported so the HTTP layer cannot drift from the provider.
+MIN_MAP_ZOOM = 3
+MAX_MAP_ZOOM = 15
+
 
 class AMapError(RuntimeError):
     """Sanitized provider failure safe to map to a public capability error."""
@@ -39,6 +47,8 @@ class AMapProvider:
         self.config = dict(AMAP_CONFIG if config is None else config)
         self.client = client
         self._cache: dict[str, tuple[float, dict[str, Any]]] = {}
+        self._map_cache = OrderedDict()
+        self._map_lock = asyncio.Lock()
 
     @property
     def configured(self) -> bool:
@@ -72,11 +82,43 @@ class AMapProvider:
                 return place
         return None
 
+    async def static_map(self, place: VerifiedPlace, zoom: int) -> bytes:
+        """Bounded, cached map images for authenticated place views; no keys in HTML."""
+        if not self.configured or not MIN_MAP_ZOOM <= zoom <= MAX_MAP_ZOOM:
+            raise AMapError("地图配置或缩放级别无效")
+        key = (place.provider_place_id, place.location.lng, place.location.lat, zoom)
+        async with self._map_lock:
+            cached = self._map_cache.get(key)
+            if cached and cached[0] > time.monotonic():
+                self._map_cache.move_to_end(key)
+                return cached[1]
+            params = {"key": self.config["api_key"], "location": f"{place.location.lng},{place.location.lat}",
+                      "zoom": zoom, "size": "750*600", "scale": 1}
+            try:
+                consume_external_call("amap")
+                if self.client is not None:
+                    response = await self.client.get("/v3/staticmap", params=params)
+                else:
+                    async with httpx.AsyncClient(base_url=self.config.get("base_url", "https://restapi.amap.com"),
+                                                timeout=float(self.config.get("timeout_sec", 8))) as client:
+                        response = await client.get("/v3/staticmap", params=params)
+                response.raise_for_status()
+                image = response.content
+                if not image.startswith(b"\x89PNG\r\n\x1a\n") or len(image) > 2_000_000:
+                    raise AMapError("地图服务未返回有效底图")
+            except (httpx.HTTPError, ValueError) as exc:
+                raise AMapError("地图暂时不可用") from None
+            self._map_cache[key] = (time.monotonic() + 300, image)
+            self._map_cache.move_to_end(key)
+            while len(self._map_cache) > 48:
+                self._map_cache.popitem(last=False)
+            return image
+
     async def nearby_hotels(
-        self, anchor: VerifiedPlace, *, limit: int = 3,
+        self, anchor: VerifiedPlace, *, limit: int = 3, preferred_brands: list[str] | None = None,
     ) -> list[HotelCandidate]:
         point = anchor.location
-        payload = await self._request("/v3/place/around", {
+        params = {
             "location": f"{point.lng:.6f},{point.lat:.6f}",
             "keywords": "酒店",
             "types": "100000",
@@ -85,10 +127,23 @@ class AMapProvider:
             "offset": 20,
             "page": 1,
             "extensions": "all",
-        })
+        }
+        payload = await self._request("/v3/place/around", params)
+        pois = list(payload.get("pois") or [])
+        for brand in list(dict.fromkeys(preferred_brands or []))[:2]:
+            if not str(brand).strip():
+                continue
+            try:
+                extra = await self._request("/v3/place/around", {**params, "keywords": str(brand)[:80]})
+                pois.extend(p for p in extra.get("pois") or [] if str(brand) in str(p.get("name", "")))
+            except AMapError:
+                # A brand lookup failure must not discard nearby candidates.
+                continue
+        pois = list({str(p.get("id")): p for p in pois if isinstance(p, dict)}.values())
+        ids = {str(p.get("id")) for p in pois}
         retrieved_at = datetime.now().astimezone()
         hotels = [
-            hotel for item in payload.get("pois") or []
+            hotel for item in pois if not isinstance(item.get("parent"), str) or item["parent"] not in ids
             if (hotel := self._hotel(item, retrieved_at)) is not None
         ]
         hotels.sort(key=lambda item: (
@@ -97,7 +152,9 @@ class AMapProvider:
             0 if item.reference_cost is not None else 1,
             item.provider_place_id,
         ))
-        return hotels[:max(1, min(int(limit), 3))]
+        if preferred_brands:
+            hotels.sort(key=lambda h: (not any(b in h.name for b in preferred_brands if b), h.distance_m, -(h.rating or 0)))
+        return hotels[:max(1, min(int(limit), 20))]
 
     async def weather(self, city: str, *, adcode: str = "") -> WeatherReport | None:
         """Return normalized mainland live weather and short-range forecast."""
@@ -166,12 +223,13 @@ class AMapProvider:
             retrieved_at=datetime.now().astimezone(),
         )
 
-    async def resolve_adcode(self, city: str) -> str:
+    async def _geocode(self, city: str) -> tuple[str, GeoPoint | None]:
+        """Single lookup: AMap answers the administrative code and a centroid together."""
         clean_city = str(city or "").strip()[:80]
         if not clean_city:
-            return ""
+            return "", None
         if clean_city.isdigit() and 6 <= len(clean_city) <= 12:
-            return clean_city
+            return clean_city, None
         payload = await self._request("/v3/geocode/geo", {"address": clean_city})
         for item in payload.get("geocodes") or []:
             if not isinstance(item, dict):
@@ -179,8 +237,17 @@ class AMapProvider:
             adcode = self._text(item.get("adcode"))
             point = self._point(item.get("location"))
             if adcode and point:
-                return adcode
-        return ""
+                return adcode, point
+        return "", None
+
+    async def resolve_adcode(self, city: str) -> str:
+        adcode, _ = await self._geocode(city)
+        return adcode
+
+    async def geocode_point(self, city: str) -> GeoPoint | None:
+        """City centroid, for placing an origin marker on the trip map."""
+        _, point = await self._geocode(city)
+        return point
 
     async def transit_routes(
         self,
@@ -351,6 +418,11 @@ class AMapProvider:
         place_id = str(item.get("id") or "").strip()
         name = str(item.get("name") or "").strip()
         if not point or not place_id or not name:
+            return None
+        typecode = cls._text(item.get("typecode"))
+        if typecode and not any(code.startswith("10") for code in typecode.split("|")):
+            return None
+        if re.search(r"大堂|礼宾|停车场|出入口|前台|餐厅|健身|游泳|会议室|宴会厅|酒吧", name):
             return None
         biz = item.get("biz_ext") if isinstance(item.get("biz_ext"), dict) else {}
         rating = cls._number(biz.get("rating"), lower=0, upper=5)

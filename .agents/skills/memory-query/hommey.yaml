@@ -1,20 +1,5 @@
 version: 1.0.0
 display_name: 差旅记忆查询
 category: capability
-intent: memory_query
-agent_name: memory_query
-user_facing: false
 risk_level: medium
 catalog_order: 70
-progress_key: memory_searching
-answer:
-  section_kind: memory
-tools: [memory]
-execution:
-  - skill: memory-query
-    agent_name: memory_query
-    priority: 1
-    on_failure: abort
-    max_retries: 0
-    reason: 查询用户差旅历史和偏好
-    expected_output: 基于当前用户记忆的回答

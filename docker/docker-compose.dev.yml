@@ -9,9 +9,11 @@
 # ✅ 必须和 base 文件「合并」使用（顺序：先 base，再 dev）：
 #    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml up -d
 #
-#    改完代码无需 rebuild：dev 模式已挂载源码，且追加了 uvicorn --reload，
-#    保存 .py 后进程自动重启（无需手动 restart）。若 --reload 未生效可手动：
+#    源码已挂载，但当前使用双 worker，不启用 --reload。
+#    修改 Python 后必须重启服务；浏览器刷新只更新静态资源，不更新后端进程：
 #    docker compose -f docker/docker-compose.yml -f docker/docker-compose.dev.yml restart hommey
+#    重启后检查 /healthz，并通过运行中的 HTTP 聊天接口验证结果。
+#    docker exec 内新启动的 pytest/Python 进程不代表常驻 worker 已加载新代码。
 #
 # Windows 注意：第一行 ..:/app 会把整个仓库挂进容器，需在 Docker Desktop
 #               Settings → Resources → File sharing 里放行该盘符。

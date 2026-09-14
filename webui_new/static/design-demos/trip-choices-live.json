@@ -1,0 +1,406 @@
+{
+  "version": "1.0",
+  "title": "北京 → 重庆",
+  "summary": "2026-09-13 — 2026-09-14 · 2 天 · 界面联调示例",
+  "trip_options": {
+    "origin": "北京",
+    "destination": "重庆",
+    "start_date": "2026-09-13",
+    "end_date": "2026-09-14",
+    "duration_days": 2,
+    "trip_purpose": "界面联调示例",
+    "work_schedule": "",
+    "location_query": "重庆国际会议展览中心",
+    "anchor": {
+      "provider": "amap",
+      "provider_place_id": "B00170B41U",
+      "name": "重庆国际会议展览中心",
+      "address": "江南大道2号",
+      "province": "重庆市",
+      "city": "重庆市",
+      "district": "南岸区",
+      "adcode": "500108",
+      "citycode": "023",
+      "location": {
+        "lng": 106.561853,
+        "lat": 29.533939
+      },
+      "typecode": "140300",
+      "verified": true,
+      "verified_at": "2026-09-12T02:48:05.864292Z"
+    },
+    "train_state": {
+      "status": "ready",
+      "message": "12306 余票查询 · 票价请在 12306 核实",
+      "retrieved_at": "2026-09-12T02:48:07.254809+00:00"
+    },
+    "hotel_state": {
+      "status": "ready",
+      "message": "高德附近酒店 · 参考消费不是入住日期房价，房态及差标需另行确认",
+      "retrieved_at": "2026-09-12T02:48:07.011845+00:00"
+    },
+    "trains": [
+      {
+        "train_no": "G331",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "15:10",
+        "arrive_time": "22:04",
+        "duration": "06:54",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "6",
+          "一等座": "12",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G329",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "06:55",
+        "arrive_time": "13:55",
+        "duration": "07:00",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "6",
+          "一等座": "有",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1149",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "11:10",
+        "arrive_time": "20:35",
+        "duration": "09:25",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "5",
+          "一等座": "18",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1197",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "07:44",
+        "arrive_time": "17:10",
+        "duration": "09:26",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "8",
+          "一等座": "有",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1015",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "09:45",
+        "arrive_time": "19:18",
+        "duration": "09:33",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "11",
+          "一等座": "有",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1197",
+        "from_station": "北京西",
+        "to_station": "重庆西",
+        "depart_time": "07:44",
+        "arrive_time": "17:47",
+        "duration": "10:03",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "8",
+          "一等座": "有",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1015",
+        "from_station": "北京西",
+        "to_station": "重庆西",
+        "depart_time": "09:45",
+        "arrive_time": "19:48",
+        "duration": "10:03",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "11",
+          "一等座": "有",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "G1307",
+        "from_station": "北京丰台",
+        "to_station": "重庆西",
+        "depart_time": "09:29",
+        "arrive_time": "20:44",
+        "duration": "11:15",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "商务座": "10",
+          "一等座": "13",
+          "二等座": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 0
+      },
+      {
+        "train_no": "D997",
+        "from_station": "北京丰台",
+        "to_station": "重庆西",
+        "depart_time": "20:41",
+        "arrive_time": "10:22",
+        "duration": "13:41",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "二等座": "无",
+          "软卧": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 1
+      },
+      {
+        "train_no": "D95",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "17:52",
+        "arrive_time": "11:27",
+        "duration": "17:35",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "二等座": "有",
+          "软卧": "有",
+          "硬卧": "有",
+          "无座": "有"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 1
+      },
+      {
+        "train_no": "D3",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "18:04",
+        "arrive_time": "12:02",
+        "duration": "17:58",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "二等座": "16",
+          "软卧": "有",
+          "硬卧": "有",
+          "无座": "无"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 1
+      },
+      {
+        "train_no": "D49",
+        "from_station": "北京西",
+        "to_station": "重庆北",
+        "depart_time": "11:07",
+        "arrive_time": "05:17",
+        "duration": "18:10",
+        "travel_date": "2026-09-13",
+        "seats": {
+          "二等座": "无",
+          "软卧": "12",
+          "硬卧": "有",
+          "无座": "有"
+        },
+        "reason": "优先显示有余票、历时较短的车次；请结合会议开始时间选择",
+        "arrival_day_offset": 1
+      }
+    ],
+    "hotels": [
+      {
+        "hotel": {
+          "provider_place_id": "B0K0F5ALZA",
+          "name": "汉庭酒店(重庆南坪步行街工贸地铁站店)",
+          "address": "南坪街道南坪北路8号盛汇广场1-22A",
+          "district": "南岸区",
+          "business_area": "南坪商圈",
+          "location": {
+            "lng": 106.565764,
+            "lat": 29.529717
+          },
+          "distance_m": 603,
+          "rating": 4.8,
+          "reference_cost": null,
+          "price_status": "unknown",
+          "telephone": "023-62505999",
+          "photo_url": "https://store.is.autonavi.com/showpic/8e4dfc19e7ee49dba14b65f73ffd536b",
+          "source": "amap",
+          "retrieved_at": "2026-09-12T02:48:07.010726Z"
+        },
+        "reason": "符合酒店品牌偏好",
+        "matches_brand": true
+      },
+      {
+        "hotel": {
+          "provider_place_id": "B00178XDSL",
+          "name": "汉庭酒店(重庆南坪万达地铁站店)",
+          "address": "南城大道7号(南坪地铁站5号口步行410米)",
+          "district": "南岸区",
+          "business_area": "南坪镇",
+          "location": {
+            "lng": 106.569221,
+            "lat": 29.523012
+          },
+          "distance_m": 1410,
+          "rating": 4.6,
+          "reference_cost": null,
+          "price_status": "unknown",
+          "telephone": "023-86115988",
+          "photo_url": "https://store.is.autonavi.com/showpic/81132d3b5f45ba6da09f57c520777e05",
+          "source": "amap",
+          "retrieved_at": "2026-09-12T02:48:07.010726Z"
+        },
+        "reason": "符合酒店品牌偏好",
+        "matches_brand": true
+      },
+      {
+        "hotel": {
+          "provider_place_id": "B0J2L6ST0O",
+          "name": "汉庭酒店(重庆菜园坝店)",
+          "address": "菜袁路26号",
+          "district": "渝中区",
+          "business_area": "菜园坝",
+          "location": {
+            "lng": 106.547398,
+            "lat": 29.548468
+          },
+          "distance_m": 2139,
+          "rating": 4.5,
+          "reference_cost": null,
+          "price_status": "unknown",
+          "telephone": "023-86966999;17774968659",
+          "photo_url": "https://store.is.autonavi.com/showpic/8837f01a69831ed5fa6c3430ed655a7a",
+          "source": "amap",
+          "retrieved_at": "2026-09-12T02:48:07.010726Z"
+        },
+        "reason": "符合酒店品牌偏好",
+        "matches_brand": true
+      },
+      {
+        "hotel": {
+          "provider_place_id": "B0FFK46EHS",
+          "name": "汉庭酒店(重庆两路口儿童医院酒店)",
+          "address": "枇杷山正街136号(两路口地铁站3号口步行470米)",
+          "district": "渝中区",
+          "business_area": "两路口",
+          "location": {
+            "lng": 106.552956,
+            "lat": 29.553944
+          },
+          "distance_m": 2387,
+          "rating": 4.4,
+          "reference_cost": null,
+          "price_status": "unknown",
+          "telephone": "023-62969999;023-62969999,0",
+          "photo_url": "https://aos-comment.amap.com/B0FFK46EHS/comment/750B5503_650A_4F7E_B66C_A44D14F22D9E_L0_001_853_55_1772260353630_01433647.jpg",
+          "source": "amap",
+          "retrieved_at": "2026-09-12T02:48:07.010726Z"
+        },
+        "reason": "符合酒店品牌偏好",
+        "matches_brand": true
+      }
+    ],
+    "preference_note": "偏好 汉庭",
+    "next_actions": [
+      "补充会议开始时间后，再确认所选车次能否留足到会场的时间。",
+      "席别偏好不等于报销资格；职级与适用差标尚未核实。"
+    ],
+    "capability_selection": {
+      "include": [],
+      "exclude": []
+    },
+    "weather": null,
+    "commute": null
+  },
+  "sections": [
+    {
+      "kind": "trip",
+      "goal_id": "",
+      "title": "出行选择",
+      "status": "success",
+      "body": "去程 2026-09-13：12306 余票查询 · 票价请在 12306 核实\nG331 北京西 15:10 → 重庆北 22:04，历时 06:54\nG329 北京西 06:55 → 重庆北 13:55，历时 07:00\nG1149 北京西 11:10 → 重庆北 20:35，历时 09:25\nG1197 北京西 07:44 → 重庆北 17:10，历时 09:26\nG1015 北京西 09:45 → 重庆北 19:18，历时 09:33\nG1197 北京西 07:44 → 重庆西 17:47，历时 10:03\nG1015 北京西 09:45 → 重庆西 19:48，历时 10:03\nG1307 北京丰台 09:29 → 重庆西 20:44，历时 11:15\nD997 北京丰台 20:41 → 重庆西 10:22，历时 13:41\nD95 北京西 17:52 → 重庆北 11:27，历时 17:35\nD3 北京西 18:04 → 重庆北 12:02，历时 17:58\nD49 北京西 11:07 → 重庆北 05:17，历时 18:10\n高德附近酒店 · 参考消费不是入住日期房价，房态及差标需另行确认\n汉庭酒店(重庆南坪步行街工贸地铁站店)，距工作地点约 603 米，符合酒店品牌偏好\n汉庭酒店(重庆南坪万达地铁站店)，距工作地点约 1410 米，符合酒店品牌偏好\n汉庭酒店(重庆菜园坝店)，距工作地点约 2139 米，符合酒店品牌偏好\n汉庭酒店(重庆两路口儿童医院酒店)，距工作地点约 2387 米，符合酒店品牌偏好",
+      "items": [],
+      "days": []
+    },
+    {
+      "kind": "policy",
+      "goal_id": "result_policy_demo",
+      "title": "制度检索",
+      "status": "partial",
+      "body": "南京属二类城市。住宿标准：普通员工400元/晚、部门经理480元/晚、总监及以上560元/晚（另有职级上浮系数表，是否叠加待核实）；餐补80元/天；高铁二等座据实报销。用户职级未知，无法确定具体适用档位；汉庭品牌未违反规定，但需确认是否在公司协议酒店范围内。\n待确认：用户职级未知，需确认职级后才能确定住宿及交通具体档位；住宿标准表与职级上浮系数表的关系待核实；汉庭品牌是否在公司协议酒店或指定平台推荐范围内需确认。",
+      "items": [
+        {
+          "label": "南京城市等级",
+          "value": "南京属于二类城市（代表城市含南京）",
+          "detail": "\n来源：src_a8feab9b39d14d74",
+          "transport_legs": []
+        },
+        {
+          "label": "交通标准（北京→南京高铁）",
+          "value": "高铁二等座据实报销（境内出差交通标准）",
+          "detail": "\n来源：src_b9c27fefc41e4dc1",
+          "transport_legs": []
+        },
+        {
+          "label": "住宿标准（南京）及汉庭品牌",
+          "value": "二类城市普通员工400元/晚，部门经理480元/晚，总监及以上560元/晚。另有职级上浮系数表，与住宿标准表对应关系待核实。用户历史偏好汉庭品牌未违反规定，但需确认是否在协议酒店范围内。",
+          "detail": "\n来源：src_96dbe1f7d5f44470",
+          "transport_legs": []
+        },
+        {
+          "label": "餐补标准（南京）",
+          "value": "二类城市80元/天；按自然日计发，在途不足半天按半日计发，无需餐费票据。",
+          "detail": "\n来源：src_86a58e2dd0bb45b0",
+          "transport_legs": []
+        }
+      ],
+      "days": []
+    }
+  ],
+  "notices": [
+    "补充会议开始时间后，再确认所选车次能否留足到会场的时间。",
+    "席别偏好不等于报销资格；职级与适用差标尚未核实。"
+  ],
+  "sources": [],
+  "pre_departure": null,
+  "retrieval": null,
+  "plain_text": "北京 → 重庆\n\n2026-09-13 — 2026-09-14 · 2 天 · 界面联调示例\n\n出行选择\n去程 2026-09-13：12306 余票查询 · 票价请在 12306 核实\nG331 北京西 15:10 → 重庆北 22:04，历时 06:54\nG329 北京西 06:55 → 重庆北 13:55，历时 07:00\nG1149 北京西 11:10 → 重庆北 20:35，历时 09:25\nG1197 北京西 07:44 → 重庆北 17:10，历时 09:26\nG1015 北京西 09:45 → 重庆北 19:18，历时 09:33\nG1197 北京西 07:44 → 重庆西 17:47，历时 10:03\nG1015 北京西 09:45 → 重庆西 19:48，历时 10:03\nG1307 北京丰台 09:29 → 重庆西 20:44，历时 11:15\nD997 北京丰台 20:41 → 重庆西 10:22，历时 13:41\nD95 北京西 17:52 → 重庆北 11:27，历时 17:35\nD3 北京西 18:04 → 重庆北 12:02，历时 17:58\nD49 北京西 11:07 → 重庆北 05:17，历时 18:10\n高德附近酒店 · 参考消费不是入住日期房价，房态及差标需另行确认\n汉庭酒店(重庆南坪步行街工贸地铁站店)，距工作地点约 603 米，符合酒店品牌偏好\n汉庭酒店(重庆南坪万达地铁站店)，距工作地点约 1410 米，符合酒店品牌偏好\n汉庭酒店(重庆菜园坝店)，距工作地点约 2139 米，符合酒店品牌偏好\n汉庭酒店(重庆两路口儿童医院酒店)，距工作地点约 2387 米，符合酒店品牌偏好\n\n提醒\n- 补充会议开始时间后，再确认所选车次能否留足到会场的时间。\n- 席别偏好不等于报销资格；职级与适用差标尚未核实。"
+}

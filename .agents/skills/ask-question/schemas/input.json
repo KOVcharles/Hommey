@@ -1,1 +1,0 @@
-{"$schema":"https://json-schema.org/draft/2020-12/schema","type":"object","properties":{"query":{"type":"string"},"trip_context":{"type":["object","null"]}},"required":["query"],"additionalProperties":true}

@@ -1,3 +1,5 @@
+> 历史设计：本文描述的 DAG 执行器已在 2026-09-09 删除。当前实现见 [Supervisor 架构](plans/2026-09-08-supervisor-implementation-and-rollback.md)。
+
 # 任务级编排架构
 
 ## 当前唯一主链路

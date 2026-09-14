@@ -1,0 +1,28 @@
+.execution-plan { margin: 4px 0 24px; color: var(--ink-2); font: inherit; font-size: 12px; animation: message-in .32s var(--ease) both; }
+/* A closed <details> hides its content with content-visibility, which would leave the steps
+   unrendered and cancel the collapse transition. Keep them rendered and collapse the grid row. */
+.execution-plan::details-content { content-visibility: visible; block-size: auto; }
+.execution-plan-heading { display: flex; align-items: center; gap: 11px; min-height: 38px; padding: 4px 0; cursor: pointer; list-style: none; border-radius: 8px; }
+.execution-plan-heading::-webkit-details-marker { display: none; }
+.execution-plan-heading:focus-visible { outline: 2px solid var(--sage); outline-offset: 5px; }
+.execution-plan-title { color: var(--ink-2); line-height: 1.6; }
+.execution-plan-toggle { margin-left: auto; color: var(--ink-3); font-size: 11px; white-space: nowrap; transition: color .2s ease; }
+.execution-plan-toggle::after { content: ''; display: inline-block; width: 5px; height: 5px; margin: 0 3px 2px 8px; border-right: 1px solid; border-bottom: 1px solid; transform: rotate(45deg); transition: transform .24s ease; }
+.execution-plan[open] .execution-plan-toggle::after { transform: rotate(225deg); }
+.execution-plan-heading:hover .execution-plan-toggle { color: var(--ink); }
+.execution-plan-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--ink-3); flex: none; }
+.execution-plan[data-status="running"] .execution-plan-dot { background: var(--sage); animation: progress-breathe 1.8s ease-in-out infinite; }
+.execution-plan[data-status="completed"] .execution-plan-dot { background: var(--sage); }
+.execution-plan-body { display: grid; grid-template-rows: 0fr; opacity: 0; transform: translateY(-4px); transition: grid-template-rows .46s cubic-bezier(.4, 0, .2, 1), opacity .24s ease, transform .4s cubic-bezier(.4, 0, .2, 1); }
+.execution-plan[open] .execution-plan-body { grid-template-rows: 1fr; opacity: 1; transform: translateY(0); }
+.execution-plan-body-inner { min-height: 0; overflow: hidden; }
+.execution-plan-steps { list-style: none; margin: 8px 0 0 16px; padding: 4px 0 4px 26px; border-left: 1px solid var(--line); }
+.execution-plan-step { display: flex; gap: 16px; justify-content: space-between; padding: 7px 0; line-height: 1.6; }
+.execution-plan-step strong { font-weight: 400; color: var(--ink-2); }
+.execution-plan-step span { color: var(--ink-3); font-size: 11px; flex: none; }
+.execution-plan-step[data-status="running"] strong, .execution-plan-step[data-status="succeeded"] span { color: var(--sage); }
+@keyframes progress-breathe { 0%, 100% { opacity: .4; box-shadow: 0 0 0 0 transparent; } 50% { opacity: 1; box-shadow: 0 0 0 4px color-mix(in srgb, var(--sage) 9%, transparent); } }
+@media (max-width: 480px) { .execution-plan-heading { gap: 8px; } .execution-plan-title { font-size: 11px; } .execution-plan-toggle { font-size: 10px; } }
+@media (prefers-reduced-motion: reduce) { .execution-plan, .execution-plan-dot { animation: none !important; } .execution-plan-toggle::after, .execution-plan-body { transition: none; } }
+
+@media (min-width: 761px) { .execution-plan { position: relative; } .execution-plan-heading .hommey-card-logo { position: absolute; right: calc(100% + 8px); width: 34px; } }

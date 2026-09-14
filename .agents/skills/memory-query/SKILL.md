@@ -3,20 +3,11 @@ name: memory-query
 description: Answer questions about the current user's own saved business-trip history, active trip, and travel preferences. Use for requests such as past destinations, previous travel dates, or remembered lodging and airline preferences; never expose another user's memory.
 ---
 
-# Memory Query (记忆查询)
+# 查询本人的差旅记忆
 
-只使用运行时提供的当前用户记忆回答问题。记忆后端可能是文件或 PostgreSQL，不依赖具体存储路径。
-
-## 流程
-
-1. 明确用户要查询的是历史行程、当前出差任务、偏好还是聊天摘要。
-2. 只读取当前已认证用户的对应记忆。
-3. 按时间或类别整理相关事实，直接回答问题。
-4. 没有相关记录时，明确说明“记录中没有相关信息”。
-
-## 可靠性与隐私
-
-- 不根据常识补全记忆中不存在的行程、日期或偏好。
-- 不读取、推断或泄露其他用户的信息。
-- 不把模型生成的摘要描述成精确原始对话；需要时说明它是摘要。
-- 返回自然语言回答，并保留运行时要求的结构化来源摘要。
+由 memory 角色使用 search_memory 查询，read_source 回读并 report 总结。
+先缩小关键词和记录类型；历史指代不明确时给出候选，让用户选择。
+只可查询当前已鉴权用户，不能要求传入其他用户身份。
+planned 是计划，cancelled 是取消，legacy_unknown 未证实实际出行，不能表述为用户去过。
+用 evidence_refs 保留查询依据。普通偏好查询结果使用 data.preference_facts；
+只有明确修改长期偏好的请求才使用 data.preferences 变更提案。

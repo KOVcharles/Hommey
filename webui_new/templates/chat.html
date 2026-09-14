@@ -6,9 +6,13 @@
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260827-github-v2">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260914-chat-polish">
     <link rel="stylesheet" href="/static/answer-card.css?v=20260827-train-scroll-v2">
-    <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260827-step-stack-v1">
+    <link rel="stylesheet" href="/static/trip-choices.css?v=20260914-train-expand">
+    <link rel="stylesheet" href="/static/policy-card.css?v=20260913-v1">
+    <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260914-chat-polish">
+    <link rel="stylesheet" href="/static/journey-map.css?v=20260914-train-expand">
+    <link rel="stylesheet" href="/static/execution-plan.css?v=20260914-plan-disclosure">
 </head>
 <body class="chat-page" data-user-id="{{ user_id }}">
     <div id="initOverlay" class="init-overlay">
@@ -435,11 +439,12 @@
                 </div>
                 <label class="quick-trip-field"><span>出差目的</span><input id="quickTripPurpose" name="trip_purpose" type="text" maxlength="300" placeholder="例如：客户拜访" required></label>
                 <div class="quick-trip-field place-picker">
-                    <span>会议 / 客户地点 <small>选填，输入后需选择高德地点</small></span>
-                    <input id="quickTripWorkLocation" type="text" maxlength="200" autocomplete="off" placeholder="搜索园区、写字楼、客户地址" aria-autocomplete="list" aria-controls="quickTripPlaceSuggestions">
+                    <span>会议 / 客户地点 <small>请从目的地城市的高德结果中选择</small></span>
+                    <input id="quickTripWorkLocation" type="text" maxlength="200" autocomplete="off" placeholder="搜索园区、写字楼、客户地址" required aria-autocomplete="list" aria-controls="quickTripPlaceSuggestions">
                     <input id="quickTripWorkLocationId" type="hidden">
                     <div id="quickTripPlaceSuggestions" class="place-suggestions" role="listbox" hidden></div>
-                    <small id="quickTripPlaceStatus" class="quick-trip-help">选择后将默认查询附近前三家酒店；价格为高德参考消费。</small>
+                    <small id="quickTripPlaceStatus" class="quick-trip-help">确认准确地点后，按偏好推荐附近酒店。</small>
+                    <div id="quickTripMapPreview" style="max-width:420px;margin-top:12px" hidden></div>
                 </div>
                 <label class="quick-trip-field"><span>地点备注 <small>选填</small></span><input id="quickTripWorkNote" type="text" maxlength="300" placeholder="例如：访客中心 3 楼"></label>
                 <fieldset class="quick-trip-capabilities">
@@ -461,8 +466,12 @@
     </section>
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
-    <script src="/static/answer-card.js?v=20260827-train-scroll-v2"></script>
-    <script src="/static/trip-intake-card.js?v=20260827-step-stack-v1"></script>
-    <script src="/static/app.js?v=20260829-quick-trip-v1"></script>
+    <script src="/static/journey-map.js?v=20260913-map-v3"></script>
+    <script src="/static/policy-card.js?v=20260913-v1"></script>
+    <script src="/static/trip-choices.js?v=20260914-train-expand"></script>
+    <script src="/static/answer-card.js?v=20260913-complete-v1"></script>
+    <script src="/static/trip-intake-card.js?v=20260914-city-suggest"></script>
+    <script src="/static/execution-plan.js?v=20260914-plan-disclosure"></script>
+    <script src="/static/app.js?v=20260914-chat-polish"></script>
 </body>
 </html>

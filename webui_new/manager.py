@@ -15,65 +15,32 @@ from typing import Callable, Optional, TypeVar
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from agents.intention_agent import IntentionAgent
-from agents.orchestration_agent import OrchestrationAgent
-from settings import (
-    CONCURRENCY_CONFIG,
-    MEMORY_CONFIG,
-    RESILIENCE_CONFIG,
-)
+from settings import CONCURRENCY_CONFIG, RESILIENCE_CONFIG, SUPERVISOR_CONFIG
 from context.memory_manager import MemoryManager
 from context.async_memory import AsyncMemoryFacade
 from runtime import create_agent_runtime, create_circuit_breaker
-from utils.circuit_breaker import CircuitBreaker, CircuitOpenError
-from utils.llm_resilience import retry_with_backoff
+from utils.circuit_breaker import CircuitBreaker
 from utils.redis_coordination import (
     create_distributed_lock,
     create_redis_semaphore,
 )
 from redis.exceptions import RedisError
+from utils.memory_safety import redact_sensitive_text
 from utils.logging_safety import sanitize_for_log
 from utils.io_executor import IoExecutorSaturated, run_blocking
-from utils.memory_safety import redact_sensitive_text, wrap_untrusted_memory
-from utils.observability import COMPONENT_LLM, ERROR_CIRCUIT_OPEN, record_upstream_error
+from utils.observability import COMPONENT_LLM
 from webui_new.core.errors import AppError, BusinessError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
-from core.intent_guard import is_pure_chitchat
-from core.intent_router import FastIntentRouter, message_for_non_skill_intent
-from core.intent_catalog import (
-    INTENT_DISPLAY_NAMES,
-    updates_preferences_for_agent,
-)
-from core.orchestration.memory_hooks import MemoryHookExecutor
-from core.orchestration.pipeline import MultiIntentPipeline
-from core.orchestration.policy import OrchestrationPolicy
-from core.orchestration.state_store import OrchestrationStateStore, StateConflictError
-from core.orchestration.turn_resolver import TurnResolver
-from core.orchestration.validator import supports_task_pipeline
-from webui_new.quick_trip import inject_trip_entities
-from core.execution_budget import (
-    ExecutionBudget,
-    ExecutionLimitExceeded,
-    consume_agent_call,
-    execution_budget_scope,
-)
+from core.execution_budget import ExecutionBudget, ExecutionLimitExceeded, execution_budget_scope
 from core.presentation import RetrievalPresentation
 from multimodal.schemas import NormalizedInput
 from context.memory_repository import AttachmentBindingError
-from evaluation.collector import (
-    TurnEvaluationCollector,
-    current_collector,
-    reset_current_collector,
-    set_current_collector,
-)
+from evaluation.collector import TurnEvaluationCollector, reset_current_collector, set_current_collector
 from evaluation.sink import evaluation_sink
 
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T")
-
-# 智能体显示名称（统一来源：core.intent_catalog）
-AGENT_DISPLAY_NAMES = INTENT_DISPLAY_NAMES
 
 
 class HommeyWebInstance:
@@ -84,14 +51,9 @@ class HommeyWebInstance:
         self.session_id = str(uuid.uuid4())[:8]
         self.memory_manager: Optional[MemoryManager] = None
         self.async_memory: Optional[AsyncMemoryFacade] = None
-        self.orchestrator: Optional[OrchestrationAgent] = None
-        self.intention_agent: Optional[IntentionAgent] = None
+        self.supervisor = None
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
-        self.multi_intent_pipeline: Optional[MultiIntentPipeline] = None
-        self.orchestration_policy = OrchestrationPolicy()
-        self.state_store: Optional[OrchestrationStateStore] = None
-        self._agent_cache = {}
         self.circuit_breaker: Optional[CircuitBreaker] = None
         self.onboarding = InitialPreferenceOnboarding()
         self.initialized = False
@@ -106,25 +68,14 @@ class HommeyWebInstance:
             runtime = create_agent_runtime(
                 user_id=self.user_id,
                 session_id=self.session_id,
-                agent_cache=self._agent_cache,
             )
 
             self.model = runtime.model
+            self.supervisor = runtime.supervisor
             self.memory_manager = runtime.memory_manager
             self.async_memory = AsyncMemoryFacade(self.memory_manager)
             self.session_id = self.memory_manager.session_id
-            self.intention_agent = runtime.intention_agent
-            self.orchestrator = runtime.orchestrator
-            self.state_store = OrchestrationStateStore(user_id=self.user_id)
-            self.multi_intent_pipeline = MultiIntentPipeline(
-                model=self.model,
-                composer_model=runtime.composer_model,
-                agent_runner=self.orchestrator.execute_task,
-                memory_hooks=MemoryHookExecutor(self.memory_manager),
-                state_store=self.state_store,
-            )
             self.attachment_service = getattr(runtime, "attachment_service", None)
-            self._agent_cache = runtime.agent_cache
             self.circuit_breaker = create_circuit_breaker()
 
             self.initialized = True
@@ -219,12 +170,38 @@ class HommeyWebInstance:
             session_id=session_id,
         )
         rows = self._recover_legacy_presentation_documents(rows)
+        # Derive archival from the durable conversation order, including hidden submissions.
+        for index, row in enumerate(rows):
+            document = row.get("presentation_document")
+            if row.get("role") == "assistant" and document and document.get("type") == "trip_intake":
+                row["presentation_document"] = {**document,
+                    "interaction_id": document.get("interaction_id") or row.get("request_id"),
+                    "archived": index != len(rows) - 1 or not (document.get("interaction_id") or row.get("request_id"))}
+
         titles = self.memory_manager.long_term.get_chat_session_titles()
         return {
             "session_id": session_id,
             "title": titles.get(session_id),
             "messages": self._with_attachments(rows),
         }
+
+    def _validate_intake_submission(self, source_id, request_id, message):
+        """Called inside the existing per-user lock, before any message or trip write."""
+        rows = self.memory_manager.long_term.get_chat_history(limit=None, session_id=self.session_id)
+        rows = self._recover_legacy_presentation_documents(rows)
+        source_index = next((i for i, row in enumerate(rows)
+            if row.get("role") == "assistant"
+            and (row.get("presentation_document") or {}).get("type") == "trip_intake"
+            and str((row.get("presentation_document") or {}).get("interaction_id") or row.get("request_id")) == source_id), None)
+        if source_index is None:
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
+        following = rows[source_index + 1:]
+        # Retry only this exact durable submission; a newer turn always expires the card.
+        retry = bool(following) and all(str(row.get("request_id")) == request_id for row in following)
+        retry = retry and any(row.get("role") == "user" and row.get("content_type") == "trip_submission"
+                              and row.get("content") == redact_sensitive_text(message) for row in following)
+        if following and not retry:
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
 
     def _recover_legacy_presentation_documents(self, rows: list[dict]) -> list[dict]:
         """Repair typed intake cards that older canonical rows stored as text."""
@@ -358,41 +335,16 @@ class HommeyWebInstance:
             return {"active_trip": None}
         return {"active_trip": await self._ensure_async_memory().get_active_trip()}
 
-    async def interrupt_active_turn(
-        self, request_id: str, session_id: str | None = None,
-    ) -> dict:
-        """Interrupt the current turn without acquiring the request's long-held lock."""
-        if self.state_store is None:
-            raise BusinessError("NO_ACTIVE_RUN", "当前没有正在执行的任务")
-        state = await self.state_store.get_active(session_id or self.session_id)
-        if state is None or state.status not in {"ACTIVE", "INTERRUPTING"}:
-            raise BusinessError("NO_ACTIVE_RUN", "当前没有正在执行的任务")
-        try:
-            state = await self.state_store.request_interrupt(
-                state.run_id, state.current_turn_id or "", request_id=request_id,
-            )
-        except StateConflictError as exc:
-            raise BusinessError("STALE_INTERRUPT", "这次执行已经结束或被新的执行替代") from exc
-        return {
-            "run_id": state.run_id,
-            "turn_id": state.current_turn_id,
-            "status": state.status,
-            "revision": state.revision,
-            "resumable": True,
-        }
+    async def interrupt_active_turn(self, request_id: str, session_id: str | None = None) -> dict:
+        """Cancel only the authenticated user's matching supervisor request."""
+        from agent_runtime.contracts import Scope
+        if self.supervisor is None:
+            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
+        scope = Scope(user_id=self.user_id, session_id=session_id or self.session_id, request_id=request_id)
+        if not await self.supervisor.cancel(scope):
+            raise BusinessError("NO_ACTIVE_RUN", "当前没有匹配的执行任务")
+        return {"run_id": request_id, "turn_id": request_id, "status": "INTERRUPTING", "revision": 0, "resumable": True}
 
-    @staticmethod
-    def _is_simple_chitchat(message: str) -> bool:
-        """快速判断是否纯闲聊（不经过 LLM）
-
-        复用 is_pure_chitchat 的残余文本判定：带业务前缀的问候/感谢
-        （如"谢谢，餐补多少"）不再被拦截，进入完整意图识别。
-        """
-        msg = message.strip().lower()
-        # 单字/简单表情（保留原有快速路径）
-        if len(msg) <= 2 and msg in ("嗯", "哦", "啊", "好", "行", "ok"):
-            return True
-        return is_pure_chitchat(msg)
 
     def _normalize_input(
         self, message: str, attachment_ids: list[str] | None
@@ -414,67 +366,6 @@ class HommeyWebInstance:
                 "附件处理失败，请重试或移除附件",
             ) from exc
 
-    async def _persist_user_message_async(self, content: str, metadata: dict) -> None:
-        """Persist display text and attachment links through one safe boundary (async)."""
-        facade = self._ensure_async_memory()
-        if facade is None:
-            raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        try:
-            await facade.add_message("user", content, metadata)
-        except AttachmentBindingError as exc:
-            raise BusinessError(
-                "ATTACHMENT_BINDING_FAILED",
-                "附件已失效或已被其他消息使用，请重新上传",
-            ) from exc
-
-    def _ensure_active_session(self) -> bool:
-        """Resume or rotate the durable session after the idle timeout."""
-        ensure_session = getattr(self.memory_manager, "ensure_active_session", None)
-        if callable(ensure_session):
-            rotated = ensure_session()
-            self.session_id = self.memory_manager.session_id
-        else:
-            # Compatibility for lightweight adapters and isolated test doubles.
-            now = time.monotonic()
-            timeout = int(MEMORY_CONFIG.get("short_term", {}).get("session_idle_timeout_sec", 600))
-            rotated = bool(
-                self._last_activity_monotonic is not None
-                and now - self._last_activity_monotonic >= max(timeout, 1)
-            )
-            if rotated:
-                self.session_id = str(uuid.uuid4())[:8]
-                rotate_session = getattr(self.memory_manager, "rotate_session", None)
-                if callable(rotate_session):
-                    rotate_session(self.session_id)
-            self._last_activity_monotonic = now
-        if rotated:
-            self._total_messages = 0
-        return rotated
-
-    async def _handle_task_lifecycle_command(self, message: str) -> Optional[str]:
-        """Handle explicit, narrowly-scoped current-task completion/cancellation commands."""
-        normalized = "".join(message.strip().lower().split())
-        cancel_commands = {
-            "取消当前行程", "取消这个行程", "这个行程取消", "这个行程不安排了", "不安排这个行程了",
-        }
-        complete_commands = {
-            "完成当前行程", "结束当前行程", "当前行程完成了", "这个行程完成了", "行程规划完成",
-        }
-        if normalized in cancel_commands:
-            cancelled = await self._ensure_async_memory().cancel_active_trip()
-            if self.state_store is not None:
-                active = await self.state_store.get_active(self.session_id)
-                if active is not None:
-                    await self.state_store.finish_run(active.run_id, "ABANDONED")
-            return "已取消当前行程任务。" if cancelled else "当前没有进行中的行程任务。"
-        if normalized in complete_commands:
-            completed = await self._ensure_async_memory().complete_active_trip(reason="user_completed")
-            if self.state_store is not None:
-                active = await self.state_store.get_active(self.session_id)
-                if active is not None:
-                    await self.state_store.finish_run(active.run_id, "COMPLETED")
-            return "已结束当前行程任务。" if completed else "当前没有进行中的行程任务。"
-        return None
 
     async def process_message(
         self,
@@ -483,15 +374,16 @@ class HommeyWebInstance:
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
         progress_callback=None,
     ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
         retrieval_mode = "enhanced" if retrieval_mode == "enhanced" else "standard"
         rc = RESILIENCE_CONFIG
         budget = ExecutionBudget(
-            max_agent_calls=rc.get("max_agent_calls_per_request", 8),
-            max_external_calls=rc.get("max_external_calls_per_request", 16),
-            max_external_calls_per_type=rc.get("max_external_calls_per_type", 6),
+            max_agent_calls=SUPERVISOR_CONFIG["max_children"],
+            max_external_calls=SUPERVISOR_CONFIG["max_external_calls"],
+            max_external_calls_per_type=SUPERVISOR_CONFIG["max_calls_per_type"],
         )
         collector = None
         collector_token = None
@@ -511,6 +403,8 @@ class HommeyWebInstance:
                 }
                 if structured_trip_input is not None:
                     implementation_kwargs["structured_trip_input"] = structured_trip_input
+                if intake_request_id:
+                    implementation_kwargs["intake_request_id"] = intake_request_id
                 if progress_callback is not None:
                     implementation_kwargs["progress_callback"] = progress_callback
                 result = await asyncio.wait_for(
@@ -564,495 +458,75 @@ class HommeyWebInstance:
                 reset_current_collector(collector_token)
             logger.info("Request execution budget user_id=%s budget=%s", self.user_id, budget.snapshot())
 
-    async def _process_message_impl(
-        self,
-        message: str,
-        request_id: str | None = None,
-        attachment_ids: list[str] | None = None,
-        retrieval_mode: str = "standard",
-        structured_trip_input: dict | None = None,
-        progress_callback=None,
-    ) -> dict:
-        """处理用户消息，返回响应"""
-        from agentscope.message import Msg
 
-        start_time = time.perf_counter()
-        timings = {}
+    async def _process_message_impl(
+        self, message, *, request_id=None, attachment_ids=None,
+        retrieval_mode="standard", structured_trip_input=None, progress_callback=None, intake_request_id=None,
+    ) -> dict:
+        from agent_runtime.contracts import Scope, ToolRejected
+        import json
+        import uuid
 
         if not self.initialized:
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-
-        await run_blocking(self._ensure_active_session)
-        if request_id:
-            get_recorded_response = getattr(self.memory_manager, "get_recorded_response", None)
-            recorded = (
-                await run_blocking(get_recorded_response, request_id)
-                if get_recorded_response else None
-            )
-            if recorded:
-                get_recorded_document = getattr(
-                    self.memory_manager, "get_recorded_answer_document", None
-                )
-                get_recorded_presentation = getattr(
-                    self.memory_manager, "get_recorded_presentation_document", None
-                )
-                recorded_document = (
-                    await run_blocking(get_recorded_document, request_id)
-                    if get_recorded_document else None
-                )
-                recorded_presentation = (
-                    await run_blocking(get_recorded_presentation, request_id)
-                    if get_recorded_presentation else None
-                )
-                return {
-                    "response": recorded,
-                    "answer_document": recorded_document,
-                    "presentation_document": recorded_presentation,
-                    "agents": [],
-                    "preferences_updated": False,
-                    "idempotent_replay": True,
-                }
-        metadata = {"request_id": request_id} if request_id else {}
-        if self.memory_manager is not None:
-            self.memory_manager.current_request_id = request_id
-        self._ensure_async_memory()
-
-        normalized = self._normalize_input(message, attachment_ids)
-        agent_query = normalized.agent_query
-        display_message = normalized.display_message
-        user_metadata = {
-            **metadata,
-            "attachment_ids": normalized.attachment_ids,
-            "content_type": "attachment" if normalized.attachment_ids else "text",
-            "retrieval_mode": retrieval_mode,
-            "input_source": "quick_trip_form" if structured_trip_input else "chat",
-        }
-        input_result = {
-            "sources": [source.model_dump() for source in normalized.sources],
-            "warnings": list(normalized.warnings),
-        }
-
-        active_run = (
-            await self.state_store.get_active(self.session_id)
-            if self.state_store is not None else None
-        )
-        # process_message is already inside the per-user local + distributed
-        # lock.  If a different request still sees ACTIVE here, the owning
-        # process died after its latest durable boundary; make it resumable
-        # before resolving this Turn.
-        if (
-            active_run is not None
-            and active_run.status == "ACTIVE"
-            and active_run.current_request_id != (request_id or "")
-        ):
-            active_run = await self.state_store.recover_orphaned_active_run(
-                active_run.run_id, incoming_request_id=request_id or "",
-            )
-        # 旧版独立 event_collection run 或不一致的等待快照不能吞掉新请求。
-        # 已确认字段仍保留在 active_trip；这里只结束失效的生命周期身份。
-        if active_run is not None and not TurnResolver.is_valid_active_run(active_run):
-            await self.state_store.finish_run(active_run.run_id, "ABANDONED")
-            active_run = None
-        relation = TurnResolver.resolve(message, active_run) if active_run is not None else None
-        resume_state = active_run if relation and relation.kind == "resume" else None
-
-        # “继续上次任务”在当前会话没有目标时，只列出其他会话候选，不跨会话猜测。
-        if active_run is None and "".join(message.strip().lower().split()) in {
-            "继续", "接着做", "继续执行", "继续上次任务", "恢复任务",
-        } and self.state_store is not None:
-            candidates = await self.state_store.list_resumable()
-            if candidates:
-                response = (
-                    "当前对话没有暂停任务。其他对话中有可恢复任务，请先切换到对应对话再继续。"
-                    if len(candidates) == 1 else
-                    f"其他对话中有 {len(candidates)} 个可恢复任务，请先选择对应对话。"
-                )
-                await self._persist_user_message_async(display_message, user_metadata)
-                await self.async_memory.add_message("assistant", response, metadata)
-                return {"response": response, "agents": [], "preferences_updated": False, **input_result}
-
-        lifecycle_response = await self._handle_task_lifecycle_command(message)
-        if lifecycle_response:
-            await self._persist_user_message_async(display_message, user_metadata)
-            await self.async_memory.add_message("assistant", lifecycle_response, metadata)
-            return {
-                "response": lifecycle_response,
-                "agents": [],
-                "preferences_updated": False,
-                **input_result,
-            }
-
-        # ═══ 优化 1: 简单闲聊直接处理，不经过 LLM ═══
-        # 带附件时不走闲聊短路，避免附件问题被草率打发。
-        if resume_state is None and self._is_simple_chitchat(message) and not attachment_ids:
-            collector = current_collector()
-            if collector is not None:
-                collector.record_routing({
-                    "routing": {"intent": "chitchat", "should_call_skill": True},
-                    "intents": [{"type": "chitchat", "should_call_skill": True}],
-                })
-            await self._persist_user_message_async(display_message, user_metadata)
-            response = await self._handle_chitchat(message)
-            await self.async_memory.add_message("assistant", response, metadata)
-            return {
-                "response": response,
-                "agents": [],
-                "preferences_updated": False,
-                **input_result,
-            }
-
-        rc = RESILIENCE_CONFIG
-        agent_max_retries = rc.get("agent_max_retries", 1)
-        policy_context = ""
-        policy_query = agent_query
-        # 带附件时强制走完整意图链路（_build_context 会把 agent_query 含附件上下文喂给 LLM），
-        # 不走绕过上下文的 fast_route，避免附件文本无法到达模型。
-        fast_route = None if attachment_ids or active_run is not None else self._route_without_context(message)
-
-        if resume_state is not None:
-            intention_data = resume_state.intention_data
-            policy_query = resume_state.original_query
-            intention_result = Msg(
-                name="StateCoordinator",
-                content=json.dumps(intention_data, ensure_ascii=False),
-                role="assistant",
-            )
-            timings["context"] = 0.0
-            timings["intent"] = 0.0
-        elif fast_route:
-            intention_data = fast_route.to_intention_data(agent_query)
-            intention_result = Msg(
-                name="IntentionAgent",
-                content=json.dumps(intention_data, ensure_ascii=False),
-                role="assistant",
-            )
-            timings["context"] = 0.0
-            timings["intent"] = 0.0
-        else:
-            # 意图层只读取当前任务和当前会话；历史与偏好由授权后的 skill 按需读取。
-            context_future = asyncio.ensure_future(self._build_context(agent_query))
-
-            # 2. Intent recognition
-            try:
-                if self.circuit_breaker:
-                    await self.circuit_breaker.raise_if_open()
-
-                context_start = time.perf_counter()
-                context_messages = await context_future
-                policy_context = "\n".join(
-                    str(getattr(item, "content", "")) for item in context_messages[:-1]
-                )
-                timings["context"] = time.perf_counter() - context_start
-
-                intent_start = time.perf_counter()
-                async def call_intention_agent():
-                    consume_agent_call("IntentionAgent")
-                    return await self.intention_agent.reply(context_messages)
-
-                intention_result = await retry_with_backoff(
-                    call_intention_agent,
-                    max_retries=agent_max_retries,
-                    base_delay_sec=rc.get("retry_base_delay_sec", 1.0),
-                    max_delay_sec=rc.get("retry_max_delay_sec", 30.0),
-                )
-                timings["intent"] = time.perf_counter() - intent_start
-                if self.circuit_breaker:
-                    await self.circuit_breaker.record_success()
-            except ExecutionLimitExceeded:
-                raise
-            except CircuitOpenError:
-                record_upstream_error(COMPONENT_LLM, ERROR_CIRCUIT_OPEN, retryable=True)
-                raise UpstreamError("CIRCUIT_OPEN", "服务暂时不可用，请稍后再试。", retryable=True, component=COMPONENT_LLM)
-            except Exception as e:
-                if self.circuit_breaker:
-                    await self.circuit_breaker.record_failure()
-                logger.error("Intention agent failed: %s", sanitize_for_log(e))
-                record_upstream_error(COMPONENT_LLM, e, retryable=True)
-                raise UpstreamError(
-                    "INTENTION_FAILED",
-                    "处理请求时出错，请稍后重试。",
-                    retryable=True,
-                    component=COMPONENT_LLM,
-                    debug_message=str(e),
-                )
-
-        try:
-            raw_intention_data = json.loads(intention_result.content)
-        except json.JSONDecodeError:
-            raise UpstreamError(
-                "INTENTION_PARSE_FAILED",
-                "抱歉，我没能理解您的意思，请换一种说法试试？",
-                retryable=False,
-                component=COMPONENT_LLM,
-            )
-
-        policy_evaluation = self.orchestration_policy.evaluate(
-            raw_intention_data,
-            original_query=policy_query,
-            conversation_context=policy_context,
-        )
-        intention_data = policy_evaluation.to_compatibility_dict(policy_query)
+        started = time.perf_counter()
+        request_id = request_id or uuid.uuid4().hex
+        # Respect the explicitly selected session; do not rotate it on idle.
+        scope = Scope(user_id=self.user_id, session_id=self.session_id, request_id=request_id)
+        if intake_request_id:
+            await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message)
+        normalized = await run_blocking(self._normalize_input, message, attachment_ids)
+        user_text = message
+        agent_text = normalized.agent_query
         if structured_trip_input:
-            inject_trip_entities(intention_data, structured_trip_input)
+            structured = json.dumps(structured_trip_input, ensure_ascii=False)
+            user_text += "\n用户填写的行程表单：" + structured
+            agent_text += "\n用户填写的行程表单：" + structured
+        metadata = {"request_id": request_id, "engine": "supervisor", "attachment_ids": normalized.attachment_ids,
+            "content_type": "trip_submission" if intake_request_id or structured_trip_input else ("attachment" if normalized.attachment_ids else "text"),
+            "retrieval_mode": retrieval_mode, "input_source": "quick_trip_form" if structured_trip_input else "chat"}
+        self.memory_manager.current_request_id = request_id
+        memory = self._ensure_async_memory()
+        # User persistence is already idempotent on (user, request, role).
+        try:
+            saved = await memory.add_message("user", normalized.display_message, metadata)
+        except AttachmentBindingError as exc:
+            raise BusinessError("ATTACHMENT_BINDING_FAILED", "附件已失效或已被其他消息使用，请重新上传") from exc
+        if not saved:
+            raise BusinessError("MEMORY_WRITE_FAILED", "消息未能保存，请稍后重试")
+        try:
+            run_kwargs = {"user_text": user_text, "progress": progress_callback}
+            if structured_trip_input:
+                run_kwargs["trip_input"] = structured_trip_input
+            output = await self.supervisor.run(scope, agent_text, **run_kwargs)
+        except ToolRejected as exc:
+            raise BusinessError("SUPERVISOR_INPUT_REJECTED", str(exc)) from exc
+        except ExecutionLimitExceeded:
+            raise
+        except Exception as exc:
+            logger.error("Supervisor failed error_type=%s", type(exc).__name__)
+            raise UpstreamError("SUPERVISOR_FAILED", "本次任务未完成，请稍后继续。", retryable=True,
+                component=COMPONENT_LLM, debug_message=str(exc)) from exc
+        if not output.get("interrupted"):
+            if retrieval_mode == "enhanced" and output.get("answer_document"):
+                # The supervisor's policy leaf currently exposes the standard
+                # search adapter. Never label it as legacy enhanced retrieval.
+                output["answer_document"]["retrieval"] = RetrievalPresentation(
+                    requested_mode="enhanced", effective_mode="standard", status="fallback",
+                    fallback_reason="当前主 Agent 引擎使用标准制度检索",
+                ).model_dump(mode="json")
+            if (output.get("presentation_document") or {}).get("type") == "trip_intake":
+                output["presentation_document"]["interaction_id"] = request_id
+            assistant_metadata = {**metadata, "content_type": "text", "answer_document": output.get("answer_document"),
+                "presentation_document": output.get("presentation_document")}
+            if not await memory.add_message("assistant", output["response"], assistant_metadata):
+                raise BusinessError("MEMORY_WRITE_FAILED", "结果已保存，但对话记录写入失败，请重试本次请求")
+        if not output.get("idempotent_replay"):
+            self._total_messages += 1
+        self._last_activity_monotonic = time.monotonic()
+        return {**output, "timings": {"total": round(time.perf_counter() - started, 3)},
+            "sources": [source.model_dump() for source in normalized.sources], "warnings": list(normalized.warnings)}
 
-        collector = current_collector()
-        if collector is not None:
-            collector.record_routing(intention_data)
-
-        self._total_messages += 1
-        # Persistence boundary: display text and attachment links commit together.
-        await self._persist_user_message_async(display_message, user_metadata)
-
-        request_context = {
-            "original_query": message,
-            "agent_query": normalized.agent_query,
-            "retrieval_mode": retrieval_mode,
-            "request_id": request_id or "",
-            "attachment_sources": input_result["sources"],
-            "attachment_warnings": input_result["warnings"],
-            "structured_trip_input": structured_trip_input or {},
-        }
-
-        # 所有已授权的 skill 意图都走统一 scoped DAG 管线。
-        use_task_pipeline = bool(
-            self.multi_intent_pipeline is not None
-            and supports_task_pipeline(intention_data)
-        )
-        if use_task_pipeline:
-            try:
-                orchestration_start = time.perf_counter()
-                base_context = self.orchestrator.prepare_context(
-                    intention_data,
-                    request_context=request_context,
-                )
-                if resume_state is not None:
-                    pipeline_output = await self.multi_intent_pipeline.resume_run(
-                        state=resume_state,
-                        original_query=display_message,
-                        base_context=base_context,
-                        progress=progress_callback,
-                        request_id=request_id or "",
-                    )
-                else:
-                    pipeline_output = await self.multi_intent_pipeline.run(
-                        original_query=display_message,
-                        intention_data=intention_data,
-                        base_context=base_context,
-                        progress=progress_callback,
-                        task_query=normalized.agent_query,
-                        # An independent question may be answered while another
-                        # goal is waiting; append it to the same durable Run.
-                        session_id=self.session_id,
-                        request_id=request_id or "",
-                        existing_state=active_run,
-                    )
-                timings["orchestration"] = time.perf_counter() - orchestration_start
-                if collector is not None:
-                    collector.record_pipeline(pipeline_output)
-                self.orchestrator.record_task_results(intention_data, pipeline_output.results)
-                if self.circuit_breaker:
-                    await self.circuit_breaker.record_success()
-            except ExecutionLimitExceeded:
-                raise
-            except CircuitOpenError:
-                record_upstream_error(COMPONENT_LLM, ERROR_CIRCUIT_OPEN, retryable=True)
-                raise UpstreamError(
-                    "CIRCUIT_OPEN",
-                    "服务暂时不可用，请稍后再试。",
-                    retryable=True,
-                    component=COMPONENT_LLM,
-                )
-            except Exception as e:
-                if self.circuit_breaker:
-                    await self.circuit_breaker.record_failure()
-                logger.error("Task orchestration failed: %s", sanitize_for_log(e))
-                record_upstream_error(COMPONENT_LLM, e, retryable=True)
-                raise UpstreamError(
-                    "ORCHESTRATION_FAILED",
-                    "调度执行失败，请稍后重试。",
-                    retryable=True,
-                    component=COMPONENT_LLM,
-                    debug_message=str(e),
-                )
-            if pipeline_output.paused:
-                return await self._task_pipeline_paused(
-                    pipeline_output, metadata, start_time, timings
-                )
-            if pipeline_output.interrupted:
-                timings["total"] = time.perf_counter() - start_time
-                return {
-                    "response": "",
-                    "answer_document": None,
-                    "presentation_document": None,
-                    "agents": [],
-                    "interrupted": True,
-                    "preferences_updated": False,
-                    "timings": {key: round(value, 3) for key, value in timings.items()},
-                }
-            # abort 语义的硬失败转入公共错误流；continue 降级（如天气不可用）走卡片。
-            self._raise_on_pipeline_errors(pipeline_output)
-            retrieval_presentation = self._retrieval_presentation(pipeline_output)
-            if retrieval_presentation is not None:
-                pipeline_output.answer_document.retrieval = retrieval_presentation
-            answer_document = pipeline_output.answer_document.model_dump(mode="json")
-            response = pipeline_output.answer_document.plain_text
-            assistant_metadata = dict(metadata)
-            assistant_metadata["answer_document"] = answer_document
-            await self.async_memory.add_message("assistant", response, assistant_metadata)
-            agents = [
-                {
-                    "name": result.agent_name,
-                    "display": AGENT_DISPLAY_NAMES.get(result.agent_name, result.agent_name),
-                    "status": result.status,
-                    "duration_sec": result.duration_sec,
-                }
-                for result in pipeline_output.results
-            ]
-            timings["total"] = time.perf_counter() - start_time
-            return {
-                "response": response,
-                "answer_document": answer_document,
-                "agents": agents,
-                "preferences_updated": any(
-                    updates_preferences_for_agent(r.agent_name) and r.status == "success"
-                    for r in pipeline_output.results
-                ),
-                "timings": {key: round(value, 3) for key, value in timings.items()},
-            }
-
-        # 3. 非 skill 意图（unsupported/unclear/fallback）不进入任务管线：
-        #    should_call_skill 为 False 时直接返回澄清；其余兜底闲聊。
-        routing = intention_data.get("routing") or {}
-        if routing.get("should_call_skill") is False:
-            response = (
-                intention_data.get("clarification")
-                or message_for_non_skill_intent(routing.get("intent"))
-            )
-        else:
-            response = await self._handle_chitchat(agent_query)
-        await self.async_memory.add_message("assistant", response, metadata)
-        timings["total"] = time.perf_counter() - start_time
-        return {
-            "response": response,
-            "answer_document": None,
-            "presentation_document": None,
-            "agents": [],
-            "preferences_updated": False,
-            "timings": {key: round(value, 3) for key, value in timings.items()},
-            **input_result,
-        }
-
-    async def _task_pipeline_paused(self, pipeline_output, metadata, start_time, timings) -> dict:
-        """跨轮暂停：返回 trip_intake presentation 契约，保持与 legacy 分支一致。"""
-        presentation_document = pipeline_output.presentation_document.model_dump(mode="json")
-        response = presentation_document["plain_text"]
-        assistant_metadata = dict(metadata)
-        assistant_metadata["presentation_document"] = presentation_document
-        await self.async_memory.add_message("assistant", response, assistant_metadata)
-        agents = [
-            {
-                "name": result.agent_name,
-                "display": AGENT_DISPLAY_NAMES.get(result.agent_name, result.agent_name),
-                "status": result.status,
-                "duration_sec": result.duration_sec,
-            }
-            for result in pipeline_output.results
-        ]
-        timings["total"] = time.perf_counter() - start_time
-        return {
-            "response": response,
-            "answer_document": None,
-            "presentation_document": presentation_document,
-            "agents": agents,
-            "preferences_updated": False,
-            "timings": {key: round(value, 3) for key, value in timings.items()},
-        }
-
-    @staticmethod
-    def _retrieval_presentation(pipeline_output) -> RetrievalPresentation | None:
-        for result in pipeline_output.results:
-            if result.agent_name != "rag_knowledge":
-                continue
-            raw = result.data.get("retrieval") if isinstance(result.data, dict) else None
-            if not isinstance(raw, dict) or raw.get("requested_mode") != "enhanced":
-                continue
-            try:
-                return RetrievalPresentation.model_validate(raw)
-            except Exception as exc:
-                logger.warning(
-                    "retrieval_presentation_invalid task_id=%s error=%s",
-                    result.task_id,
-                    sanitize_for_log(exc),
-                )
-        return None
-
-    def _raise_on_pipeline_errors(self, pipeline_output) -> None:
-        """把 pipeline 的 abort 语义硬失败转入公共错误流；continue 降级继续走卡片。
-
-        TaskResult 的 error 不都等于整体失败：步骤声明 ``on_failure=continue``
-        时（如天气/公开信息不可用）executor 会降级，不应打断响应；只有
-        ``on_failure=abort`` 的错误步骤才作为整体失败上抛。
-        """
-        task_by_id = {task.task_id: task for task in pipeline_output.execution_tasks}
-        errors = []
-        for result in pipeline_output.results:
-            if result.status != "error":
-                continue
-            task = task_by_id.get(result.task_id)
-            if task is not None and task.failure_policy == "continue":
-                continue
-            errors.append({
-                "agent_name": result.agent_name,
-                "status": "error",
-                "message": result.error_message or "",
-                "error_code": result.error_code or "AGENT_EXECUTION_FAILED",
-            })
-        if errors:
-            self._raise_on_agent_errors({"status": "error", "results": errors})
-
-    def _raise_on_agent_errors(self, result_data: dict) -> None:
-        """Convert internal agent error payloads into the public AppError flow."""
-        errors = []
-        for result in result_data.get("results", []):
-            if result.get("status") != "error":
-                continue
-            errors.append({
-                "agent_name": result.get("agent_name", "unknown"),
-                "message": (
-                    result.get("error_message")
-                    or result.get("message")
-                    or "agent returned error status"
-                ),
-                "error_code": result.get("error_code") or "AGENT_EXECUTION_FAILED",
-            })
-
-        if not errors:
-            return
-
-        first_error = errors[0]
-        agent_name = first_error["agent_name"]
-        debug_message = first_error["message"]
-        error_code = first_error["error_code"]
-        logger.error(
-            "Agent result failed user_id=%s agent=%s error=%s",
-            self.user_id,
-            agent_name,
-            sanitize_for_log(debug_message),
-        )
-        record_upstream_error(COMPONENT_LLM, str(debug_message), retryable=True)
-        limit_codes = {
-            "AGENT_CALL_LIMIT_EXCEEDED",
-            "EXTERNAL_CALL_LIMIT_EXCEEDED",
-            "EXTERNAL_CALL_TYPE_LIMIT_EXCEEDED",
-        }
-        is_limit_error = error_code in limit_codes
-        raise UpstreamError(
-            error_code if is_limit_error else "AGENT_EXECUTION_FAILED",
-            str(debug_message) if is_limit_error else "处理失败，请稍后重试。",
-            retryable=not is_limit_error,
-            component=COMPONENT_LLM,
-            debug_message=f"{agent_name}: {debug_message}",
-        )
 
     async def stream_message(
         self,
@@ -1061,6 +535,7 @@ class HommeyWebInstance:
         attachment_ids: list[str] | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
     ):
         """Yield live orchestration progress and response events as NDJSON payloads."""
         queue: asyncio.Queue = asyncio.Queue()
@@ -1079,6 +554,8 @@ class HommeyWebInstance:
                 }
                 if structured_trip_input is not None:
                     request_kwargs["structured_trip_input"] = structured_trip_input
+                if intake_request_id:
+                    request_kwargs["intake_request_id"] = intake_request_id
                 if retrieval_mode == "enhanced":
                     request_kwargs["retrieval_mode"] = "enhanced"
                 result_holder["result"] = await self.process_message(message, **request_kwargs)
@@ -1102,11 +579,13 @@ class HommeyWebInstance:
             await asyncio.gather(request_task, return_exceptions=True)
         await request_task
         result = result_holder["result"]
+        completion = {"outcome": result.get("outcome"), "stop_reason": result.get("stop_reason"),
+                      "public_plan": result.get("public_plan")}
 
         if result.get("interrupted"):
             yield {"type": "interrupted", "resumable": True}
             yield {
-                "type": "done", "interrupted": True,
+                "type": "done", **completion, "interrupted": True,
                 "preferences_updated": False,
                 "timings": result.get("timings", {}),
             }
@@ -1127,7 +606,7 @@ class HommeyWebInstance:
         if answer_document:
             yield {"type": "answer_document", "document": answer_document}
             yield {
-                "type": "done",
+                "type": "done", **completion,
                 "preferences_updated": result.get("preferences_updated", False),
                 "timings": result.get("timings", {}),
             }
@@ -1137,7 +616,7 @@ class HommeyWebInstance:
         if presentation_document:
             yield {"type": "presentation_document", "document": presentation_document}
             yield {
-                "type": "done",
+                "type": "done", **completion,
                 "preferences_updated": result.get("preferences_updated", False),
                 "timings": result.get("timings", {}),
             }
@@ -1149,7 +628,7 @@ class HommeyWebInstance:
             await asyncio.sleep(0.01)
 
         yield {
-            "type": "done",
+            "type": "done", **completion,
             "preferences_updated": result.get("preferences_updated", False),
             "timings": result.get("timings", {}),
             "sources": result.get("sources", []),
@@ -1160,86 +639,6 @@ class HommeyWebInstance:
     def _chunk_text(text: str, size: int = 18):
         for idx in range(0, len(text), size):
             yield text[idx:idx + size]
-
-    def _route_without_context(self, message: str):
-        """Run cheap routing before building memory context for context-free intents."""
-        short_term = getattr(self.memory_manager, "short_term", None)
-        if short_term is not None:
-            try:
-                if short_term.get_recent_context(n_turns=1):
-                    return None
-            except (AttributeError, TypeError):
-                pass
-        route = FastIntentRouter.route(message)
-        if (
-            not route or not route.should_call_skill
-            or len(route.intent_types) != 1
-            or not route.safe_to_short_circuit
-        ):
-            return None
-        if route.intent_type in {"rag_knowledge", "information_query", "train_query", "chitchat"}:
-            return route
-        return None
-
-    async def _build_context(self, message: str) -> list:
-        """构建上下文消息（可与其他异步任务并行）"""
-        from agentscope.message import Msg
-
-        recent_context = await self.async_memory.get_recent_context(n_turns=5)
-
-        collector = current_collector()
-        if collector is not None:
-            collector.record_context(recent_context)
-
-        context_messages = []
-        active_trip = await self.async_memory.get_active_trip()
-        memory_parts = []
-        if active_trip:
-            memory_parts.extend([
-                "【当前出差任务｜可用于补全当前问题】",
-                json.dumps(active_trip, ensure_ascii=False),
-            ])
-        if memory_parts:
-            context_messages.append(Msg(
-                name="system",
-                content=wrap_untrusted_memory("\n".join(memory_parts)),
-                role="system",
-            ))
-        for msg in recent_context:
-            context_messages.append(Msg(name=msg["role"], content=msg["content"], role=msg["role"]))
-        context_messages.append(Msg(name="user", content=message, role="user"))
-
-        return context_messages
-
-    async def _handle_chitchat(self, user_input: str) -> str:
-        """闲聊兜底（只用 skill 注册表，删除了硬编码脚本路径回退）。"""
-        from agentscope.message import Msg
-
-        try:
-            agent = self.orchestrator.agent_registry["chitchat"]
-        except (KeyError, Exception):
-            agent = None
-
-        if agent is None:
-            return "嗯嗯，我听着呢～有什么出行相关的问题需要帮忙吗？😊"
-
-        try:
-            consume_agent_call(getattr(agent, "name", "chitchat"))
-            input_msg = Msg(
-                name="user",
-                content=json.dumps({"query": user_input}, ensure_ascii=False),
-                role="user",
-            )
-            response = await agent.reply(input_msg)
-            data = json.loads(response.content) if isinstance(response.content, str) else response.content
-            reply = data.get("response", "") if isinstance(data, dict) else str(data)
-            return reply
-        except ExecutionLimitExceeded:
-            raise
-        except Exception as e:
-            logger.warning(f"Chitchat failed: {e}")
-            return "嗯嗯，我听着呢～有什么出行相关的问题需要帮忙吗？😊"
-
 
 
 class WebHommeyManager:
@@ -1474,6 +873,7 @@ class WebHommeyManager:
         session_id: str | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
         progress_callback=None,
     ) -> dict:
         """统一消息入口：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
@@ -1513,6 +913,8 @@ class WebHommeyManager:
             }
             if structured_trip_input is not None:
                 instance_kwargs["structured_trip_input"] = structured_trip_input
+            if intake_request_id:
+                instance_kwargs["intake_request_id"] = intake_request_id
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             process_task = asyncio.create_task(instance.process_message(message, **instance_kwargs))
@@ -1550,6 +952,7 @@ class WebHommeyManager:
         session_id: str | None = None,
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
+        intake_request_id: str | None = None,
     ):
         """SSE 流式入口：与 process_message 相同的取锁顺序，持锁到流结束。
 
@@ -1586,6 +989,8 @@ class WebHommeyManager:
             }
             if structured_trip_input is not None:
                 instance_kwargs["structured_trip_input"] = structured_trip_input
+            if intake_request_id:
+                instance_kwargs["intake_request_id"] = intake_request_id
             if retrieval_mode == "enhanced":
                 instance_kwargs["retrieval_mode"] = "enhanced"
             stream = instance.stream_message(message, **instance_kwargs)
