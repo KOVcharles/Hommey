@@ -2,9 +2,9 @@
 from __future__ import annotations
 
 import logging
-import time
 import uuid
-from typing import Any, Optional
+from copy import copy
+from typing import Any
 
 from settings import MEMORY_CONFIG
 from utils.memory_safety import redact_sensitive_text
@@ -64,7 +64,6 @@ class MemoryService:
         storage_path: str = "data/memory",
     ):
         self.user_id = str(user_id)
-        self._last_activity_monotonic: Optional[float] = None
         short_config = MEMORY_CONFIG.get("short_term", {})
         long_config = MEMORY_CONFIG.get("long_term", {})
         self.max_turns = max(int(short_config.get("max_turns", 10)), 1)
@@ -84,8 +83,10 @@ class MemoryService:
                 ),
             )
             self.profile_repository = PostgresProfileRepository(pool)
-            session = self.repository.get_or_create_session(self.user_id, self.idle_timeout_sec)
-            self.session_id = str(session.session_id)
+            # No implicit "current conversation": a supplied ID must identify
+            # an existing owned session; creation is a separate operation.
+            session = self.repository.resume_session(self.user_id, requested_session_id) if requested_session_id else None
+            self.session_id = str(session.session_id) if session else None
             self.long_term = PostgresCompatibilityStore(self.user_id, self.repository)
         elif backend == "disabled":
             self.session_id = requested_session_id or str(uuid.uuid4())
@@ -98,8 +99,29 @@ class MemoryService:
                 f"Unsupported long-term memory backend: {backend}. Use 'file', 'postgres', or 'disabled'."
             )
 
-        self._cache = self._create_cache(self.session_id)
+        self._cache = self._create_cache(self.session_id) if self.session_id else None
         self.short_term = RecentContextFacade(self)
+
+    def for_session(self, session_id: str) -> "MemoryService":
+        """Bind a fresh view; never mutate the user runtime or another request."""
+        if not session_id:
+            raise ValueError("Session ID is required")
+        if self.repository is not None:
+            session_id = str(self.repository.resume_session(self.user_id, session_id).session_id)
+        bound = copy(self)
+        bound.session_id = session_id
+        bound._cache = bound._create_cache(session_id)
+        bound.short_term = RecentContextFacade(bound)
+        if bound.repository is None:
+            bound._cache.replace_messages(bound.long_term.get_chat_history(
+                limit=bound.max_turns * 2, session_id=session_id,
+            ))
+        return bound
+
+    def create_session(self) -> str:
+        if self.repository is not None:
+            return str(self.repository.create_session(self.user_id).session_id)
+        return str(uuid.uuid4())
 
     def _create_cache(self, session_id: str) -> ShortTermMemory:
         config = MEMORY_CONFIG.get("short_term", {})
@@ -122,6 +144,8 @@ class MemoryService:
         content: str,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if not self.session_id:
+            raise ValueError("Bind a session before writing messages")
         metadata = dict(metadata or {})
         safe_content = redact_sensitive_text(content)
         if self.repository is None:
@@ -171,6 +195,8 @@ class MemoryService:
         }
 
     def get_recent_context(self, n_turns: int | None = None) -> list[dict[str, Any]]:
+        if not self.session_id:
+            raise ValueError("Bind a session before accessing session memory")
         requested_turns = self.max_turns if n_turns is None else min(max(int(n_turns), 0), self.max_turns)
         limit = requested_turns * 2
         if limit <= 0:
@@ -217,6 +243,8 @@ class MemoryService:
         return cache_rows[-limit:]
 
     def get_statistics(self) -> dict[str, Any]:
+        if not self.session_id:
+            raise ValueError("Bind a session before accessing session memory")
         if self.repository is None:
             return self._cache.get_statistics()
         session = self.repository.get_session(self.user_id, self.session_id)
@@ -231,26 +259,6 @@ class MemoryService:
             "newest_message_time": rows[-1].get("timestamp") if rows else None,
         }
 
-    def ensure_active_session(self) -> bool:
-        if self.repository is None:
-            now = time.monotonic()
-            rotated = bool(
-                self._last_activity_monotonic is not None
-                and now - self._last_activity_monotonic >= self.idle_timeout_sec
-            )
-            self._last_activity_monotonic = now
-            if rotated:
-                self.rotate_session(reason="idle")
-            return rotated
-
-        session = self.repository.get_or_create_session(self.user_id, self.idle_timeout_sec)
-        new_session_id = str(session.session_id)
-        rotated = new_session_id != self.session_id
-        if rotated:
-            self.session_id = new_session_id
-            self._cache = self._create_cache(self.session_id)
-        return rotated
-
     def rotate_session(self, requested_session_id: str | None = None, *, reason: str = "manual") -> str:
         try:
             self._cache.clear()
@@ -261,7 +269,6 @@ class MemoryService:
             self.session_id = str(session.session_id)
         else:
             self.session_id = requested_session_id or str(uuid.uuid4())
-            self._last_activity_monotonic = time.monotonic()
         self._cache = self._create_cache(self.session_id)
         return self.session_id
 
@@ -286,6 +293,8 @@ class MemoryService:
         return self.session_id
 
     def close_session(self, reason: str = "manual") -> None:
+        if not self.session_id:
+            raise ValueError("Bind a session before accessing session memory")
         if self.repository is not None:
             self.repository.close_session(self.user_id, self.session_id, reason=reason)
         try:
@@ -294,7 +303,7 @@ class MemoryService:
             logger.warning("Failed to clear recent-memory cache while closing session: %s", exc)
 
     def get_recorded_response(self, request_id: str) -> str | None:
-        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
+        rows = self.long_term.get_chat_history(limit=2, request_id=request_id, session_id=self.session_id)
         for row in reversed(rows):
             if row.get("role") == "assistant":
                 return row.get("content") or None

@@ -80,6 +80,80 @@ class DistributedLock:
         return bool(await self._client.eval(_RELEASE_LUA, 1, self._key, self._token))
 
 
+# ── Session activity and history maintenance ───────────────────────
+
+# A history clear excludes all session operations for the user. Ordinary
+# operations register renewable leases, so different sessions remain parallel.
+_ACTIVITY_ACQUIRE_LUA = """
+local t = redis.call('TIME')
+local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+redis.call('ZREMRANGEBYSCORE', KEYS[3], '-inf', now)
+if ARGV[3] == 'exclusive' then
+    if redis.call('ZCARD', KEYS[3]) > 0 then return 0 end
+else
+    if redis.call('EXISTS', KEYS[2]) == 1 then return 0 end
+end
+if not redis.call('SET', KEYS[1], ARGV[1], 'NX', 'PX', ARGV[2]) then return 0 end
+if ARGV[3] ~= 'exclusive' then
+    redis.call('ZADD', KEYS[3], now + tonumber(ARGV[2]), ARGV[1])
+    if redis.call('PTTL', KEYS[3]) < tonumber(ARGV[2]) then
+        redis.call('PEXPIRE', KEYS[3], ARGV[2])
+    end
+end
+return 1
+"""
+
+_ACTIVITY_RENEW_LUA = """
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+redis.call('PEXPIRE', KEYS[1], ARGV[2])
+if ARGV[3] ~= 'exclusive' then
+    local t = redis.call('TIME')
+    local now = tonumber(t[1]) * 1000 + math.floor(tonumber(t[2]) / 1000)
+    redis.call('ZADD', KEYS[3], now + tonumber(ARGV[2]), ARGV[1])
+    if redis.call('PTTL', KEYS[3]) < tonumber(ARGV[2]) then
+        redis.call('PEXPIRE', KEYS[3], ARGV[2])
+    end
+end
+return 1
+"""
+
+_ACTIVITY_RELEASE_LUA = """
+redis.call('ZREM', KEYS[3], ARGV[1])
+if redis.call('GET', KEYS[1]) ~= ARGV[1] then return 0 end
+return redis.call('DEL', KEYS[1])
+"""
+
+
+class SessionActivityLock(DistributedLock):
+    def __init__(self, user_id: str, session_id: str | None, ttl_ms: int = 45000):
+        # Hash tags also keep all keys in one Redis Cluster slot.
+        import hashlib
+        prefix = "hommey:conversation:{" + hashlib.sha256(user_id.encode()).hexdigest() + "}"
+        self._history_key = prefix + ":history"
+        self._activity_key = prefix + ":activity"
+        self._mode = "exclusive" if session_id is None else "shared"
+        super().__init__(self._history_key if session_id is None else prefix + ":session:" + session_id, ttl_ms)
+
+    async def _eval_activity(self, script):
+        return bool(await self._client.eval(
+            script, 3, self._key, self._history_key, self._activity_key,
+            self._token, self._ttl_ms, self._mode,
+        ))
+
+    async def acquire(self) -> bool:
+        return await self._eval_activity(_ACTIVITY_ACQUIRE_LUA)
+
+    async def renew(self) -> bool:
+        return await self._eval_activity(_ACTIVITY_RENEW_LUA)
+
+    async def release(self) -> bool:
+        return await self._eval_activity(_ACTIVITY_RELEASE_LUA)
+
+
+def create_session_activity_lock(user_id: str, session_id: str | None):
+    from settings import CONCURRENCY_CONFIG
+    return SessionActivityLock(user_id, session_id, int(CONCURRENCY_CONFIG.get("distributed_lock_ttl_sec", 45) * 1000))
+
 # ── RedisSemaphore (tokenized lease) ────────────────────────────────
 #
 # 每个持有者持有唯一 token，作为 Redis ZSET 的 member；score 是租约过期时间

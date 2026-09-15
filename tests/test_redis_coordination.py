@@ -5,10 +5,43 @@ import pytest_asyncio
 
 from utils.redis_coordination import (
     DistributedLock,
+    SessionActivityLock,
     RedisSemaphore,
     RedisCircuitBreaker,
     get_redis_coordination_client,
 )
+
+
+@pytest.mark.asyncio(loop_scope="session")
+async def test_session_leases_protect_history_until_release_or_expiry(client):
+    import uuid
+    user_id = "lease-test-" + uuid.uuid4().hex
+    a = SessionActivityLock(user_id, "a", ttl_ms=600)
+    b = SessionActivityLock(user_id, "b", ttl_ms=100)
+    duplicate = SessionActivityLock(user_id, "a", ttl_ms=600)
+    history = SessionActivityLock(user_id, None, ttl_ms=100)
+    try:
+        assert await a.acquire()
+        assert await b.acquire()
+        assert not await duplicate.acquire()
+        assert not await duplicate.renew()
+        assert not await duplicate.release()
+        assert not await history.acquire()
+        await asyncio.sleep(0.15)
+        # Expiration of a shorter peer lease must not erase A's registration.
+        assert not await history.acquire()
+        assert await a.renew()
+        assert not await b.renew()
+        assert await a.release()
+        assert await history.acquire()
+        assert not await duplicate.acquire()
+        await asyncio.sleep(0.15)
+        assert await duplicate.acquire()
+        assert not await history.renew()
+        assert not await history.release()
+        assert not await a.acquire()
+    finally:
+        await asyncio.gather(a.release(), b.release(), duplicate.release(), history.release())
 
 
 @pytest_asyncio.fixture(loop_scope="session")

@@ -79,7 +79,7 @@ class BusinessServices:
                     ORDER BY created_at DESC LIMIT %s""", (scope.user_id, pattern, request.limit))
                 result.extend({"kind": "trip", "record_state": "legacy_unknown", "data": dict(row)} for row in cur.fetchall())
                 cur.execute("""SELECT session_id, context_data FROM active_trip_contexts WHERE user_id=%s
-                    AND context_data::text ILIKE %s ORDER BY updated_at DESC LIMIT %s""", (scope.user_id, pattern, request.limit))
+                    AND session_id=%s AND context_data::text ILIKE %s ORDER BY updated_at DESC LIMIT %s""", (scope.user_id, scope.session_id, pattern, request.limit))
                 result.extend({"kind": "trip", "record_state": "planned", "data": dict(row)} for row in cur.fetchall() if not (row.get("context_data") or {}).get("_trip_id"))
             if request.kind in {"all", "messages"}:
                 cur.execute("""SELECT message_id, session_id, role, content, created_at FROM conversation_messages
@@ -101,7 +101,7 @@ class BusinessServices:
                     ORDER BY source_sequence_to DESC LIMIT 2""", (scope.user_id, stable_uuid(scope.session_id, namespace="session")))
                 summaries = [{"text": r["summary_text"][:1600], "through_sequence": r["source_sequence_to"]} for r in cur.fetchall()]
             return {"recent": recent, "session_summaries": summaries,
-                    "trip": self.memory.get_active_trip() or {},
+                    "trip": self.memory.get_active_trip(session_id=scope.session_id) or {},
                     "today": beijing_today()}
         return await run_blocking(read)
 

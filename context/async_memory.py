@@ -7,6 +7,7 @@ psycopg/redis 阻塞事件循环、并防止默认 asyncio executor 被放大。
 from __future__ import annotations
 
 from typing import Any
+import asyncio
 
 from utils.io_executor import run_blocking
 
@@ -16,7 +17,14 @@ class AsyncMemoryFacade:
         self._m = memory_manager
 
     async def add_message(self, role: str, content: str, metadata: dict | None = None) -> str | bool:
-        return await run_blocking(self._m.add_message, role, content, metadata)
+        task = asyncio.create_task(run_blocking(self._m.add_message, role, content, metadata))
+        try:
+            return await asyncio.shield(task)
+        except asyncio.CancelledError:
+            # A running DB write survives asyncio cancellation. Do not release
+            # the enclosing conversation lease until that write has finished.
+            await task
+            raise
 
     async def get_preference(self) -> dict:
         return await run_blocking(self._m.long_term.get_preference)

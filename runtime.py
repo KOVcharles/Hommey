@@ -58,7 +58,7 @@ def get_shared_attachment_service():
 
 def create_agent_runtime(
     user_id: str,
-    session_id: str,
+    session_id: str | None = None,
 ) -> AgentRuntime:
     """Create the agent runtime used by the FastAPI backend."""
     init_agentscope()

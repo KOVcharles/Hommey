@@ -23,3 +23,4 @@ YYYY-MM-DD-简短英文主题.md
 | BUG-2026-08-19-03 | 2026-08-19 | [对话历史制造虚假行程收集任务](2026-08-19-dialogue-history-creates-phantom-trip-task.md) | 代码已修复，待部署验证 |
 | BUG-2026-08-25-01 | 2026-08-25 | [意图与编排职责边界](2026-08-25-intention-orchestration-boundaries.md) | Phase 1 已修复，结构性风险待后续阶段 |
 | BUG-2026-09-13-01～07 | 2026-09-13 | [完整差旅编排、卡片丢失与制度展示](2026-09-13-complete-trip-orchestration-and-card.md) | 编排与展示已修复；已重载双 worker 并通过正式聊天接口验证；检索覆盖仍开放 |
+| BUG-2026-09-15-01 | 2026-09-15 | [同一用户多窗口互相阻塞](2026-09-15-multi-window-session-blocking.md) | 代码已修复；真实 PostgreSQL/Redis 与双标签页回归通过，待业务容器重启验收 |

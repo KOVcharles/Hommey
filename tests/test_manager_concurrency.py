@@ -3,7 +3,8 @@ import asyncio
 import pytest
 
 import webui_new.manager as manager_module
-from webui_new.core.errors import UpstreamError
+from webui_new.core.errors import AppError, UpstreamError
+from context.memory_repository import stable_uuid
 from webui_new.manager import WebHommeyManager
 
 
@@ -15,10 +16,11 @@ class StubProcess:
         self.lock = asyncio.Lock()
 
     async def process(self, message):
-        async with self.lock:
-            self.active += 1
-            self.max_active = max(self.max_active, self.active)
+        self.active += 1
+        self.max_active = max(self.max_active, self.active)
+        try:
             await asyncio.sleep(0.02)
+        finally:
             self.active -= 1
         return {"response": message}
 
@@ -73,12 +75,10 @@ class FakeInstance:
     def __init__(self, process_fn):
         self.initialized = True
         self._process_fn = process_fn
-        self.activated_sessions = []
+        self.received_sessions = []
 
-    def activate_chat_session(self, session_id, *, allow_empty=False):
-        self.activated_sessions.append((session_id, allow_empty))
-
-    async def process_message(self, message, request_id=None, attachment_ids=None, progress_callback=None):
+    async def process_message(self, message, request_id=None, attachment_ids=None, progress_callback=None, session_id=None):
+        self.received_sessions.append(session_id)
         return await self._process_fn(message)
 
 
@@ -89,6 +89,8 @@ def _mock_redis(monkeypatch, lock=None, sem=None):
         "create_distributed_lock",
         (lambda key: lock) if lock is not None else (lambda key: FakeDistributedLock(key)),
     )
+    monkeypatch.setattr(manager_module, "create_session_activity_lock",
+        lambda user_id, session_id: lock if lock is not None else FakeDistributedLock(session_id))
     monkeypatch.setattr(
         manager_module,
         "create_redis_semaphore",
@@ -127,23 +129,23 @@ async def test_manager_serializes_same_user_requests():
 
 
 @pytest.mark.asyncio
-async def test_process_message_serializes_same_user_via_mock_redis(monkeypatch):
-    """mock Redis 层后，manager.process_message 同用户经本地锁串行。"""
+async def test_process_message_accepts_distinct_sessions(monkeypatch):
+    """同用户不同会话在本地也能同时进入处理函数。"""
     manager = WebHommeyManager()
     _mock_redis(monkeypatch)
     holder = StubProcess()
     manager._instances["u1"] = FakeInstance(holder.process)
 
     async def run(i):
-        return await manager.process_message("u1", f"m{i}")
+        return await manager.process_message("u1", f"m{i}", session_id=f"session-{i}")
 
     results = await asyncio.gather(run(1), run(2))
     assert [r["response"] for r in results] == ["m1", "m2"]
-    assert holder.max_active == 1  # 同用户从未并行
+    assert holder.max_active == 2
 
 
 @pytest.mark.asyncio
-async def test_process_message_binds_requested_session_inside_user_lock(monkeypatch):
+async def test_process_message_passes_requested_session_without_activation(monkeypatch):
     manager = WebHommeyManager()
     _mock_redis(monkeypatch)
     instance = FakeInstance(StubProcess().process)
@@ -151,42 +153,43 @@ async def test_process_message_binds_requested_session_inside_user_lock(monkeypa
 
     await manager.process_message("u1", "m1", session_id="session-a")
 
-    assert instance.activated_sessions == [("session-a", True)]
+    assert instance.received_sessions == [str(stable_uuid("session-a", namespace="session"))]
 
 
 @pytest.mark.asyncio
-async def test_process_message_local_lock_timeout_raises_user_queue_timeout(monkeypatch):
-    """本地锁被占用且超时：抛 USER_QUEUE_TIMEOUT（Important 1）。"""
+async def test_process_message_local_lock_conflict_returns_session_busy(monkeypatch):
+    """本地会话锁被占用时立即拒绝：抛 SESSION_BUSY（Important 1）。"""
     manager = WebHommeyManager()
     _mock_redis(monkeypatch)
     _patch_concurrency(monkeypatch, per_user_lock_timeout_sec=0.05)
     manager._instances["u1"] = FakeInstance(StubProcess().process)
 
     # 先占用本地锁，模拟同 worker 内另一请求正在处理
-    local_lock = manager._per_user_lock("u1")
+    local_lock = asyncio.Lock()
+    manager._session_locks[("u1", str(stable_uuid("session-a", namespace="session")))] = local_lock
     await local_lock.acquire()
     try:
-        with pytest.raises(UpstreamError) as excinfo:
-            await manager.process_message("u1", "m")
-        assert excinfo.value.code == "USER_QUEUE_TIMEOUT"
-        assert excinfo.value.retryable is True
+        with pytest.raises(AppError) as excinfo:
+            await manager.process_message("u1", "m", session_id="session-a")
+        assert excinfo.value.code == "SESSION_BUSY"
+        assert excinfo.value.retryable is False
     finally:
         local_lock.release()
 
 
 @pytest.mark.asyncio
-async def test_process_message_distributed_lock_timeout_raises_user_queue_timeout(monkeypatch):
-    """分布式锁被占用且超时：抛 USER_QUEUE_TIMEOUT。"""
+async def test_process_message_distributed_lock_conflict_returns_session_busy(monkeypatch):
+    """分布式会话锁被占用时立即拒绝：抛 SESSION_BUSY。"""
     manager = WebHommeyManager()
     lock = FakeDistributedLock("hommey:lock:user:u1", acquire_result=False)
     _mock_redis(monkeypatch, lock=lock)
     _patch_concurrency(monkeypatch, per_user_lock_timeout_sec=0.05)
     manager._instances["u1"] = FakeInstance(StubProcess().process)
 
-    with pytest.raises(UpstreamError) as excinfo:
-        await manager.process_message("u1", "m")
-    assert excinfo.value.code == "USER_QUEUE_TIMEOUT"
-    assert excinfo.value.retryable is True
+    with pytest.raises(AppError) as excinfo:
+        await manager.process_message("u1", "m", session_id="session-a")
+    assert excinfo.value.code == "SESSION_BUSY"
+    assert excinfo.value.retryable is False
     assert lock.acquire_calls > 0
     assert lock.released is False  # 从未拿到锁，不应释放
 
@@ -201,7 +204,7 @@ async def test_process_message_semaphore_timeout_raises_global_limit(monkeypatch
     manager._instances["u1"] = FakeInstance(StubProcess().process)
 
     with pytest.raises(UpstreamError) as excinfo:
-        await manager.process_message("u1", "m")
+        await manager.process_message("u1", "m", session_id="session-a")
     assert excinfo.value.code == "GLOBAL_CONCURRENCY_LIMIT"
     assert excinfo.value.retryable is True
     assert sem.acquire_calls > 0
@@ -222,7 +225,7 @@ async def test_process_message_redis_unavailable_fails_closed(monkeypatch):
     manager._instances["u1"] = FakeInstance(StubProcess().process)
 
     with pytest.raises(UpstreamError) as excinfo:
-        await manager.process_message("u1", "m")
+        await manager.process_message("u1", "m", session_id="session-a")
     assert excinfo.value.code == "REDIS_UNAVAILABLE"
     assert excinfo.value.retryable is True
 
@@ -239,7 +242,7 @@ async def test_process_message_aborts_when_lock_lost(monkeypatch):
     manager._instances["u1"] = FakeInstance(holder.process)
 
     with pytest.raises(UpstreamError) as excinfo:
-        await manager.process_message("u1", "m")
+        await manager.process_message("u1", "m", session_id="session-a")
     assert excinfo.value.code == "LOCK_LOST"
     assert excinfo.value.retryable is True
     assert lock.released is True  # 释放链仍执行
@@ -263,7 +266,7 @@ async def test_process_message_aborts_when_heartbeat_renew_raises(monkeypatch):
     manager._instances["u1"] = FakeInstance(holder.process)
 
     with pytest.raises(UpstreamError) as excinfo:
-        await manager.process_message("u1", "m")
+        await manager.process_message("u1", "m", session_id="session-a")
     assert excinfo.value.code == "LOCK_LOST"
     assert excinfo.value.retryable is True
     assert lock.released is True  # 释放链仍执行
@@ -274,7 +277,7 @@ class FakeStreamInstance:
     def __init__(self):
         self.initialized = True
 
-    async def stream_message(self, message, request_id=None, attachment_ids=None):
+    async def stream_message(self, message, request_id=None, attachment_ids=None, session_id=None):
         yield {"type": "status", "phase": "done"}
         yield {"type": "done", "preferences_updated": False, "timings": {}}
 
@@ -286,7 +289,7 @@ class BlockingStreamInstance:
         self.closed = asyncio.Event()
         self._never = asyncio.Event()
 
-    async def stream_message(self, message, request_id=None, attachment_ids=None):
+    async def stream_message(self, message, request_id=None, attachment_ids=None, session_id=None):
         try:
             yield {"type": "status", "phase": "analyzing"}
             await self._never.wait()
@@ -308,7 +311,7 @@ async def test_process_message_lazy_initializes_missing_instance(monkeypatch):
 
     monkeypatch.setattr(manager, "initialize_user", fake_initialize_user)
 
-    result = await manager.process_message("u1", "hello")
+    result = await manager.process_message("u1", "hello", session_id="session-a")
 
     assert init_calls == ["u1"]
     assert result["response"] == "hello"
@@ -328,7 +331,7 @@ async def test_stream_message_lazy_initializes_missing_instance(monkeypatch):
 
     monkeypatch.setattr(manager, "initialize_user", fake_initialize_user)
 
-    events = [e async for e in manager.stream_message("u1", "hello")]
+    events = [e async for e in manager.stream_message("u1", "hello", session_id="session-a")]
 
     assert init_calls == ["u1"]
     assert events[-1]["type"] == "done"
@@ -344,7 +347,7 @@ async def test_stream_message_aborts_while_waiting_for_next_event(monkeypatch):
     instance = BlockingStreamInstance()
     manager._instances["u1"] = instance
 
-    stream = manager.stream_message("u1", "hello")
+    stream = manager.stream_message("u1", "hello", session_id="session-a")
     assert (await anext(stream))["type"] == "status"
     with pytest.raises(UpstreamError) as excinfo:
         await asyncio.wait_for(anext(stream), timeout=0.2)

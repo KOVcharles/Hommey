@@ -161,18 +161,17 @@ def create_chat_router(manager, place_service=None):
 
     @router.get("/api/{user_id}/sessions")
     async def list_sessions(user_id: str, current_user: User = Depends(require_path_user)):
-        return await manager.run_user_state_operation(
+        return await manager.read_session_operation(
             user_id,
             lambda instance: {
-                "active_session_id": instance.session_id,
                 "sessions": instance.list_chat_sessions(),
             },
         )
 
     @router.post("/api/{user_id}/sessions")
     async def create_session(user_id: str, current_user: User = Depends(require_path_user)):
-        session_id = await manager.run_user_state_operation(
-            user_id, lambda instance: instance.start_new_chat_session()
+        session_id = await manager.run_session_operation(
+            user_id, None, lambda instance: instance.start_new_chat_session()
         )
         return {"session_id": session_id}
 
@@ -188,7 +187,7 @@ def create_chat_router(manager, place_service=None):
         session_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        payload = await manager.run_user_state_operation(
+        payload = await manager.read_session_operation(
             user_id, lambda instance: instance.get_chat_session(session_id)
         )
         if not payload["messages"]:
@@ -202,7 +201,7 @@ def create_chat_router(manager, place_service=None):
         current_user: User = Depends(require_path_user),
     ):
         try:
-            return await manager.run_user_state_operation(
+            return await manager.read_session_operation(
                 user_id, lambda instance: instance.activate_chat_session(session_id)
             )
         except ValueError:
@@ -219,8 +218,8 @@ def create_chat_router(manager, place_service=None):
         if not title:
             raise ValidationError("EMPTY_SESSION_TITLE", "会话名称不能为空")
         try:
-            await manager.run_user_state_operation(
-                user_id, lambda instance: instance.rename_chat_session(session_id, title)
+            await manager.run_session_operation(
+                user_id, session_id, lambda instance: instance.rename_chat_session(session_id, title)
             )
         except ValueError:
             raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除")
@@ -232,20 +231,20 @@ def create_chat_router(manager, place_service=None):
         session_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        active_session_id = await manager.run_user_state_operation(
-            user_id, lambda instance: instance.delete_chat_session(session_id)
+        await manager.run_session_operation(
+            user_id, session_id, lambda instance: instance.delete_chat_session(session_id)
         )
-        return {"active_session_id": active_session_id}
+        return {"session_id": session_id, "deleted": True}
 
     @router.delete("/api/{user_id}/history")
     async def clear_chat_history(
         user_id: str,
         current_user: User = Depends(require_path_user),
     ):
-        active_session_id = await manager.run_user_state_operation(
-            user_id, lambda instance: instance.clear_chat_history()
+        await manager.run_session_operation(
+            user_id, None, lambda instance: instance.clear_chat_history(), history=True
         )
-        return {"active_session_id": active_session_id}
+        return {"cleared": True}
 
     @router.get("/api/intents")
     async def list_intents(current_user: User = Depends(get_current_user)):

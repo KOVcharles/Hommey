@@ -9,6 +9,7 @@ import os
 import sys
 import time
 import uuid
+from weakref import WeakValueDictionary
 from contextlib import asynccontextmanager
 from typing import Callable, Optional, TypeVar
 
@@ -23,6 +24,7 @@ from utils.circuit_breaker import CircuitBreaker
 from utils.redis_coordination import (
     create_distributed_lock,
     create_redis_semaphore,
+    create_session_activity_lock,
 )
 from redis.exceptions import RedisError
 from utils.memory_safety import redact_sensitive_text
@@ -35,6 +37,7 @@ from core.execution_budget import ExecutionBudget, ExecutionLimitExceeded, execu
 from core.presentation import RetrievalPresentation
 from multimodal.schemas import NormalizedInput
 from context.memory_repository import AttachmentBindingError
+from context.memory_repository import stable_uuid
 from evaluation.collector import TurnEvaluationCollector, reset_current_collector, set_current_collector
 from evaluation.sink import evaluation_sink
 
@@ -48,7 +51,6 @@ class HommeyWebInstance:
 
     def __init__(self, user_id: str):
         self.user_id = user_id
-        self.session_id = str(uuid.uuid4())[:8]
         self.memory_manager: Optional[MemoryManager] = None
         self.async_memory: Optional[AsyncMemoryFacade] = None
         self.supervisor = None
@@ -59,22 +61,17 @@ class HommeyWebInstance:
         self.initialized = False
         self.init_error: Optional[str] = None
 
-        self._total_messages: int = 0              # 本会话消息计数
-        self._last_activity_monotonic: Optional[float] = None
-
     async def initialize(self):
         """Initialize the shared Hommey runtime for this web user."""
         try:
             runtime = create_agent_runtime(
                 user_id=self.user_id,
-                session_id=self.session_id,
             )
 
             self.model = runtime.model
             self.supervisor = runtime.supervisor
             self.memory_manager = runtime.memory_manager
             self.async_memory = AsyncMemoryFacade(self.memory_manager)
-            self.session_id = self.memory_manager.session_id
             self.attachment_service = getattr(runtime, "attachment_service", None)
             self.circuit_breaker = create_circuit_breaker()
 
@@ -153,7 +150,6 @@ class HommeyWebInstance:
                     "preview": " ".join(str(last_message.get("content", "")).split())[:70],
                     "updated_at": last_message.get("timestamp", ""),
                     "message_count": len(messages),
-                    "active": session_id == self.session_id,
                 }
             )
         return sorted(
@@ -185,9 +181,9 @@ class HommeyWebInstance:
             "messages": self._with_attachments(rows),
         }
 
-    def _validate_intake_submission(self, source_id, request_id, message):
-        """Called inside the existing per-user lock, before any message or trip write."""
-        rows = self.memory_manager.long_term.get_chat_history(limit=None, session_id=self.session_id)
+    def _validate_intake_submission(self, source_id, request_id, message, session_id):
+        """Validate in the request's session lock, before any message/trip write."""
+        rows = self.memory_manager.long_term.get_chat_history(limit=None, session_id=session_id)
         rows = self._recover_legacy_presentation_documents(rows)
         source_index = next((i for i, row in enumerate(rows)
             if row.get("role") == "assistant"
@@ -261,26 +257,15 @@ class HommeyWebInstance:
         return enriched
 
     def start_new_chat_session(self) -> str:
-        session_id = str(uuid.uuid4())
         if self.memory_manager:
-            session_id = self.memory_manager.rotate_session(session_id)
-        self.session_id = session_id
-        self._last_activity_monotonic = None
-        self._total_messages = 0
-        return session_id
+            return self.memory_manager.memory_service.create_session()
+        raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
 
     def activate_chat_session(self, session_id: str, *, allow_empty: bool = False) -> dict:
         payload = self.get_chat_session(session_id)
         if not payload["messages"] and not allow_empty:
             raise ValueError("Chat session not found")
-        if self.memory_manager:
-            try:
-                session_id = self.memory_manager.activate_session(session_id)
-            except ValueError as exc:
-                raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除") from exc
-        self.session_id = session_id
-        self._last_activity_monotonic = time.monotonic()
-        self._total_messages = len(payload["messages"])
+        # Compatibility endpoint: selection belongs to the browser only.
         return payload
 
     def rename_chat_session(self, session_id: str, title: str) -> None:
@@ -290,19 +275,15 @@ class HommeyWebInstance:
             raise ValueError("Chat session not found")
         self.memory_manager.long_term.rename_chat_session(session_id, title)
 
-    def delete_chat_session(self, session_id: str) -> str:
+    def delete_chat_session(self, session_id: str) -> None:
         if not self.memory_manager:
             raise ValueError("Memory is not initialized")
         self.memory_manager.long_term.delete_chat_session(session_id)
-        if session_id == self.session_id:
-            return self.start_new_chat_session()
-        return self.session_id
 
-    def clear_chat_history(self) -> str:
+    def clear_chat_history(self) -> None:
         if not self.memory_manager:
             raise ValueError("Memory is not initialized")
         self.memory_manager.long_term.clear_chat_history()
-        return self.start_new_chat_session()
 
     async def get_onboarding_state(self) -> dict:
         """Return first-run preference setup progress."""
@@ -330,17 +311,19 @@ class HommeyWebInstance:
             "member_tag": "差旅常客",
         }
 
-    async def get_active_trip(self) -> dict:
+    async def get_active_trip(self, session_id: str) -> dict:
         if not self.memory_manager:
             return {"active_trip": None}
-        return {"active_trip": await self._ensure_async_memory().get_active_trip()}
+        return {"active_trip": await run_blocking(self.memory_manager.get_active_trip, session_id=session_id)}
 
     async def interrupt_active_turn(self, request_id: str, session_id: str | None = None) -> dict:
         """Cancel only the authenticated user's matching supervisor request."""
         from agent_runtime.contracts import Scope
         if self.supervisor is None:
             raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-        scope = Scope(user_id=self.user_id, session_id=session_id or self.session_id, request_id=request_id)
+        if not session_id:
+            raise BusinessError("SESSION_REQUIRED", "请先选择或新建会话")
+        scope = Scope(user_id=self.user_id, session_id=session_id, request_id=request_id)
         if not await self.supervisor.cancel(scope):
             raise BusinessError("NO_ACTIVE_RUN", "当前没有匹配的执行任务")
         return {"run_id": request_id, "turn_id": request_id, "status": "INTERRUPTING", "revision": 0, "resumable": True}
@@ -376,9 +359,16 @@ class HommeyWebInstance:
         structured_trip_input: dict | None = None,
         intake_request_id: str | None = None,
         progress_callback=None,
+        session_id: str | None = None,
     ) -> dict:
         """Run one user request inside an isolated execution budget and deadline."""
         retrieval_mode = "enhanced" if retrieval_mode == "enhanced" else "standard"
+        if not session_id:
+            raise BusinessError("SESSION_REQUIRED", "请先选择或新建会话")
+        try:
+            request_memory = await run_blocking(self.memory_manager.for_session, session_id)
+        except ValueError as exc:
+            raise BusinessError("SESSION_NOT_FOUND", "会话不存在或已被删除") from exc
         rc = RESILIENCE_CONFIG
         budget = ExecutionBudget(
             max_agent_calls=SUPERVISOR_CONFIG["max_children"],
@@ -390,13 +380,15 @@ class HommeyWebInstance:
         if getattr(evaluation_sink, "enabled", False):
             collector = TurnEvaluationCollector(
                 request_id=request_id,
-                session_id=self.session_id,
+                session_id=session_id,
                 user_message=message,
             )
             collector_token = set_current_collector(collector)
         try:
             with execution_budget_scope(budget):
                 implementation_kwargs = {
+                    "session_id": session_id,
+                    "request_memory": request_memory,
                     "request_id": request_id,
                     "attachment_ids": attachment_ids,
                     "retrieval_mode": retrieval_mode,
@@ -414,9 +406,9 @@ class HommeyWebInstance:
                 if collector is not None and not result.get("idempotent_replay") and not result.get("interrupted"):
                     try:
                         collector.turn_id = str(
-                            getattr(self.memory_manager, "_current_turn_id", "") or collector.turn_id
+                            getattr(request_memory, "_current_turn_id", "") or collector.turn_id
                         )
-                        evaluation_sink.try_emit(collector.freeze(result, session_id=self.session_id))
+                        evaluation_sink.try_emit(collector.freeze(result, session_id=session_id))
                     except Exception as exc:
                         logger.warning(
                             "evaluation_capture_failed request_id=%s error=%s",
@@ -462,6 +454,7 @@ class HommeyWebInstance:
     async def _process_message_impl(
         self, message, *, request_id=None, attachment_ids=None,
         retrieval_mode="standard", structured_trip_input=None, progress_callback=None, intake_request_id=None,
+        session_id, request_memory,
     ) -> dict:
         from agent_runtime.contracts import Scope, ToolRejected
         import json
@@ -472,9 +465,9 @@ class HommeyWebInstance:
         started = time.perf_counter()
         request_id = request_id or uuid.uuid4().hex
         # Respect the explicitly selected session; do not rotate it on idle.
-        scope = Scope(user_id=self.user_id, session_id=self.session_id, request_id=request_id)
+        scope = Scope(user_id=self.user_id, session_id=session_id, request_id=request_id)
         if intake_request_id:
-            await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message)
+            await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message, session_id)
         normalized = await run_blocking(self._normalize_input, message, attachment_ids)
         user_text = message
         agent_text = normalized.agent_query
@@ -485,8 +478,7 @@ class HommeyWebInstance:
         metadata = {"request_id": request_id, "engine": "supervisor", "attachment_ids": normalized.attachment_ids,
             "content_type": "trip_submission" if intake_request_id or structured_trip_input else ("attachment" if normalized.attachment_ids else "text"),
             "retrieval_mode": retrieval_mode, "input_source": "quick_trip_form" if structured_trip_input else "chat"}
-        self.memory_manager.current_request_id = request_id
-        memory = self._ensure_async_memory()
+        memory = AsyncMemoryFacade(request_memory)
         # User persistence is already idempotent on (user, request, role).
         try:
             saved = await memory.add_message("user", normalized.display_message, metadata)
@@ -521,9 +513,6 @@ class HommeyWebInstance:
                 "presentation_document": output.get("presentation_document")}
             if not await memory.add_message("assistant", output["response"], assistant_metadata):
                 raise BusinessError("MEMORY_WRITE_FAILED", "结果已保存，但对话记录写入失败，请重试本次请求")
-        if not output.get("idempotent_replay"):
-            self._total_messages += 1
-        self._last_activity_monotonic = time.monotonic()
         return {**output, "timings": {"total": round(time.perf_counter() - started, 3)},
             "sources": [source.model_dump() for source in normalized.sources], "warnings": list(normalized.warnings)}
 
@@ -536,6 +525,7 @@ class HommeyWebInstance:
         retrieval_mode: str = "standard",
         structured_trip_input: dict | None = None,
         intake_request_id: str | None = None,
+        session_id: str | None = None,
     ):
         """Yield live orchestration progress and response events as NDJSON payloads."""
         queue: asyncio.Queue = asyncio.Queue()
@@ -548,6 +538,7 @@ class HommeyWebInstance:
         async def run_request():
             try:
                 request_kwargs = {
+                    "session_id": session_id,
                     "request_id": request_id,
                     "attachment_ids": attachment_ids,
                     "progress_callback": progress_callback,
@@ -647,6 +638,7 @@ class WebHommeyManager:
     def __init__(self):
         self._instances: dict[str, HommeyWebInstance] = {}
         self._user_locks: dict[str, asyncio.Lock] = {}
+        self._session_locks = WeakValueDictionary()
 
     def _per_user_lock(self, user_id: str) -> asyncio.Lock:
         if user_id not in self._user_locks:
@@ -679,9 +671,9 @@ class WebHommeyManager:
 
     @asynccontextmanager
     async def user_state_scope(self, user_id: str):
-        """Serialize user/session state access across workers without an LLM slot."""
+        """Serialize user settings across workers without an LLM slot."""
         await self.get_initialized_user(user_id)
-        async with self._user_lock_scope(user_id, acquire_global_slot=False) as lock_lost:
+        async with self._coordination_scope(user_id, acquire_global_slot=False) as lock_lost:
             if lock_lost.is_set():
                 raise self._lock_lost_error()
             instance = self.get(user_id)
@@ -709,23 +701,44 @@ class WebHommeyManager:
         async with self.user_state_scope(user_id) as instance:
             return await run_blocking(operation, instance)
 
+    async def read_session_operation(self, user_id: str, operation: Callable[[HommeyWebInstance], T]) -> T:
+        instance = await self.get_initialized_user(user_id)
+        return await run_blocking(operation, instance)
+
+    async def run_session_operation(self, user_id: str, session_id: str | None,
+                                    operation: Callable[[HommeyWebInstance], T], *, history=False) -> T:
+        instance = await self.get_initialized_user(user_id)
+        # Creation has its own operation ID; it never selects a user-wide session.
+        session_id = None if history else str(stable_uuid(session_id or uuid.uuid4(), namespace="session"))
+        async with self._coordination_scope(user_id, session_id=session_id, history=history,
+                                         acquire_global_slot=False) as lost:
+            task = asyncio.create_task(run_blocking(operation, instance))
+            try:
+                result = await asyncio.shield(task)
+            except asyncio.CancelledError:
+                # Synchronous database writes cannot be cancelled. Keep the
+                # lease until they finish, including on HTTP disconnection.
+                await task
+                raise
+            if lost.is_set():
+                raise self._lock_lost_error()
+            return result
+
     async def interrupt_active_turn(
         self, user_id: str, request_id: str, session_id: str | None = None,
     ) -> dict:
-        # Deliberately bypass _user_lock_scope: the active stream owns that lock.
-        instance = self.get_or_create(user_id)
-        if not instance.initialized:
-            await instance.initialize()
+        # Deliberately bypass _coordination_scope: the active stream owns that lock.
+        instance = await self.get_initialized_user(user_id)
         return await instance.interrupt_active_turn(request_id, session_id=session_id)
 
     @asynccontextmanager
-    async def _user_lock_scope(self, user_id: str, *, acquire_global_slot: bool = True):
+    async def _coordination_scope(self, user_id: str, *, acquire_global_slot: bool = True,
+                               session_id: str | None = None, history: bool = False):
         """锁编排作用域：进程内锁 → 分布式锁 → 全局信号量，持锁心跳续约。
 
-        本地锁与分布式锁共用一个 deadline（per_user_lock_timeout_sec），本地锁获取也
-        纳入超时（asyncio.wait_for），避免本地锁无界等待；心跳续约失败（锁易主）时置
-        lock_lost 事件，调用方在关键点检查并中止处理；退出时逆序释放，任何一步释放
-        失败都不中断后续释放，本地锁必释放。
+        会话写入按 user+session 互斥，冲突立即返回 SESSION_BUSY；清空历史使用
+        同一用户的排他维护租约。普通用户设置仍使用有期限的用户锁。全局信号量
+        仅限制生成任务；心跳失败触发 lock_lost，退出时逆序释放所有资源。
 
         Yield: asyncio.Event —— 锁易主时被 set，调用方应在关键点检查并中止处理。
         """
@@ -734,18 +747,28 @@ class WebHommeyManager:
         lock_lost = asyncio.Event()
         heartbeat = None
 
-        local_lock = self._per_user_lock(user_id)
-        distributed_lock = create_distributed_lock(f"hommey:lock:user:{user_id}")
+        scoped = session_id is not None or history
+        if scoped:
+            key = (user_id, session_id)
+            local_lock = self._session_locks.setdefault(key, asyncio.Lock())
+            distributed_lock = create_session_activity_lock(user_id, session_id)
+        else:
+            local_lock = self._per_user_lock(user_id)
+            distributed_lock = create_distributed_lock(f"hommey:lock:user:{user_id}")
         semaphore = create_redis_semaphore() if acquire_global_slot else None
 
         acquired_distributed = False
         acquired_semaphore = False
 
-        # 1) 进程内 per-user 锁：统一 deadline 内获取，超时报 USER_QUEUE_TIMEOUT。
-        #    本地等待不设额外超时（同一 worker 内先到先得），由 deadline 兜底。
+        # 1) 会话冲突快速返回；只有用户设置操作在 deadline 内排队。
         remaining = deadline - time.monotonic()
         try:
-            await asyncio.wait_for(local_lock.acquire(), remaining)
+            if scoped:
+                if local_lock.locked():
+                    raise self._session_busy_error(history)
+                await local_lock.acquire()
+            else:
+                await asyncio.wait_for(local_lock.acquire(), remaining)
         except asyncio.TimeoutError:
             raise UpstreamError(
                 "USER_QUEUE_TIMEOUT",
@@ -755,9 +778,11 @@ class WebHommeyManager:
             ) from None
 
         try:
-            # 2) 分布式锁：跨 worker 串行，同一 deadline。Redis 不可用时 fail closed
+            # 2) 分布式锁：跨 worker 保护相同的作用域。Redis 不可用时 fail closed
             #    （§3.3）：不允许绕过协调继续处理昂贵请求或用户状态写入。
             while not await self._acquire_or_fail(distributed_lock):
+                if scoped:
+                    raise self._session_busy_error(history)
                 if time.monotonic() >= deadline:
                     raise UpstreamError(
                         "USER_QUEUE_TIMEOUT",
@@ -791,6 +816,8 @@ class WebHommeyManager:
             if semaphore is not None:
                 sem_deadline = time.monotonic() + float(rc.get("semaphore_acquire_timeout_sec", 120.0))
                 while not await self._acquire_or_fail(semaphore):
+                    if lock_lost.is_set():
+                        raise self._lock_lost_error()
                     if time.monotonic() >= sem_deadline:
                         raise UpstreamError(
                             "GLOBAL_CONCURRENCY_LIMIT",
@@ -821,6 +848,15 @@ class WebHommeyManager:
             except Exception as e:
                 logger.warning("distributed lock release failed user_id=%s: %s", user_id, sanitize_for_log(e))
             local_lock.release()
+
+    @staticmethod
+    def _session_busy_error(history=False) -> AppError:
+        return AppError(
+            "HISTORY_BUSY" if history else "SESSION_BUSY",
+            "有会话正在处理，请停止或等待完成后再清空历史。" if history else
+            "当前会话正在处理，请等待完成后重试；你可以在其他会话中继续。",
+            status_code=409, retryable=False, log_level=logging.INFO,
+        )
 
     @staticmethod
     def _lock_lost_error() -> UpstreamError:
@@ -886,7 +922,10 @@ class WebHommeyManager:
         if not instance or not instance.initialized:
             await self.initialize_user(user_id)
 
-        async with self._user_lock_scope(user_id) as lock_lost:
+        if not session_id:
+            raise BusinessError("SESSION_REQUIRED", "请先选择或新建会话")
+        session_id = str(stable_uuid(session_id, namespace="session"))
+        async with self._coordination_scope(user_id, session_id=session_id) as lock_lost:
             # 锁已易主：不启动新的处理（Important 3）
             if lock_lost.is_set():
                 raise self._lock_lost_error()
@@ -894,19 +933,12 @@ class WebHommeyManager:
             # 锁内重新获取实例；初始化后仍无实例则兜底报 NOT_INITIALIZED。
             instance = self.get(user_id)
             if not instance or not instance.initialized:
-                from webui_new.core.errors import BusinessError
                 raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-
-            if session_id:
-                await run_blocking(
-                    instance.activate_chat_session,
-                    session_id,
-                    allow_empty=True,
-                )
 
             # 与锁丢失事件竞争：锁易主即中止在途处理。
             # instance.process_message 内部已有 request_timeout_sec 的 wait_for，取消是既有可接受语义。
             instance_kwargs = {
+                "session_id": session_id,
                 "request_id": request_id,
                 "attachment_ids": attachment_ids,
                 "progress_callback": progress_callback,
@@ -968,22 +1000,19 @@ class WebHommeyManager:
         if not instance or not instance.initialized:
             await self.initialize_user(user_id)
 
-        async with self._user_lock_scope(user_id) as lock_lost:
+        if not session_id:
+            raise BusinessError("SESSION_REQUIRED", "请先选择或新建会话")
+        session_id = str(stable_uuid(session_id, namespace="session"))
+        async with self._coordination_scope(user_id, session_id=session_id) as lock_lost:
             # 锁已易主：不再继续输出（Important 3）
             if lock_lost.is_set():
                 raise self._lock_lost_error()
             # 锁内重新获取实例；初始化后仍无实例则兜底报 NOT_INITIALIZED。
             instance = self.get(user_id)
             if not instance or not instance.initialized:
-                from webui_new.core.errors import BusinessError
                 raise BusinessError("NOT_INITIALIZED", "系统未初始化，请刷新页面")
-            if session_id:
-                await run_blocking(
-                    instance.activate_chat_session,
-                    session_id,
-                    allow_empty=True,
-                )
             instance_kwargs = {
+                "session_id": session_id,
                 "request_id": request_id,
                 "attachment_ids": attachment_ids,
             }

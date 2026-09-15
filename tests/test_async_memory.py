@@ -119,3 +119,30 @@ def test_facade_routes_to_sync_manager_and_returns_expected():
         ), "同步调用必须实际跑在 to_thread 的 worker 线程"
 
     asyncio.run(run())
+
+
+def test_cancelled_message_waits_for_actual_thread_write_to_finish():
+    started, release, finished = threading.Event(), threading.Event(), threading.Event()
+
+    class Memory:
+        def add_message(self, *args):
+            started.set()
+            assert release.wait(3)
+            finished.set()
+            return "message"
+
+    async def run():
+        task = asyncio.create_task(AsyncMemoryFacade(Memory()).add_message("user", "hello"))
+        try:
+            assert await asyncio.to_thread(started.wait, 2)
+            task.cancel()
+            await asyncio.sleep(0)
+            await asyncio.sleep(0)
+            assert not task.done(), "Do not release the session lock while the DB thread is writing"
+        finally:
+            release.set()
+            result = await asyncio.gather(task, return_exceptions=True)
+        assert isinstance(result[0], asyncio.CancelledError)
+        assert finished.is_set()
+
+    asyncio.run(run())
