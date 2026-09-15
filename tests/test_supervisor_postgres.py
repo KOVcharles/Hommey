@@ -50,7 +50,7 @@ async def test_postgres_atomic_writes_replay_fencing_and_session_deletion():
         with pytest.raises(RuntimeStopped):
             await store.call("save", scope, reopened["owner"], {}, None, "completed")
         services = BusinessServices(SimpleNamespace(user_id=user, session_id=scope.session_id, long_term=compat,
-            get_active_trip=lambda: compat.get_active_trip(scope.session_id)))
+            get_active_trip=lambda session_id: compat.get_active_trip(session_id)))
         context = await services.context(scope)
         assert context["trip"]["origin"] == "北京"
         from agent_runtime.contracts import MemorySearch

@@ -12,7 +12,6 @@ from webui_new.core.errors import BusinessError
 def instance_with(rows):
     instance = HommeyWebInstance('employee')
     instance.initialized = True
-    instance.session_id = 'session'
     instance.memory_manager = SimpleNamespace(long_term=SimpleNamespace(
         get_chat_history=lambda **kwargs: list(rows), get_chat_session_titles=lambda: {}))
     return instance
@@ -26,24 +25,24 @@ def source():
 def test_card_expires_on_any_later_message_and_cannot_write():
     instance = instance_with([source(), {'role': 'user', 'request_id': 'later', 'content': '先查天气'}])
     with pytest.raises(BusinessError, match='归档'):
-        asyncio.run(instance._process_message_impl('从北京出发', request_id='new', intake_request_id='source'))
+        asyncio.run(instance._process_message_impl('从北京出发', request_id='new', intake_request_id='source', session_id='session', request_memory=instance.memory_manager))
 
 
 def test_current_card_and_exact_retry_allowed_but_changed_payload_rejected():
     instance = instance_with([source()])
-    instance._validate_intake_submission('source', 'submit', '从北京出发')
+    instance._validate_intake_submission('source', 'submit', '从北京出发', 'session')
     submitted = {'role': 'user', 'request_id': 'submit', 'content': '从北京出发', 'content_type': 'trip_submission'}
     instance = instance_with([source(), submitted])
-    instance._validate_intake_submission('source', 'submit', '从北京出发')
+    instance._validate_intake_submission('source', 'submit', '从北京出发', 'session')
     with pytest.raises(BusinessError):
-        instance._validate_intake_submission('source', 'submit', '从上海出发')
+        instance._validate_intake_submission('source', 'submit', '从上海出发', 'session')
     with pytest.raises(BusinessError):
-        instance._validate_intake_submission('source', 'new', '从北京出发')
+        instance._validate_intake_submission('source', 'new', '从北京出发', 'session')
 
 
 def test_foreign_or_unknown_card_rejected():
     with pytest.raises(BusinessError):
-        instance_with([source()])._validate_intake_submission('foreign', 'new', '从北京出发')
+        instance_with([source()])._validate_intake_submission('foreign', 'new', '从北京出发', 'session')
 
 
 def test_history_restores_archive_and_submission_marker_without_losing_content(tmp_path):
@@ -69,7 +68,7 @@ def test_hidden_submission_still_reaches_memory_and_supervisor():
         assert text == '从北京出发'
         return {'response': '收到'}
     instance.supervisor = SimpleNamespace(run=run)
-    asyncio.run(instance._process_message_impl('从北京出发', request_id='new', intake_request_id='source'))
+    asyncio.run(instance._process_message_impl('从北京出发', request_id='new', intake_request_id='source', session_id='session', request_memory=instance.memory_manager))
     assert saved[0][1] == '从北京出发'
     assert saved[0][2]['content_type'] == 'trip_submission'
     assert saved[1][2]['content_type'] == 'text'

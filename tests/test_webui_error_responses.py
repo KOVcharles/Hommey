@@ -344,7 +344,10 @@ async def test_session_history_endpoints_contract(client, monkeypatch):
     async def fake_state_operation(_user_id, operation):
         return operation(instance)
 
-    monkeypatch.setattr(manager, "run_user_state_operation", fake_state_operation)
+    monkeypatch.setattr(manager, "read_session_operation", fake_state_operation)
+    async def fake_session_operation(_user_id, _session_id, operation, **kwargs):
+        return operation(instance)
+    monkeypatch.setattr(manager, "run_session_operation", fake_session_operation)
 
     listed = await client.get("/api/u1/sessions")
     created = await client.post("/api/u1/sessions")
@@ -357,8 +360,8 @@ async def test_session_history_endpoints_contract(client, monkeypatch):
     assert created.json() == {"session_id": "s2"}
     assert activated.json()["messages"][0]["content"] == "上海出差"
     assert renamed.json() == {"session_id": "s1", "title": "新名字"}
-    assert deleted.json() == {"active_session_id": "s2"}
-    assert cleared.json() == {"active_session_id": "s3"}
+    assert deleted.json() == {"session_id": "s1", "deleted": True}
+    assert cleared.json() == {"cleared": True}
     assert calls == [
         ("new",),
         ("activate", "s1"),

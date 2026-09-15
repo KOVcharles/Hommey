@@ -62,6 +62,8 @@
     const THEME_KEY = 'hommey.theme';
     const MOTION_KEY = 'hommey.motion';
     const RETRIEVAL_MODE_KEY_PREFIX = 'hommey.retrieval_mode';
+    // 会话边界跟着“这一次浏览”走（见 loadSessions），不跟空闲时间走。
+    const SESSION_MEMORY_KEY_PREFIX = 'hommey.session';
     const defaultPlaceholder = '继续问 Hommey';
 
     let isProcessing = false;
@@ -696,7 +698,9 @@
             }
 
             loadIntentLabels();
-            await Promise.all([loadUserSummary(), loadActiveTrip(), loadSessions()]);
+            // 先定下这一轮浏览用哪个会话，再拉依赖会话的数据：进行中的行程是按会话存的。
+            await loadSessions();
+            await Promise.all([loadUserSummary(), loadActiveTrip()]);
             hideInitOverlay();
             setInputEnabled(true);
             startPromptRotation();
@@ -1263,8 +1267,16 @@
     }
 
     async function loadActiveTrip() {
+        const sessionId = activeSessionId;
         try {
-            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/trip/active`);
+            // 没有选择会话时，不读取任何其他会话的行程。
+            if (!activeSessionId) {
+                activeTrip.replaceChildren();
+                activeTrip.appendChild(createEmptyState('当前没有进行中的出差任务。'));
+                return;
+            }
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/trip/active?session_id=${encodeURIComponent(sessionId)}`);
+            if (activeSessionId !== sessionId) return;
             const trip = data.active_trip;
             activeTrip.replaceChildren();
             if (!trip) {
@@ -1289,6 +1301,7 @@
                 activeTrip.appendChild(row);
             });
         } catch (err) {
+            if (activeSessionId !== sessionId) return;
             activeTrip.replaceChildren(createEmptyState('暂时无法读取行程。'));
         }
     }
@@ -1300,15 +1313,86 @@
         return empty;
     }
 
+    function sessionMemoryKey() {
+        return `${SESSION_MEMORY_KEY_PREFIX}.${userId}`;
+    }
+
+    function rememberSession(sessionId) {
+        try {
+            if (sessionId) sessionStorage.setItem(sessionMemoryKey(), sessionId);
+            else sessionStorage.removeItem(sessionMemoryKey());
+        } catch (_) { /* 隐私模式下不可用，退化为每次进入都开新会话。 */ }
+    }
+
+    function rememberedSession() {
+        try {
+            return sessionStorage.getItem(sessionMemoryKey()) || '';
+        } catch (_) { return ''; }
+    }
+
+    // 会话边界由“这一次浏览”决定：刷新要接着当前会话，关掉标签页再进来才算新的一轮。
+    // sessionStorage 正好是这个语义——刷新保留、标签页一关闭就清空。空闲时长不参与判断：
+    // 挂着一个页面多久都不该把用户的对话换掉。
     async function loadSessions() {
         try {
+            const remembered = rememberedSession();
+            activeSessionId = '';
+            if (remembered) {
+                try {
+                    await fetchJson(
+                        `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(remembered)}/activate`,
+                        { method: 'POST' }
+                    );
+                    activeSessionId = remembered;
+                } catch (err) {
+                    if (err instanceof ApiError && err.code === 'SESSION_NOT_FOUND') {
+                        rememberSession('');
+                    } else {
+                        activeSessionId = remembered;
+                        throw err;
+                    }
+                }
+            }
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`);
-            activeSessionId = data.active_session_id || '';
             restoreRetrievalMode();
             renderSessions(Array.isArray(data.sessions) ? data.sessions : []);
         } catch (err) {
-            renderSessions([]);
+            showSessionListError();
         }
+    }
+
+    function showSessionListError() {
+        if (!historyList.querySelector('.session-row')) historyList.replaceChildren();
+        let error = historyList.querySelector('.session-list-error');
+        if (!error) {
+            error = createEmptyState('暂时无法加载历史会话。');
+            error.classList.add('session-list-error');
+            const retry = document.createElement('button');
+            retry.type = 'button';
+            retry.textContent = '重试';
+            retry.addEventListener('click', refreshSessionList);
+            error.appendChild(retry);
+            historyList.appendChild(error);
+        }
+    }
+
+    // 只重画侧边栏列表，不碰当前会话：切会话、新建、删除之后用它。
+    // loadSessions 仅在初始化时恢复标签页选择。
+    async function refreshSessionList() {
+        try {
+            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`);
+            renderSessions(Array.isArray(data.sessions) ? data.sessions : []);
+        } catch (_) { showSessionListError(); }
+    }
+
+    // 这一轮浏览还没开过会话（刚进入，或上次那个已经不可用）：现在建一个，
+    // 每个聊天请求都必须携带明确的会话 ID。
+    async function ensureActiveSession() {
+        if (activeSessionId) return activeSessionId;
+        const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
+        activeSessionId = data.session_id || '';
+        rememberSession(activeSessionId);
+        return activeSessionId;
     }
 
     function renderSessions(sessions) {
@@ -1351,12 +1435,13 @@
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
             activeSessionId = data.session_id || '';
+            rememberSession(activeSessionId);
             setRetrievalMode('standard', { persist: true });
             followConversation = true;
             chatMessages.replaceChildren();
             setComposerContext('');
             showHome();
-            await loadSessions();
+            await Promise.all([refreshSessionList(), loadActiveTrip()]);
         } catch (err) {
             showToast(formatDisplayError(err, '无法创建新会话'));
         }
@@ -1370,6 +1455,7 @@
                 { method: 'POST' }
             );
             activeSessionId = sessionId;
+            rememberSession(sessionId);
             restoreRetrievalMode();
             followConversation = true;
             chatMessages.replaceChildren();
@@ -1406,7 +1492,7 @@
                     : ''
             );
             enterChatView();
-            await loadSessions();
+            await Promise.all([refreshSessionList(), loadActiveTrip()]);
         } catch (err) {
             showToast(formatDisplayError(err, '无法打开会话'));
         }
@@ -1470,7 +1556,7 @@
                 }
             );
             renameLayer.classList.remove('open');
-            await loadSessions();
+            await refreshSessionList();
             showToast('会话已重命名');
         } catch (err) {
             showToast(formatDisplayError(err, '重命名失败'));
@@ -1486,10 +1572,12 @@
             );
             if (selectedSessionId === activeSessionId) {
                 followConversation = true;
-            chatMessages.replaceChildren();
+                chatMessages.replaceChildren();
                 setMainView('home');
+                activeSessionId = '';
+                rememberSession('');
             }
-            await loadSessions();
+            await Promise.all([refreshSessionList(), loadActiveTrip()]);
             showToast('会话已删除');
         });
     }
@@ -1497,11 +1585,13 @@
     function confirmClearHistory() {
         openConfirm('清空全部聊天记录？', '所有历史会话都会被删除，此操作无法恢复。', async () => {
             await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
+            activeSessionId = '';
+            rememberSession('');
             followConversation = true;
             chatMessages.replaceChildren();
             closeSettings();
             setMainView('home');
-            await loadSessions();
+            await Promise.all([refreshSessionList(), loadActiveTrip()]);
             showToast('聊天记录已清空');
         });
     }
@@ -1609,7 +1699,7 @@
         isOnboarding = false;
         chatInput.placeholder = defaultPlaceholder;
         addMessage('ai', '偏好设置完成。现在可以把你的出行计划交给我。');
-        loadSessions();
+        refreshSessionList();
     }
 
     function ensureRequestId() {
@@ -2104,6 +2194,13 @@
         const sendingAttachments = sendingEntries.map((a) => ({ filename: a.filename, kind: a.kind }));
         let requestCompleted = false;
         let submissionAccepted = false;
+        // 这一轮浏览还没有会话就先建一个，否则这条消息会落进上一次的对话里。
+        try {
+            await ensureActiveSession();
+        } catch (err) {
+            showToast(formatDisplayError(err, '无法开始新会话，请重试'));
+            return;
+        }
         enterChatView();
         followConversation = true;
         const silentSubmission = options.silentSubmission || options.requestPayload?.input_source === 'quick_trip_form';
@@ -2245,7 +2342,7 @@
             }
             setComposerContext(nextPlaceholder);
             if (preferencesUpdated) await loadUserSummary();
-            await Promise.all([loadActiveTrip(), loadSessions()]);
+            await Promise.all([loadActiveTrip(), refreshSessionList()]);
             requestCompleted = true;
         } catch (err) {
             removeProcessingIndicator();
@@ -2747,7 +2844,7 @@
     function openSidebar() {
         sidebar.classList.add('open');
         scrim.classList.add('visible');
-        loadSessions();
+        refreshSessionList();
     }
 
     function closeSidebar() {

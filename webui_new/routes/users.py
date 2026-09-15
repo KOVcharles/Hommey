@@ -68,8 +68,8 @@ def create_users_router(manager):
             }
 
     @router.get("/trip/active")
-    async def get_active_trip(user_id: str, current_user: User = Depends(require_path_user)):
+    async def get_active_trip(user_id: str, session_id: str, current_user: User = Depends(require_path_user)):
         instance = await manager.get_initialized_user(user_id)
-        return await instance.get_active_trip()
+        return await instance.get_active_trip(session_id)
 
     return router

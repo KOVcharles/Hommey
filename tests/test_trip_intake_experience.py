@@ -244,7 +244,6 @@ def test_supervisor_intake_persists_trip_intake_presentation():
 
     instance = HommeyWebInstance("employee-a")
     instance.initialized = True
-    instance.session_id = "session-a"
     saved = []
     instance.memory_manager = SimpleNamespace(current_request_id=None,
         add_message=lambda role, content, metadata: saved.append((role, metadata)) or "message-id")
@@ -252,7 +251,7 @@ def test_supervisor_intake_persists_trip_intake_presentation():
     services.trip = dict(BASE_TRIP)
     instance.supervisor = Supervisor(forbidden, services, FakeStore(services), CONFIG)
     document = build_trip_intake_document(BASE_TRIP)
-    result = asyncio.run(instance._process_message_impl("我要出差", request_id="request-a"))
+    result = asyncio.run(instance._process_message_impl("我要出差", request_id="request-a", session_id="session-a", request_memory=instance.memory_manager))
 
     assert result["presentation_document"]["type"] == "trip_intake"
     assert result["presentation_document"]["progress"] == {"completed": 2, "total": 6}
@@ -270,7 +269,6 @@ def test_supervisor_prefills_departure_from_saved_home_city():
 
     instance = HommeyWebInstance("employee-a")
     instance.initialized = True
-    instance.session_id = "session-a"
     instance.memory_manager = SimpleNamespace(current_request_id=None,
         add_message=lambda role, content, metadata: "message-id")
     services = FakeServices()
@@ -278,7 +276,7 @@ def test_supervisor_prefills_departure_from_saved_home_city():
     services.trip = {"origin": None, "destination": None}
     instance.supervisor = Supervisor(forbidden, services, FakeStore(services), CONFIG)
 
-    result = asyncio.run(instance._process_message_impl("我要出差", request_id="request-home"))
+    result = asyncio.run(instance._process_message_impl("我要出差", request_id="request-home", session_id="session-a", request_memory=instance.memory_manager))
 
     document = result["presentation_document"]
     assert document["route"]["origin"] == "上海"

@@ -347,17 +347,17 @@ async def test_chat_return_is_unchanged_when_capture_is_enabled(monkeypatch):
     }
     instance = HommeyWebInstance("u1")
     instance.initialized = True
-    instance.memory_manager = SimpleNamespace(_current_turn_id="turn-1")
+    instance.memory_manager = SimpleNamespace(for_session=lambda sid: SimpleNamespace(_current_turn_id="turn-1"))
 
     async def implementation(
-        _message, request_id=None, attachment_ids=None, retrieval_mode="standard"
+        _message, request_id=None, attachment_ids=None, retrieval_mode="standard", **kwargs
     ):
         return dict(expected)
 
     monkeypatch.setattr(manager_module, "evaluation_sink", Sink())
     monkeypatch.setattr(instance, "_process_message_impl", implementation)
 
-    result = await instance.process_message("测试", request_id="req-1")
+    result = await instance.process_message("测试", request_id="req-1", session_id="session-1")
 
     assert result == expected
     assert emitted[0].subject.request_id == "req-1"
@@ -374,16 +374,16 @@ async def test_capture_failure_does_not_fail_chat(monkeypatch):
 
     instance = HommeyWebInstance("u1")
     instance.initialized = True
-    instance.memory_manager = SimpleNamespace(_current_turn_id="turn-1")
+    instance.memory_manager = SimpleNamespace(for_session=lambda sid: SimpleNamespace(_current_turn_id="turn-1"))
 
     async def implementation(
-        _message, request_id=None, attachment_ids=None, retrieval_mode="standard"
+        _message, request_id=None, attachment_ids=None, retrieval_mode="standard", **kwargs
     ):
         return {"response": "仍然成功", "agents": []}
 
     monkeypatch.setattr(manager_module, "evaluation_sink", Sink())
     monkeypatch.setattr(instance, "_process_message_impl", implementation)
 
-    result = await instance.process_message("测试", request_id="req-1")
+    result = await instance.process_message("测试", request_id="req-1", session_id="session-1")
 
     assert result["response"] == "仍然成功"

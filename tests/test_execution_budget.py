@@ -1,3 +1,4 @@
+from types import SimpleNamespace
 import asyncio
 
 import pytest
@@ -74,9 +75,10 @@ def test_budgeted_model_counts_each_model_invocation():
 @pytest.mark.anyio
 async def test_request_timeout_is_converted_to_public_error(monkeypatch):
     instance = HommeyWebInstance("u1")
+    instance.memory_manager = SimpleNamespace(for_session=lambda sid: SimpleNamespace())
 
     async def slow_request(
-        _message, request_id=None, attachment_ids=None, retrieval_mode="standard"
+        _message, request_id=None, attachment_ids=None, retrieval_mode="standard", **kwargs
     ):
         await asyncio.sleep(0.05)
         return {}
@@ -85,7 +87,7 @@ async def test_request_timeout_is_converted_to_public_error(monkeypatch):
     monkeypatch.setitem(RESILIENCE_CONFIG, "request_timeout_sec", 0.001)
 
     with pytest.raises(UpstreamError) as exc:
-        await instance.process_message("slow")
+        await instance.process_message("slow", session_id="session-1")
 
     assert exc.value.code == "REQUEST_EXECUTION_TIMEOUT"
     assert exc.value.retryable is True
@@ -95,9 +97,10 @@ async def test_request_timeout_is_converted_to_public_error(monkeypatch):
 async def test_request_budget_error_is_not_retryable(monkeypatch):
     monkeypatch.setitem(SUPERVISOR_CONFIG, "max_calls_per_type", 2)
     instance = HommeyWebInstance("u1")
+    instance.memory_manager = SimpleNamespace(for_session=lambda sid: SimpleNamespace())
 
     async def exhaust_budget(
-        _message, request_id=None, attachment_ids=None, retrieval_mode="standard"
+        _message, request_id=None, attachment_ids=None, retrieval_mode="standard", **kwargs
     ):
         for _ in range(3):
             consume_external_call("weather")
@@ -106,7 +109,7 @@ async def test_request_budget_error_is_not_retryable(monkeypatch):
     monkeypatch.setattr(instance, "_process_message_impl", exhaust_budget)
 
     with pytest.raises(UpstreamError) as exc:
-        await instance.process_message("loop")
+        await instance.process_message("loop", session_id="session-1")
 
     assert exc.value.code == "EXTERNAL_CALL_TYPE_LIMIT_EXCEEDED"
     assert exc.value.retryable is False

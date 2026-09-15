@@ -279,7 +279,6 @@ async def test_web_entry_uses_only_supervisor_and_persists_documents():
     from webui_new.manager import HommeyWebInstance
     instance = HommeyWebInstance("employee-a")
     instance.initialized = True
-    instance.session_id = "session-a"
     saved = []
     instance.memory_manager = SimpleNamespace(current_request_id=None,
         add_message=lambda role, content, metadata: saved.append((role, metadata)) or "message-id")
@@ -287,10 +286,10 @@ async def test_web_entry_uses_only_supervisor_and_persists_documents():
     instance.supervisor = SimpleNamespace(run=AsyncMock(return_value=response))
     assert not hasattr(instance, "state_store")
     assert not hasattr(instance, "_process_legacy_message_impl")
-    result = await instance._process_message_impl("查询出差天气", request_id="request-a")
+    result = await instance._process_message_impl("查询出差天气", request_id="request-a", session_id="session-a", request_memory=instance.memory_manager)
     assert result["response"] == "差旅结果"
     assert [role for role, _ in saved] == ["user", "assistant"]
-    assert instance.session_id == "session-a"
+    assert not hasattr(instance, "session_id")
     scope = instance.supervisor.run.call_args.args[0]
     assert scope.user_id == "employee-a" and scope.session_id == "session-a"
 

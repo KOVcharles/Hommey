@@ -4,6 +4,7 @@
 """
 from typing import Dict, Any
 import uuid
+from copy import copy
 from .memory_service import MemoryService
 from utils.memory_safety import filter_safe_memory_mapping, redact_sensitive_text
 import logging
@@ -18,7 +19,7 @@ class MemoryManager:
     - 长期记忆：用户偏好和历史（跨会话）
     """
 
-    def __init__(self, user_id: str, session_id: str, storage_path: str = "data/memory"):
+    def __init__(self, user_id: str, session_id: str | None = None, storage_path: str = "data/memory"):
         """
         初始化记忆管理器
 
@@ -43,6 +44,16 @@ class MemoryManager:
 
         logger.info(f"Memory manager initialized for user {user_id}, session {session_id}")
 
+    def for_session(self, session_id: str) -> "MemoryManager":
+        """Request-owned session, cache facade and message/turn identifiers."""
+        bound = copy(self)
+        bound.memory_service = self.memory_service.for_session(session_id)
+        bound.session_id = bound.memory_service.session_id
+        bound.short_term = bound.memory_service.short_term
+        bound.current_request_id = None
+        bound._current_turn_id = None
+        return bound
+
     def rotate_session(self, session_id: str) -> str:
         """Start a new short-term session while preserving long-term memory."""
         previous_session = self.session_id
@@ -56,13 +67,6 @@ class MemoryManager:
         self.session_id = self.memory_service.activate_session(session_id)
         self.short_term = self.memory_service.short_term
         return self.session_id
-
-    def ensure_active_session(self) -> bool:
-        """Resume or rotate the durable session according to the idle timeout."""
-        rotated = self.memory_service.ensure_active_session()
-        self.session_id = self.memory_service.session_id
-        self.short_term = self.memory_service.short_term
-        return rotated
 
     # ========== 短期记忆操作 ==========
 
@@ -104,7 +108,7 @@ class MemoryManager:
         """Return the structured answer saved for an idempotent retry, when present."""
         if not request_id:
             return None
-        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
+        rows = self.long_term.get_chat_history(limit=2, request_id=request_id, session_id=self.session_id)
         for row in reversed(rows):
             if row.get("role") == "assistant" and isinstance(row.get("answer_document"), dict):
                 return row["answer_document"]
@@ -114,7 +118,7 @@ class MemoryManager:
         """Return a typed presentation saved for an idempotent retry."""
         if not request_id:
             return None
-        rows = self.long_term.get_chat_history(limit=2, request_id=request_id)
+        rows = self.long_term.get_chat_history(limit=2, request_id=request_id, session_id=self.session_id)
         for row in reversed(rows):
             document = row.get("presentation_document")
             if row.get("role") == "assistant" and isinstance(document, dict):
@@ -127,13 +131,18 @@ class MemoryManager:
     # ========== 综合查询 ==========
 
 
-    def get_active_trip(self) -> Dict[str, Any] | None:
-        trip = self.long_term.get_active_trip(self.session_id)
+    def get_active_trip(self, session_id: str | None = None) -> Dict[str, Any] | None:
+        session_id = session_id or self.session_id
+        if not session_id:
+            raise ValueError("Session ID is required to read an active trip")
+        trip = self.long_term.get_active_trip(session_id)
         if not trip or trip.get("status", "active") in {"completed", "cancelled"}:
             return None
         return trip
 
     def update_active_trip(self, trip_info: Dict[str, Any]) -> Dict[str, Any]:
+        if not self.session_id:
+            raise ValueError("Bind a session before updating an active trip")
         return self.long_term.upsert_active_trip(
             filter_safe_memory_mapping(trip_info),
             self.session_id,

@@ -13,7 +13,7 @@ class StubInstance:
         self.active = 0
         self.max_active = 0
 
-    async def process_message(self, message, *, request_id=None, attachment_ids=None, progress_callback=None):
+    async def process_message(self, message, *, request_id=None, attachment_ids=None, progress_callback=None, session_id=None):
         self.active += 1
         self.max_active = max(self.max_active, self.active)
         await asyncio.sleep(0.05)
@@ -22,17 +22,17 @@ class StubInstance:
 
 
 @pytest.mark.asyncio(loop_scope="session")
-async def test_same_user_serializes_across_real_redis():
+async def test_same_user_distinct_sessions_overlap_across_real_redis():
     manager = WebHommeyManager()
     stub = StubInstance()
     manager._instances["u1"] = stub
 
     async def send(i):
-        return await manager.process_message("u1", f"msg-{i}")
+        return await manager.process_message("u1", f"msg-{i}", session_id=f"session-{i}")
 
     results = await asyncio.gather(send(1), send(2))
     assert sorted(r["response"] for r in results) == ["msg-1", "msg-2"]
-    assert stub.max_active == 1  # 同用户真实 Redis 锁串行
+    assert stub.max_active == 2  # 同用户不同会话真正并发
 
     # 清理
     await get_redis_coordination_client().delete("hommey:lock:user:u1", "hommey:global:semaphore")
@@ -47,7 +47,7 @@ async def test_different_users_run_in_parallel():
     manager._instances["u2"] = stub2
 
     async def send(uid, i):
-        return await manager.process_message(uid, f"msg-{i}")
+        return await manager.process_message(uid, f"msg-{i}", session_id=f"session-{i}")
 
     results = await asyncio.gather(send("u1", 1), send("u2", 2))
     assert sorted(r["response"] for r in results) == ["msg-1", "msg-2"]
@@ -68,7 +68,7 @@ class StubStreamInstance(HommeyWebInstance):
         self.inner_cancelled = False
         self.memory_written = False
 
-    async def process_message(self, message, *, request_id=None, attachment_ids=None, progress_callback=None):
+    async def process_message(self, message, *, request_id=None, attachment_ids=None, progress_callback=None, session_id=None):
         """模拟真实 process_message：先报一个进度事件，然后阻塞等待（直到被取消）。"""
         self.process_started.set()
         try:

@@ -357,12 +357,13 @@ def test_memory_service_resumes_session_and_messages_across_instances(monkeypatc
 
     close_all_postgres_pools()
     user_id = f"service-integration-{uuid.uuid4().hex}"
-    first = MemoryService(user_id, requested_session_id="ignored")
+    unbound = MemoryService(user_id)
+    first = unbound.for_session(unbound.create_session())
     try:
         first.append_message("user", "跨实例问题", {"request_id": "resume-request"})
         first.append_message("assistant", "跨实例回答", {"request_id": "resume-request"})
 
-        second = MemoryService(user_id, requested_session_id="also-ignored")
+        second = MemoryService(user_id, requested_session_id=first.session_id)
         assert second.session_id == first.session_id
         assert [row["content"] for row in second.get_recent_context(1)] == [
             "跨实例问题",

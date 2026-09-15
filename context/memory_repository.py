@@ -191,6 +191,28 @@ class PostgresMemoryRepository:
                     )
                     return self._insert_session(cur, user_id)
 
+    def create_session(self, user_id: str) -> SessionRecord:
+        """Create an independent conversation without closing any other one."""
+        with self.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            return self._insert_session(cur, user_id)
+
+    def resume_session(self, user_id: str, session_id: str) -> SessionRecord:
+        """Validate ownership and reopen legacy closed conversations only."""
+        sid = stable_uuid(session_id, namespace="session")
+        with self.pool.connection() as conn, conn.transaction(), conn.cursor() as cur:
+            cur.execute(
+                f"""UPDATE conversation_sessions
+                    SET status='active', closed_at=NULL, close_reason=NULL
+                    WHERE user_id=%s AND session_id=%s
+                      AND (close_reason IS NULL OR close_reason NOT IN ('deleted', 'cleared'))
+                    RETURNING {self._SESSION_COLUMNS}""",
+                (user_id, sid),
+            )
+            row = cur.fetchone()
+            if not row:
+                raise ValueError("Session not found")
+            return SessionRecord.from_row(row)
+
     def activate_session(
         self,
         user_id: str,
@@ -305,6 +327,8 @@ class PostgresMemoryRepository:
                     )
                     existing = cur.fetchone()
                     if existing:
+                        if existing["session_id"] != sid:
+                            raise ValueError("Request ID belongs to a different session")
                         # A retry may be the first process that has the typed
                         # payload (for example after a response disconnect).
                         # Fill null metadata only; never mutate an established
@@ -885,7 +909,7 @@ class PostgresCompatibilityStore:
                         UPDATE conversation_sessions
                         SET status = 'closed', closed_at = NOW(), close_reason = 'cleared',
                             summary_watermark = 0
-                        WHERE user_id = %s AND status = 'active'
+                        WHERE user_id = %s
                         """,
                         (self.user_id,),
                     )
