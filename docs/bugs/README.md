@@ -24,3 +24,4 @@ YYYY-MM-DD-简短英文主题.md
 | BUG-2026-08-25-01 | 2026-08-25 | [意图与编排职责边界](2026-08-25-intention-orchestration-boundaries.md) | Phase 1 已修复，结构性风险待后续阶段 |
 | BUG-2026-09-13-01～07 | 2026-09-13 | [完整差旅编排、卡片丢失与制度展示](2026-09-13-complete-trip-orchestration-and-card.md) | 编排与展示已修复；已重载双 worker 并通过正式聊天接口验证；检索覆盖仍开放 |
 | BUG-2026-09-15-01 | 2026-09-15 | [同一用户多窗口互相阻塞](2026-09-15-multi-window-session-blocking.md) | 代码已修复；真实 PostgreSQL/Redis 与双标签页回归通过，待业务容器重启验收 |
+| BUG-2026-09-16-01 | 2026-09-16 | [短输入「1」被误当作差旅任务](2026-09-16-short-input-unclear-routing.md) | 未修复，代码定位完成；含 System Prompt 与工具契约设计问题 |

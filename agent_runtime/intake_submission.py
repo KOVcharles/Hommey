@@ -27,7 +27,7 @@ def parse_trip_entry(text):
     caller must use the normal grounded-write gate and evaluate persisted state.
     """
     match = re.fullmatch(
-        r"\s*(?:我)?(?:要|想|准备|计划)(?:从(?P<origin>[\u4e00-\u9fff]{2,12}))?"
+        r"\s*(?:我)?(?:要|想|准备|计划)?(?:从(?P<origin>[\u4e00-\u9fff]{2,12}))?"
         r"去(?P<destination>[\u4e00-\u9fff]{2,12})出差[。！!\s]*", text)
     if not match:
         return None

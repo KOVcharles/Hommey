@@ -10,7 +10,8 @@ from tests.test_supervisor_control import role_of
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("text,origin", [("我要去重庆出差", None), ("我准备去重庆出差。", None), ("我要从北京去重庆出差", "北京")])
+@pytest.mark.parametrize("text,origin", [("我要去重庆出差", None), ("我准备去重庆出差。", None),
+    ("我要从北京去重庆出差", "北京"), ("去重庆出差", None), ("从北京去重庆出差", "北京")])
 async def test_explicit_trip_entry_saves_literal_places_and_returns_form_without_model(text, origin):
     services = FakeServices()
     store = FakeStore(services)

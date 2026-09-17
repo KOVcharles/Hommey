@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 
 Role = Literal["trip_context", "policy_rag", "memory", "travel_info", "trip_planner", "compliance"]
@@ -25,10 +25,31 @@ class Delegate(StrictModel):
     result_ids: list[str] = Field(default_factory=list, max_length=12)
 
 
+class PendingInput(StrictModel):
+    """One displayed question, not a blanket permission to consume short replies."""
+    field: Literal["origin", "destination", "start_date", "end_date", "duration_days", "trip_length", "trip_purpose",
+                   "work_location", "work_schedule"] | None = None
+    choices: list[str] = Field(default_factory=list, max_length=12,
+                               description="按展示顺序列出选项；运行时添加编号，用户可回复编号")
+
+    @model_validator(mode="after")
+    def one_input_type(self):
+        if bool(self.field) == bool(self.choices):
+            raise ValueError("指定一个待补字段或一组选项，不能同时指定")
+        if any(not value.strip() or len(value) > 160 for value in self.choices):
+            raise ValueError("选项必须是非空短文本")
+        if len(set(self.choices)) != len(self.choices):
+            raise ValueError("选项不能重复")
+        return self
+
+
 class Finish(StrictModel):
-    kind: Literal["answer", "ask", "refuse"] = "answer"
+    kind: Literal["answer", "ask", "clarify", "refuse"] = Field(default="answer",
+        description="answer 交付结果；ask 已确定任务但缺资料；clarify 意图不明，不启动业务；refuse 明确超范围")
     result_ids: list[str] = Field(default_factory=list, max_length=16)
     question: str = Field(default="", max_length=500)
+    pending_input: PendingInput | None = Field(default=None,
+        description="仅 ask/clarify 使用；记录本次实际询问的字段或展示的编号选项")
 
 
 class ReadResult(StrictModel):

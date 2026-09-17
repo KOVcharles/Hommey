@@ -175,19 +175,25 @@ async def test_read_skill_progressive_reference_and_path_boundary():
 @pytest.mark.asyncio
 async def test_progressive_skill_reads_do_not_trigger_no_progress_termination():
     from tests.test_supervisor_runtime import reply
+    from tests.test_supervisor_control import role_of
     service, _ = services()
     service.trip = trip(False)
     store = FakeStore(service)
     calls = 0
-    async def model(*args, **kwargs):
+    async def model(messages, **kwargs):
         nonlocal calls
+        if role_of(messages) == "memory":
+            return reply(("report", {"status": "needs_input", "summary": "尚无偏好信息", "evidence_refs": [], "data": {}}))
         resources = ["", "references/place-selection.md", "references/travel-choices.md"]
         calls += 1
-        if calls <= 3:
-            return reply(("read_skill", {"name": "plan-trip", "resource": resources[calls-1]}))
+        if calls == 1:
+            assert "read_skill" not in {t["function"]["name"] for t in kwargs["tools"]}
+            return reply(("delegate", {"role": "memory", "task": "查询本次差旅偏好"}))
+        if calls <= 4:
+            return reply(("read_skill", {"name": "plan-trip", "resource": resources[calls-2]}))
         return reply(("prepare_trip_options", {}))
     output = await Supervisor(model, service, store, CONFIG).run(SCOPE, "继续安排本次出差")
-    assert calls == 4 and output["presentation_document"]["place_selection_required"]
+    assert calls == 5 and output["presentation_document"]["place_selection_required"]
     assert not output.get("stop_reason")
 
 

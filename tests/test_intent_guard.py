@@ -21,7 +21,7 @@ def test_short_field_value_with_trip_context_is_not_blocked():
     # 不应被通用短输入规则拦截为 unclear，应放行给 LLM 结合上下文识别。
     result = guard_user_input(
         "培训",
-        "行程框架已保存\n已确认：目的地：南京\n需要补充：\n- 出发地\n- 出差目的",
+        allow_short_reply=True,
     )
 
     assert result is None
@@ -79,7 +79,7 @@ def test_payment_receipt_policy_question_is_not_mistaken_for_payment_action():
 def test_private_tourism_is_rejected_even_after_business_trip_context():
     result = guard_user_input(
         "接下来帮我规划三亚蜜月旅游",
-        "用户: 我下周要去南京出差",
+        allow_short_reply=True,
     )
 
     assert result is not None

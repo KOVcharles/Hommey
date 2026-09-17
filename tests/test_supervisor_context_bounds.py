@@ -115,17 +115,20 @@ async def test_oversized_tool_batch_is_recoverable_without_executing_it():
 
 
 @pytest.mark.asyncio
-async def test_empty_trip_specialist_result_renders_form_even_for_answer():
+async def test_empty_trip_specialist_result_stops_for_clarification_without_form():
     async def model(messages, tools, tool_choice):
         if "delegate" in {t["function"]["name"] for t in tools}:
             out = outputs(messages)
             if not out:
                 return reply(("delegate", {"role": "trip_context", "task": "整理出差需求"}))
             return reply(("finish", {"result_ids": [out[0]["result_id"]]}))
-        return reply(("report", {"summary": "待补充出差信息", "status": "needs_input", "missing_info": ["出发地", "目的地"]}))
+        return reply(("report", {"summary": "待补充出差信息", "status": "needs_input", "missing_info": ["出发地", "目的地"],
+                                 "data": {"trip": {}, "field_sources": {}}}))
     services = FakeServices()
     result = await Supervisor(model, services, FakeStore(services), CONFIG).run(SCOPE, "请帮我整理一下出差需求")
-    assert result["presentation_document"]["type"] == "trip_intake"
+    assert result["presentation_document"] is None
+    assert result["outcome"] == "waiting_input"
+    assert "已保存" not in result["response"]
 
 
 def test_skill_names_are_discoverable_in_tool_schema():

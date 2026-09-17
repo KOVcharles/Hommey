@@ -22,6 +22,25 @@ def is_continue(text):
     return re.sub(r"[\s，。！？,.!?]+", "", text) in {"继续", "请继续", "继续处理", "继续刚才的任务"}
 
 
+def made_progress(call, value):
+    """Count business facts, evidence or commits, not successful RPC envelopes."""
+    if value.get("error") or value.get("reused"):
+        return False
+    if "_terminal" in value:
+        return True
+    name = call["name"]
+    if name == "delegate":
+        return bool(value.get("result_id")) and (
+            value.get("committed") or value.get("status") in {"success", "partial"})
+    if name == "apply_changes":
+        return bool(value.get("applied"))
+    if name == "read_source":
+        return bool(value.get("id"))
+    if name in {"search_policy", "search_memory", "search_trains", "get_weather", "find_hotels", "search_commute"}:
+        return bool(value.get("sources"))
+    return False
+
+
 def degraded_output(results, reason):
     messages = {
         "NO_PROGRESS": "本次部分步骤未能完成，已停止重复处理。以下保留可核实的结果。",
