@@ -125,7 +125,8 @@ async def test_paraphrased_failed_delegation_has_role_cap_and_no_progress_exit()
     services = FakeServices()
     store = FakeStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE, "查询我的出差偏好")
-    assert leaves == 2 and main_calls == 5 and result["stop_reason"] == "NO_PROGRESS"
+    # ROLE_TASK_LIMIT is a terminal instruction; do not ask the model twice more.
+    assert leaves == 2 and main_calls == 3 and result["stop_reason"] == "NO_PROGRESS"
     checkpoint = store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]
     assert len(checkpoint["work_items"]) == 2 and checkpoint["control"]["outcome"] == "degraded"
 

@@ -1,4 +1,4 @@
-"""Reject clear out-of-scope requests before the supervisor; ambiguous input stays with the model."""
+"""Cheap scope/empty-input checks; the runtime binds replies, the model handles remaining semantics."""
 from __future__ import annotations
 
 from dataclasses import dataclass
@@ -27,7 +27,7 @@ def meaningful_length(query: str) -> int:
     return len(re.findall(r"[\w\u4e00-\u9fff]", query or ""))
 
 
-def guard_user_input(user_query: str, conversation_context: str = "") -> Optional[GuardResult]:
+def guard_user_input(user_query: str, *, allow_short_reply: bool = False) -> Optional[GuardResult]:
     q = normalize_query(user_query)
     q_lower = q.lower()
     length = meaningful_length(q)
@@ -60,7 +60,9 @@ def guard_user_input(user_query: str, conversation_context: str = "") -> Optiona
     ):
         return _unsupported("用户请求是私人旅游需求，不属于公司差旅范围")
 
-    if length <= 2 and not conversation_context:
+    # The caller must bind short answers to a concrete pending question.
+    # A nonempty transcript or an existing trip is not such a binding.
+    if (length <= 2 or q.isdecimal()) and not allow_short_reply:
         return _unclear("输入太短，无法判断具体意图")
 
     return None

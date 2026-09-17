@@ -120,7 +120,7 @@ def _suggested_reply(missing: List[str]) -> str:
     return "，".join(examples[key] for key in missing if key in examples)
 
 
-def build_trip_intake_document(raw: Dict[str, Any], *, home_location: str = "") -> TripIntakeDocument:
+def build_trip_intake_document(raw: Dict[str, Any], *, home_location: str = "", saved: bool = False) -> TripIntakeDocument:
     raw_data = raw.get("data") if isinstance(raw.get("data"), dict) else raw
     data = raw_data
     home = str(home_location or "").strip()
@@ -170,7 +170,7 @@ def build_trip_intake_document(raw: Dict[str, Any], *, home_location: str = "") 
         summary = "正在继续生成详细的公司差旅方案。"
     else:
         status = "collecting_required"
-        title = "补充出差信息" if not collected else "行程框架已保存"
+        title = "行程框架已保存" if saved and collected else "补充出差信息"
         summary = f"还差 {len(missing)} 项，即可生成详细方案。"
 
     next_question = prompts[0].help_text if prompts else ""
@@ -260,7 +260,7 @@ def recover_trip_intake_document(text: str) -> TripIntakeDocument | None:
     """Recover only the stable intake text emitted before migration 0016."""
     lines = [line.strip() for line in str(text or "").splitlines() if line.strip()]
     if not lines or lines[0] not in {
-        "行程框架已保存", "有一项行程信息需要确认", "行程信息已齐全",
+        "行程框架已保存", "补充出差信息", "有一项行程信息需要确认", "行程信息已齐全",
     }:
         return None
 

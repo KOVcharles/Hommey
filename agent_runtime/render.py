@@ -63,8 +63,20 @@ def render(finish, results):
                     section.items.append(AnswerItem(label=str(day.get("date") or "行程")[:60],
                         value=f"{len(activities)} 项安排" if activities else "待补充", activities=activities))
         sections.append(section)
-    if finish.kind == "ask":
-        sections.append(AnswerSection(kind="notice", title="需要补充的信息", status="partial", body=finish.question))
+    if finish.kind in {"ask", "clarify"}:
+        question = finish.question
+        if finish.pending_input and finish.pending_input.choices:
+            question += "\n" + "\n".join(f"{i}. {label}" for i, label in enumerate(finish.pending_input.choices, 1))
+        elif finish.pending_input and finish.pending_input.field:
+            from core.trip_intake import FIELD_SPECS
+            key = finish.pending_input.field
+            spec = FIELD_SPECS.get("trip_length" if key == "duration_days" else key)
+            # The field that will consume the next short reply must actually
+            # be visible, even when the model's question is vague.
+            label = spec.label if spec else "返程日期"
+            question += f"\n请补充{label}。" + (spec.help_text if spec else "请填写明确的返程日期。")
+        sections.append(AnswerSection(kind="notice", title="请说明你的需求" if finish.kind == "clarify" else "需要补充的信息",
+                                      status="partial", body=question))
     document = AnswerDocument(title="企业差旅助手", sections=sections, sources=sources[:30])
     document.plain_text = render_plain_text(document)[:12000]
     return {"response": document.plain_text, "answer_document": document.model_dump(mode="json"), "presentation_document": None}

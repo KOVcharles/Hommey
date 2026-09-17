@@ -228,7 +228,9 @@ async def test_out_of_domain_never_calls_model_or_business_tool():
         raise AssertionError("model should not run")
     services = FakeServices()
     result = await Supervisor(forbidden, services, FakeStore(services), CONFIG).run(SCOPE, "帮我写一段Python代码")
-    assert "只处理企业差旅" in result["response"] and services.calls == []
+    from core.intent_guard import guard_user_input
+    assert result["response"] == guard_user_input("帮我写一段Python代码").clarification
+    assert services.calls == []
 
 
 def test_sources_are_private_and_policy_cannot_report_unread_evidence():

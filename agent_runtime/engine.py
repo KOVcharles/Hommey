@@ -19,7 +19,7 @@ from utils.io_executor import run_blocking
 from .contracts import (
     ApplyChanges, Delegate, Finish, ReadResult, ReadSkill, Report, RuntimeStopped,
     SpecialistResult, ToolRejected, PolicyReport, REPORT_MODELS, WorkItem, schema,
-    Empty,
+    Empty, PendingInput,
 )
 from .model_client import assistant_message, call_model, tool_message
 from .profiles import BASE_RULES, MAIN_RULES, POLICY_QUERY_RULES, PROFILES
@@ -28,7 +28,8 @@ from .services import SourceScope, TOOLS, tool_schemas
 from .store import fingerprint, trip_version
 from .validation import validate_report, validated_changes
 from .context_window import compact_tool_history, encoded_size
-from .control import failure, task_key, is_continue, degraded_output, restore_results
+from .control import failure, task_key, is_continue, degraded_output, restore_results, made_progress
+from .dialogue import clarification_output, previous_question, resolve_reply, record_question, can_show_intake
 from .intake_submission import parse_intake_submission, parse_trip_entry
 from . import execution_plan
 from .fast_routes import weather_policy_tasks
@@ -41,7 +42,7 @@ MAIN_TOOLS = [
     schema("discard_result", "丢弃无效或过时结果，解除其尚未提交的变更；已经提交的写入不会撤销", ReadResult),
     schema("read_skill", "读取允许的差旅 Skill 业务指南", ReadSkill),
     schema("apply_changes", "提交有本轮用户原文依据的行程/偏好变更；只接受专业结果 ID", ApplyChanges),
-    schema("finish", "结束本轮，选择有据结果或提出缺项问题；非差旅请求 refuse", Finish),
+    schema("finish", "结束本轮：answer 选择有据结果；ask 任务缺资料；clarify 意图不明且不选结果；refuse 明确超范围。编号选项用 pending_input.choices，由运行时展示和绑定回复", Finish),
     schema("prepare_trip_options", "完整差旅交付：验证目的地内会场，查询真实交通酒店及适用制度，调用规划角色后生成含每日安排的卡片；只用于安排出差，不用于单独制度/记忆查询", Empty),
 ]
 MODELS = {"delegate": Delegate, "read_result": ReadResult, "discard_result": ReadResult, "read_skill": ReadSkill, "apply_changes": ApplyChanges, "finish": Finish, "prepare_trip_options": Empty}
@@ -54,9 +55,9 @@ def is_intake_entry(text):
                           "安排出差", "帮我安排出差", "我要安排出差", "出差计划", "出差规划"}
 
 
-def intake_output(trip, home_location=""):
+def intake_output(trip, home_location="", *, saved=False):
     from core.presentation.trip_intake_document import build_trip_intake_document
-    document = build_trip_intake_document(trip, home_location=home_location).model_dump(mode="json")
+    document = build_trip_intake_document(trip, home_location=home_location, saved=saved).model_dump(mode="json")
     return {"response": document["plain_text"], "answer_document": None, "presentation_document": document}
 
 
@@ -132,6 +133,52 @@ class Turn:
         except Exception:
             return ""
 
+    def intake(self, trip=None):
+        saved = any(key in self.state.get("applied_results", []) and result["role"] == "trip_context"
+                    and bool(result["data"].get("trip")) for key, result in self.state.get("results", {}).items())
+        return intake_output(self.state["trip"] if trip is None else trip,
+                             self.state.get("home_location", ""), saved=saved)
+
+    def main_tool_names(self, state):
+        names = set(MODELS)
+        # Decide on an action before loading business manuals. This is a tool
+        # boundary, not a request for the model to remember the prompt order.
+        collecting = can_show_intake(self.state, self.deliverable_results()) and not evaluate_trip_intake(self.state["trip"])["planning_ready"]
+        if not state.get("admitted") or collecting:
+            names.discard("read_skill")
+        if not any(key not in self.state.get("discarded_results", []) for key in self.state["results"]):
+            names.difference_update({"read_result", "discard_result", "apply_changes"})
+        from .validation import TRIP_FIELDS
+        if not any(self.state["trip"].get(key) for key in TRIP_FIELDS):
+            names.discard("prepare_trip_options")
+        return names
+
+    def deliverable_results(self):
+        """Use the same evidence/write gates for both waiting and degraded exits."""
+        selected = []
+        for key in self.state["results"]:
+            try:
+                result = self.results([key])[0]
+                if result.status not in {"success", "partial", "needs_input"}:
+                    continue
+                proposal = result.role == "trip_context" or (result.role == "memory" and result.data.get("preferences"))
+                if proposal and key not in self.state["applied_results"]:
+                    continue
+                selected.append(result)
+            except (ToolRejected, ValidationError):
+                continue
+        return selected
+
+    def waiting_for_input(self):
+        """Stop missing-input work while retaining independent usable results."""
+        selected = self.deliverable_results()
+        if can_show_intake(self.state, selected) and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
+            return {**self.intake(), "outcome": "waiting_input"}
+        question = "请说明你想处理的差旅事项，以及需要补充或修改的具体信息。"
+        if selected:
+            return {**render(Finish(kind="ask", question=question), selected), "outcome": "waiting_input"}
+        return clarification_output(question)
+
     async def execute(self):
         record = await self.runtime.store.call("begin", self.scope, fingerprint({"text": self.text, "user_text": self.user_text}))
         self.owner = record["owner"]
@@ -142,6 +189,9 @@ class Turn:
             if not self.state:
                 context = await self.runtime.services.context(self.scope)
                 previous = await self.runtime.store.call("previous", self.scope)
+                pending = previous_question(previous, trip_version(context["trip"]))
+                resolved = resolve_reply(self.user_text, pending) if self.text == self.user_text and not self.trip_input else None
+                context["pending_input"], context["resolved_input"] = pending, resolved
                 # Only a compact same-session work index. Raw historical sources
                 # are deliberately not inherited; memory must retrieve them.
                 if previous:
@@ -153,6 +203,7 @@ class Turn:
                 self.state = {"trip": context["trip"], "version": trip_version(context["trip"]), "results": {},
                     "checkpoint_version": 2, "work_items": {}, "control": {"status": "running"},
                     "work_context": context.get("work_context", {}),
+                    "reply_to": pending, "resolved_input": resolved,
                     "children": {}, "calls": 0, "preferences_updated": False, "applied_results": [], "discarded_results": [],
                     "main": {"messages": [{"role": "system", "content": MAIN_RULES},
                         {"role": "user", "content": json.dumps({"context": context, "current_request": self.text}, ensure_ascii=False, default=str)}], "round": 0}}
@@ -173,13 +224,23 @@ class Turn:
             execution_plan.resume(self.state)
             self.source_bytes = sum(encoded_size(c.get("sources", [])) for c in self.state["children"].values())
             await self.publish_plan()
-            guard = guard_user_input(self.user_text, conversation_context="当前企业差旅会话")
+            allow_short = bool(self.state.get("resolved_input") or self.trip_input or self.text != self.user_text
+                               or is_intake_entry(self.user_text)
+                               or (is_continue(self.user_text) and self.state.get("work_context")))
+            guard = guard_user_input(self.user_text, allow_short_reply=allow_short)
             if guard and guard.intent == "unsupported":
                 output = render(Finish(kind="refuse"), [])
+                output["response"] = guard.clarification or output["response"]
+            elif guard and guard.intent == "unclear":
+                pending = self.state.get("reply_to")
+                if pending and self.user_text.strip().isdecimal():
+                    output = clarification_output(pending["question"], PendingInput.model_validate(pending["input"]))
+                else:
+                    output = clarification_output(guard.clarification)
             elif guard and guard.intent == "chitchat":
                 output = {"response": "你好，我可以帮你查询企业差旅制度、整理行程、查询交通天气和个人差旅记录。", "answer_document": None, "presentation_document": None}
             elif self.text == self.user_text and is_intake_entry(self.user_text) and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-                output = intake_output(self.state["trip"], self.state.get("home_location", ""))
+                output = self.intake()
                 output["outcome"] = "waiting_input"
             else:
                 await self.emit("analyzing")
@@ -211,6 +272,7 @@ class Turn:
             self.capture_evaluation()
             outcome = execution_plan.settle(self.state, output.get("outcome", "completed"), output.get("stop_reason"))
             output["outcome"] = outcome
+            record_question(self.state, output)
             output["public_plan"] = execution_plan.snapshot(self.state, self.scope.request_id, outcome=outcome,
                 reason="需要补充信息。" if outcome == "waiting_input" else "本轮处理已结束。")
             self.state["control"].update(status="completed", outcome=output.get("outcome", "completed"), stop_reason=output.get("stop_reason"))
@@ -255,6 +317,10 @@ class Turn:
         if self.text == self.user_text and is_direct_policy_query(self.user_text):
             return await self.direct_policy()
         submitted = parse_intake_submission(self.user_text) if self.text == self.user_text else None
+        resolved = self.state.get("resolved_input") or {}
+        if resolved.get("field") == "duration_days" and type(resolved.get("value")) is int:
+            submitted = {"trip": {"duration_days": resolved["value"]},
+                         "field_sources": {"duration_days": self.user_text}}
         if self.trip_input:
             fields = {k: v for k, v in self.trip_input.items() if k in {"origin", "destination", "start_date", "end_date", "duration_days", "trip_purpose", "work_location", "work_schedule"} and v not in (None, "")}
             submitted = {"trip": fields, "field_sources": {k: self.user_text for k in fields}}
@@ -286,24 +352,27 @@ class Turn:
             await self.publish_plan()
             await self.emit("completed", result_id, "trip_context")
         if submitted and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-            return {**intake_output(self.state["trip"], self.state.get("home_location", "")), "outcome": "waiting_input"}
+            return {**self.intake(), "outcome": "waiting_input"}
         if submitted and hasattr(self.runtime.services, "prepare_trip_options") and not any(word in self.user_text for word in ("合规", "检查", "差旅标准", "差旅制度")):
             return await self.prepare_options()
         return await self.loop(self.state["main"], None, None, [])
 
     async def prepare_options(self):
+        from .validation import TRIP_FIELDS
+        if not any(self.state["trip"].get(key) for key in TRIP_FIELDS):
+            raise ToolRejected("没有可用于规划的行程信息", code="EMPTY_TRIP_CONTEXT", next_action="ask_user")
         if any(r["role"] == "trip_context" and (r["data"].get("trip") or r["data"].get("trip_action", "update") != "update")
                and key not in self.state["applied_results"] and key not in self.state["discarded_results"]
                for key, r in self.state["results"].items()):
             raise ToolRejected("请先保存本轮行程，再查询对应版本的车次和酒店", code="UNCOMMITTED_TRIP", next_action="apply_changes")
         if not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-            return {**intake_output(self.state["trip"], self.state.get("home_location", "")), "outcome": "waiting_input"}
+            return {**self.intake(), "outcome": "waiting_input"}
         from .trip_options import options_output, exclusions
         from core.integrations.places.service import validated_trip_anchor
         selection = (self.trip_input or {}).get("capability_selection") or self.state["trip"].get("_capability_selection") or {}
         selection = {"include": list(selection.get("include", [])), "exclude": sorted(exclusions(self.user_text, selection))}
         if "nearby_hotels" not in selection["exclude"] and not validated_trip_anchor(self.state["trip"]):
-            return {**intake_output({**self.state["trip"], "_capability_selection": selection}, self.state.get("home_location", "")), "outcome": "waiting_input"}
+            return {**self.intake({**self.state["trip"], "_capability_selection": selection}), "outcome": "waiting_input"}
         step_id = "trip_choice_queries"
         execution_plan.register(self.state, step_id, WorkItem(role="travel_info", task="查询车次和工作地点附近酒店",
             input_version=self.state["version"], result_id=step_id).model_dump(), title="查询车次与附近酒店", purpose="获取真实候选并根据偏好排序")
@@ -371,20 +440,9 @@ class Turn:
         return output
 
     def fallback(self, reason):
-        selected = []
-        for key in self.state["results"]:
-            try:
-                result = self.results([key])[0]
-                if result.status not in {"success", "partial"}:
-                    continue
-                proposal = result.role == "trip_context" or (result.role == "memory" and result.data.get("preferences"))
-                if proposal and key not in self.state["applied_results"]:
-                    continue
-                selected.append(result)
-            except (ToolRejected, ValidationError):
-                continue
-        if all(r.role == "trip_context" for r in selected) and any(w["role"] == "trip_context" for w in self.state.get("work_items", {}).values()) and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-            output = intake_output(self.state["trip"], self.state.get("home_location", ""))
+        selected = self.deliverable_results()
+        if can_show_intake(self.state, selected) and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
+            output = self.intake()
             output.update(outcome="degraded", stop_reason=reason)
             return output
         choices = self.state.get("choice_output")
@@ -512,6 +570,8 @@ class Turn:
                 # rather than another search which cannot be consumed in time.
                 report_only = role is not None and (state["round"] >= report_round or state.get("force_report"))
                 round_tools = [t for t in tools if t["function"]["name"] == "report"] if report_only else tools
+                if role is None:
+                    round_tools = [t for t in tools if t["function"]["name"] in self.main_tool_names(state)]
                 if role == "policy_rag" and not report_only:
                     # Tool availability enforces retrieve -> read -> extract.
                     # A prompt alone allowed repeated search followed by claims
@@ -548,7 +608,9 @@ class Turn:
             # Reject stale/out-of-phase calls even when a provider ignores the
             # current tool schema; pending calls retain their original phase.
             phase_names = {t["function"]["name"] for t in tools}
-            if role == "policy_rag":
+            if role is None:
+                phase_names = self.main_tool_names(state)
+            elif role == "policy_rag":
                 phase_names = {"report"} if state["round"] >= report_round or state.get("force_report") else {"search_policy"} if state["round"] == 1 else {"read_source", "report"}
             elif role in {"memory", "travel_info"}:
                 phase_names = {"report"} if state["round"] >= report_round or state.get("force_report") else (set(PROFILES[role].tools) - {"read_source"}) | {"report"} if state["round"] == 1 else {"read_source", "report"}
@@ -560,7 +622,8 @@ class Turn:
             if len(calls) > 6:
                 values = [failure("BATCH_LIMIT", "同轮最多6个工具调用；一次 report 汇总全部 findings。") for _ in calls]
             elif any(c["name"] not in phase_names for c in calls):
-                values = [failure("PHASE_VIOLATION", "当前阶段只允许：" + "、".join(sorted(phase_names)), "report" if role else "finish") for _ in calls]
+                action = "report" if role else "finish" if self.state["results"] else "ask_user"
+                values = [failure("PHASE_VIOLATION", "当前阶段只允许：" + "、".join(sorted(phase_names)), action) for _ in calls]
             elif exclusive and len(calls) != 1:
                 values = [failure("EXCLUSIVE_TOOL", "finish、report、apply_changes 必须单独一轮调用") for _ in calls]
             elif (role is None and all(c["name"] == "delegate" for c in calls)) or (role is not None and all(c["name"] in PROFILES[role].tools for c in calls)):
@@ -575,9 +638,19 @@ class Turn:
                 values = [await self.invoke_cached(state, c, role, sources, dependencies) for c in calls]
             for call, value in zip(calls, values):
                 state["messages"].append(tool_message(call, value))
-            progressed = any(not v.get("error") and not v.get("reused") and c["name"] not in {"read_result", "discard_result"}
-                             for c, v in zip(calls, values))
-            state["no_progress"] = 0 if progressed else state.get("no_progress", 0) + 1
+            if role is None and any(c["name"] == "delegate" and v.get("result_id") for c, v in zip(calls, values)):
+                state["admitted"] = True
+            progressed = any(made_progress(c, v) for c, v in zip(calls, values))
+            preparing = any(c["name"] == "read_skill" and v.get("guidance") and not v.get("error")
+                            and not v.get("reused") for c, v in zip(calls, values))
+            if progressed:
+                state["no_progress"] = 0
+            elif preparing and state.get("preparation_rounds", 0) < 3:
+                # A guide plus its two references is legitimate preparation.
+                # A bounded grace period never resets existing failure debt.
+                state["preparation_rounds"] = state.get("preparation_rounds", 0) + 1
+            else:
+                state["no_progress"] = state.get("no_progress", 0) + 1
             state["report_errors"] = state.get("report_errors", 0) + sum(c["name"] == "report" and bool(v.get("error")) for c, v in zip(calls, values))
             state.pop("pending", None)
             state.pop("outputs", None)
@@ -585,6 +658,14 @@ class Turn:
             # rerun a completed report/finish after a lost HTTP connection.
             if len(values) == 1 and isinstance(values[0], dict) and "_terminal" in values[0]:
                 state["terminal"] = values[0]["_terminal"]
+            if role is None and "terminal" not in state:
+                actions = {(v.get("failure") or {}).get("next_action") for v in values}
+                empty_intake = any(v.get("role") == "trip_context" and v.get("status") == "needs_input"
+                                   and not v.get("committed") for v in values)
+                if "ask_user" in actions or empty_intake:
+                    state["terminal"] = self.waiting_for_input()
+                elif "finish" in actions:
+                    state["terminal"] = self.fallback("NO_PROGRESS")
             if role is None and "terminal" not in state:
                 # Once this turn's extraction has been validated, a normal trip
                 # request has a concrete next step. Do not ask the model to
@@ -737,7 +818,7 @@ class Turn:
                 proposal = bool(request.data.get("trip") or request.data.get("trip_action", "update") != "update")
                 if proposal:
                     candidate = SpecialistResult(**request.model_dump(), result_id="validation", role=role, task="validate")
-                    validated_changes(candidate, self.user_text, self.state["trip"], {})
+                    validated_changes(candidate, self.user_text, self.state["trip"], {}, resolved_input=self.state.get("resolved_input"))
                 elif request.status == "success" and not self.state["trip"]:
                     raise ToolRejected("不能把空行程标记成功；填写 data.trip 和 field_sources，无法提取时返回 needs_input 并列出缺项。",
                                        code="EMPTY_TRIP_REPORT", fields=["data.trip", "data.field_sources"])
@@ -838,7 +919,8 @@ class Turn:
             if request.result_id in self.state["applied_results"]:
                 return {"applied": True, "reused": True, "trip": self.state["trip"], "version": self.state["version"]}
             preferences = await run_blocking(self.runtime.services.memory.long_term.get_preference)
-            trip, prefs, action = validated_changes(result, self.user_text, self.state["trip"], preferences)
+            trip, prefs, action = validated_changes(result, self.user_text, self.state["trip"], preferences,
+                                                   resolved_input=self.state.get("resolved_input"))
             if result.role == "trip_context":
                 if self.trip_input:
                     if "capability_selection" in self.trip_input:
@@ -874,6 +956,12 @@ class Turn:
                 self.state["applied_results"].append(request.result_id)
             return receipt
         if name == "finish":
+            if request.pending_input and request.kind not in {"ask", "clarify"}:
+                raise ToolRejected("只有提问可以声明待回答字段或选项")
+            if request.kind == "clarify":
+                if request.result_ids or not request.question.strip():
+                    raise ToolRejected("意图澄清必须填写问题且不选择业务结果")
+                return {"_terminal": clarification_output(request.question, request.pending_input)}
             selected = self.results(request.result_ids)
             if request.kind == "answer" and selected and all(r.status in {"unavailable", "error"} for r in selected):
                 return {"_terminal": self.fallback("NO_PROGRESS")}
@@ -887,18 +975,15 @@ class Turn:
             # calls. A missing model-authored question must not suppress a form
             # that the runtime can already build from committed state.
             if request.kind != "refuse" and not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-                candidates = selected or list(self.results(list(self.state["results"])))
-                if candidates and all(r.role == "trip_context" and r.data.get("trip_action") != "cancel" for r in candidates):
-                    return {"_terminal": {**intake_output(self.state["trip"], self.state.get("home_location", "")), "outcome": "waiting_input"}}
+                candidates = selected or self.deliverable_results()
+                if can_show_intake(self.state, candidates):
+                    return {"_terminal": {**self.intake(), "outcome": "waiting_input"}}
             if request.kind == "answer" and not selected:
                 raise ToolRejected("答案必须选择至少一个专业结果")
             if request.kind == "ask" and not request.question.strip():
                 raise ToolRejected("请填写需要用户补充的问题")
             if request.kind == "answer" and request.question:
                 raise ToolRejected("不要在 question 中写答案")
-            if request.kind != "refuse" and len(selected) == 1 and selected[0].role == "trip_context" and selected[0].data.get("trip_action") != "cancel":
-                if not evaluate_trip_intake(self.state["trip"])["planning_ready"]:
-                    return {"_terminal": {**intake_output(self.state["trip"], self.state.get("home_location", "")), "outcome": "waiting_input"}}
             output = render(request, selected)
             if request.kind == "answer" and any(r.role in {"trip_context", "trip_planner"} for r in selected) and hasattr(self.runtime.services, "prepare_trip_options"):
                 choices = await self.prepare_options()
@@ -910,6 +995,8 @@ class Turn:
                 return {"_terminal": choices}
             if request.kind == "ask":
                 output["outcome"] = "waiting_input"
+                if request.pending_input:
+                    output["_pending_input"] = {"question": request.question, "input": request.pending_input.model_dump()}
             return {"_terminal": output}
         raise ToolRejected("无效操作")
 
@@ -919,7 +1006,7 @@ class Turn:
             return await self._delegate(parent, call, request)
 
     async def _delegate(self, parent, call, request):
-        guard = guard_user_input(request.task, conversation_context="当前企业差旅委派任务")
+        guard = guard_user_input(request.task)
         if guard and guard.intent == "unsupported":
             raise ToolRejected("委派任务超出企业差旅范围")
         if request.role == "trip_context" and self.state.get("intake_submission_applied"):
@@ -985,6 +1072,7 @@ class Turn:
             # A leaf receives only current user text, a small trip snapshot, and
             # explicitly selected dependency results. No parent transcript/tool log.
             context = {"request": call.get("request_text", self.text), "task": request.task, "trip": self.state["trip"],
+                "resolved_input": self.state.get("resolved_input"), "pending_input": self.state.get("reply_to"),
                 "today": beijing_today(),
                 "dependencies": [r.model_dump(exclude={"sources"}) for r in dependencies]}
             child = {"result_id": result_id, "role": request.role, "task_key": operation, "version": self.state["version"], "round": 0, "sources": [], "read_ids": [],
@@ -1043,4 +1131,7 @@ class Turn:
         await self.publish_plan()
         await self.emit("completed" if report.status not in {"error", "unavailable"} else "failed", result.result_id, request.role)
         logger.info("Specialist completed role=%s status=%s duration=%.2f", request.role, report.status, time.perf_counter() - started)
-        return {**result.brief(), "committed": result.result_id in self.state["applied_results"]}
+        brief = {**result.brief(), "committed": result.result_id in self.state["applied_results"]}
+        if report.status in {"error", "unavailable"} and (child.get("last_error") or {}).get("code") in {"EMPTY_TRIP_REPORT", "EMPTY_CHANGESET"}:
+            brief["failure"] = {**child["last_error"], "next_action": "ask_user"}
+        return brief

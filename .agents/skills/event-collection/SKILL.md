@@ -10,4 +10,5 @@ description: Collect and incrementally update the employee's current company tri
 每个变更放在 data.trip 中，data.field_sources 引用本轮用户原文。未知日期不能默认今天。
 新行程用 trip_action=new，取消出差用 cancel，并提供 action_source；修改已有行程用 update。
 新行程不继承旧行程字段。缺少的必填项交给主 Agent 统一补问。
-主 Agent 审阅后调用 apply_changes；不要在提交前声称已经保存。
+运行时校验原文依据并自动提交有效行程变更；committed=true 才表示已保存，主 Agent 不重复 apply_changes。
+无法确定用户是否在提供行程信息时先澄清意图；没有可提取字段时返回 needs_input，不创建空行程或宣称保存成功。
