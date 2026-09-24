@@ -149,16 +149,17 @@ async def test_explicit_exclusions_make_no_provider_calls():
 
 
 @pytest.mark.asyncio
-async def test_ready_form_commits_verified_anchor_then_delivers_without_model():
+async def test_ready_form_commits_verified_anchor_then_model_selects_delivery():
+    from tests.test_complete_trip import CompleteTripModel
     service, calls = services()
     store = FakeStore(service)
     fields = trip()
     text = build_quick_trip_message(fields)
-    output = await Supervisor(None, service, store, CONFIG).run(SCOPE, text, trip_input=fields)
+    output = await Supervisor(CompleteTripModel(), service, store, CONFIG).run(SCOPE, text, trip_input=fields)
     assert output["answer_document"]["trip_options"]["hotels"]
     assert service.trip["work_location_verified"]["provider_place_id"] == "P1"
     assert store.writes == 1 and any(call[0] == "train" for call in calls)
-    again = await Supervisor(None, service, store, CONFIG).run(SCOPE, text, trip_input=fields)
+    again = await Supervisor(CompleteTripModel(), service, store, CONFIG).run(SCOPE, text, trip_input=fields)
     assert again["idempotent_replay"] and store.writes == 1
 
 
@@ -168,8 +169,10 @@ async def test_read_skill_progressive_reference_and_path_boundary():
     turn = Turn(Supervisor(None, service, FakeStore(service), CONFIG), SCOPE, "规划", "规划", None)
     content = await turn.invoke({}, {"name": "read_skill", "arguments": {"name": "plan-trip", "resource": "references/place-selection.md"}}, None, None, [])
     assert "POI" in content["guidance"]
-    with pytest.raises(ToolRejected):
-        await turn.invoke({}, {"name": "read_skill", "arguments": {"name": "plan-trip", "resource": "references/../../.env"}}, None, None, [])
+    rejected = await turn.invoke({}, {"name": "read_skill", "arguments": {"name": "plan-trip", "resource": "references/../../.env"}}, None, None, [])
+    assert rejected["failure"]["code"] == "SKILL_RESOURCE_NOT_FOUND"
+    assert "guidance" not in rejected
+    assert "references/place-selection.md" in rejected["available_resources"]
 
 
 @pytest.mark.asyncio
@@ -187,7 +190,7 @@ async def test_progressive_skill_reads_do_not_trigger_no_progress_termination():
         resources = ["", "references/place-selection.md", "references/travel-choices.md"]
         calls += 1
         if calls == 1:
-            assert "read_skill" not in {t["function"]["name"] for t in kwargs["tools"]}
+            assert "read_skill" in {t["function"]["name"] for t in kwargs["tools"]}
             return reply(("delegate", {"role": "memory", "task": "查询本次差旅偏好"}))
         if calls <= 4:
             return reply(("read_skill", {"name": "plan-trip", "resource": resources[calls-2]}))
@@ -202,7 +205,7 @@ async def test_stale_work_location_is_cleared_when_city_changes():
     service, _ = services()
     service.trip = trip()
     store = FakeStore(service)
-    output = await Supervisor(None, service, store, CONFIG).run(SCOPE, "目的地：南京")
+    output = await Supervisor(intake_model, service, store, CONFIG).run(SCOPE, "目的地：南京")
     assert service.trip["destination"] == "南京" and service.trip["work_location_verified"] is None
     assert not service.trip["work_location"]
     assert output["presentation_document"]["trip_input"]["destination"] == "南京"
@@ -233,11 +236,11 @@ async def test_form_clear_invalidates_anchor_and_persists_exclusions():
     store = FakeStore(service)
     fields = trip(False)
     fields.update(work_location="", work_location_place_id="", capability_selection={"include": [], "exclude": ["train"]})
-    output = await Supervisor(None, service, store, CONFIG).run(SCOPE, build_quick_trip_message(fields), trip_input=fields)
+    output = await Supervisor(intake_model, service, store, CONFIG).run(SCOPE, build_quick_trip_message(fields), trip_input=fields)
     assert service.trip["work_location_verified"] is None
     assert not calls and output["presentation_document"]["capability_selection"]["exclude"] == ["train"]
     next_scope = Scope(user_id=SCOPE.user_id, session_id=SCOPE.session_id, request_id="followup-exclusions")
-    next_output = await Supervisor(None, service, store, CONFIG).run(next_scope, "工作时间：下午两点开会")
+    next_output = await Supervisor(intake_model, service, store, CONFIG).run(next_scope, "工作时间：下午两点开会")
     assert next_output["presentation_document"]["capability_selection"]["exclude"] == ["train"]
     assert not calls
 
@@ -262,3 +265,8 @@ async def test_live_model_uses_choices_for_a_trip_request():
     assert result["presentation_document"]["place_selection_required"]
     assert store.writes == 0 and not calls
     print("live_model_place_intake", result["outcome"])
+
+
+async def intake_model(*args, **kwargs):
+    from tests.test_supervisor_runtime import reply
+    return reply(("request_trip_details", {}))

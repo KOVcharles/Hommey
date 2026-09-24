@@ -141,6 +141,8 @@ class KnowledgeBaseLibrary:
 
     @staticmethod
     def _title(path: Path, content: str) -> str:
+        if path.suffix.lower() == ".pdf":
+            return path.stem
         for line in content.splitlines():
             title = line.strip().lstrip("#").strip()
             if title:
@@ -182,7 +184,8 @@ def create_knowledge_base_router(
         statuses = await run_in_threadpool(management.document_index_statuses, documents)
         for document in documents:
             document["index_status"] = statuses.get(document["id"], "pending")
-        return {"documents": documents, "total": len(documents)}
+        return {"documents": documents, "total": len(documents),
+                "search_scopes": list(management.config.search_scopes)}
 
     @router.post("/api/knowledge/documents")
     async def upload_knowledge_documents(

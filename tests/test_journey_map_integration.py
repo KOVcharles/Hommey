@@ -96,7 +96,7 @@ async def test_modified_venue_is_verified_and_gets_entirely_new_hotels():
     async def submit(poi, request_id):
         fields=trip(False); fields.update(work_location='客户端名称不可信',work_location_place_id=poi)
         text,verified,_=await _prepare_chat_input(ChatRequest(input_source='quick_trip_form',trip_input=fields),Places())
-        return await Supervisor(None,service,store,CONFIG).run(Scope(user_id=SCOPE.user_id,session_id=SCOPE.session_id,request_id=request_id),text,trip_input=verified)
+        return await Supervisor(choose_options,service,store,CONFIG).run(Scope(user_id=SCOPE.user_id,session_id=SCOPE.session_id,request_id=request_id),text,trip_input=verified)
     first=await submit('P1','map-first')
     second=await submit('P2','map-second')
     a=first['answer_document']['trip_options']; b=second['answer_document']['trip_options']
@@ -112,6 +112,15 @@ async def test_excluding_hotels_does_not_require_meeting_place():
     service,calls=services(); fields=trip(False)
     fields['capability_selection']={'include':[],'exclude':['nearby_hotels']}
     from webui_new.quick_trip import build_quick_trip_message
-    output=await Supervisor(None,service,FakeStore(service),CONFIG).run(SCOPE,build_quick_trip_message(fields),trip_input=fields)
+    output=await Supervisor(choose_options,service,FakeStore(service),CONFIG).run(SCOPE,build_quick_trip_message(fields),trip_input=fields)
     assert output['answer_document']['trip_options']['trains']
     assert all(call[0]!='hotel' for call in calls)
+
+
+async def choose_options(messages, **kwargs):
+    from tests.test_supervisor_runtime import reply
+    # This integration covers map/transport providers. Missing policy/planning
+    # remains a degraded delivery, retaining the real candidate board.
+    if any(t['function']['name'] == 'delegate' for t in kwargs['tools']):
+        return reply(('prepare_trip_options', {}))
+    raise OSError('policy/planner outside this map integration fixture')

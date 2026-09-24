@@ -50,9 +50,10 @@ _STRUCTURAL_BOUNDARY_RE = re.compile(
 )
 
 
-def parse_text_blocks(text: str, *, page_number: int = 1, file_type: str = "txt") -> List[Block]:
+def parse_text_blocks(text: str, *, page_number: int = 1, file_type: str = "txt",
+                      heading_stack: Optional[HeadingStack] = None) -> List[Block]:
     """Split decoded ``text`` into structural blocks for one page."""
-    return _parse_blocks(text.splitlines(), [], 0, page_number, file_type)
+    return _parse_blocks(text.splitlines(), [], 0, page_number, file_type, heading_stack)
 
 
 def _parse_blocks(
@@ -61,18 +62,15 @@ def _parse_blocks(
     seq: int,
     page_number: int,
     file_type: str,
+    heading_stack: Optional[HeadingStack] = None,
 ) -> List[Block]:
     """Iterative line walker.  ``stack`` holds (level:int, name:str) pairs."""
-    stack: List[List[object]] = []  # list of (level:int, name:str)
+    stack = heading_stack if heading_stack is not None else HeadingStack()
     total = len(lines)
     index = 0
 
-    def flush_stack_level(level: int) -> None:
-        while stack and int(stack[-1][0]) >= level:
-            stack.pop()
-
     def current_path() -> List[str]:
-        return [str(item[1]) for item in stack]
+        return stack.current_path()
 
     def add_block(block_type: str, text: str, level: int = 0) -> None:
         nonlocal seq
@@ -87,16 +85,15 @@ def _parse_blocks(
             )
         )
 
-    def add_heading(level: int, name: str) -> None:
+    def add_heading(level: int, name: str, source_text: Optional[str] = None) -> None:
         nonlocal seq
-        flush_stack_level(level)
-        stack.append([level, name])
+        stack.push(level, name)
         seq += 1
         blocks.append(
             Block(
                 block_id=_block_id(page_number, seq),
                 block_type=BLOCK_TYPE_HEADING,
-                text=name,
+                text=source_text if source_text is not None else name,
                 level=level,
                 heading_path=current_path(),
             )
@@ -147,7 +144,7 @@ def _parse_blocks(
         heading = match_heading(line, file_type)
         if heading is not None:
             level, name = heading
-            add_heading(level, name)
+            add_heading(level, name, stripped if file_type == "pdf" else None)
             index += 1
             continue
 

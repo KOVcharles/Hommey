@@ -57,6 +57,7 @@ class PostgresVectorStore(VectorStore):
         vector_top_k: int = 10,
         bm25_top_k: int = 10,
         sparse_backend: str = "python",
+        search_scopes: tuple[str, ...] = (),
         pool: Any | None = None,
         embedder: TextEmbedder | None = None,
     ):
@@ -69,6 +70,7 @@ class PostgresVectorStore(VectorStore):
         self.vector_top_k = max(1, int(vector_top_k))
         self.bm25_top_k = max(1, int(bm25_top_k))
         self.sparse_backend = (sparse_backend or "python").lower()
+        self.search_scopes = search_scopes
         self.pool = pool or get_postgres_pool(postgres_dsn)
         self.embedding_model = embedder or create_text_embedder(
             backend=embedding_backend,
@@ -384,10 +386,15 @@ class PostgresVectorStore(VectorStore):
                 JOIN rag_collections r
                   ON r.collection_name=c.collection_name AND r.active_version=c.index_version
                 WHERE c.collection_name=%s
+                  AND (%s::text[] = '{}'::text[] OR EXISTS (
+                      SELECT 1 FROM unnest(%s::text[]) AS scope(prefix)
+                      WHERE starts_with(c.document_id, scope.prefix || '/')
+                  ))
                 ORDER BY c.embedding <=> %s::vector
                 LIMIT %s
                 """,
-                (vector, self.collection_name, vector, int(top_k or self.vector_top_k)),
+                (vector, self.collection_name, list(self.search_scopes), list(self.search_scopes),
+                 vector, int(top_k or self.vector_top_k)),
             )
             rows = cursor.fetchall()
         return [
@@ -410,9 +417,13 @@ class PostgresVectorStore(VectorStore):
                 JOIN rag_collections r
                   ON r.collection_name=c.collection_name AND r.active_version=c.index_version
                 WHERE c.collection_name=%s
+                  AND (%s::text[] = '{}'::text[] OR EXISTS (
+                      SELECT 1 FROM unnest(%s::text[]) AS scope(prefix)
+                      WHERE starts_with(c.document_id, scope.prefix || '/')
+                  ))
                 ORDER BY c.chunk_id
                 """,
-                (self.collection_name,),
+                (self.collection_name, list(self.search_scopes), list(self.search_scopes)),
             )
             return [dict(row) for row in cursor.fetchall()]
 

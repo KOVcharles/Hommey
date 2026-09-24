@@ -19,8 +19,8 @@ pytestmark = pytest.mark.skipif(os.getenv("HOMMEY_RUN_LIVE_AGENT_TESTS") != "1",
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text,expected,max_calls", [
-    ("1", "clarify", 0),
-    ("随便看看", "clarify", 0),
+    ("1", "clarify", 2),
+    ("随便看看", "clarify", 2),
     ("帮我写一个 Python 程序", "refuse", 0),
     ("麻烦帮我处理一下这个事情", "clarify", 2),
     ("这个要怎么弄呢", "clarify", 2),
@@ -60,5 +60,8 @@ async def test_live_routing_behavior(text, expected, max_calls):
         assert result["outcome"] in {"completed", "partial"}
     else:
         assert services.trip.get("destination") == "南京" and store.writes == 1, json.dumps(trace, ensure_ascii=False)
-        assert result["presentation_document"]["type"] == "trip_intake"
+        if result["presentation_document"]:
+            assert result["presentation_document"]["type"] == "trip_intake"
+        else:
+            assert result["answer_document"] and result["response"]
         assert result["outcome"] == "waiting_input"

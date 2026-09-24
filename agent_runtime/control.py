@@ -1,4 +1,4 @@
-"""Runtime-owned termination and recovery helpers; no model decides these rules."""
+"""Execution bounds, progress accounting, and bounded evidence retention."""
 from __future__ import annotations
 
 import re
@@ -18,13 +18,9 @@ def task_key(request, version):
                         "task": re.sub(r"[\s，。！？,.!?]+", "", request.task).lower()})
 
 
-def is_continue(text):
-    return re.sub(r"[\s，。！？,.!?]+", "", text) in {"继续", "请继续", "继续处理", "继续刚才的任务"}
-
-
 def made_progress(call, value):
     """Count business facts, evidence or commits, not successful RPC envelopes."""
-    if value.get("error") or value.get("reused"):
+    if value.get("error") or value.get("reused") or value.get("repeated_observation"):
         return False
     if "_terminal" in value:
         return True
@@ -34,8 +30,8 @@ def made_progress(call, value):
             value.get("committed") or value.get("status") in {"success", "partial"})
     if name == "apply_changes":
         return bool(value.get("applied"))
-    if name == "read_source":
-        return bool(value.get("id"))
+    if name in {"read_source", "read_result"}:
+        return bool(value.get("id") or value.get("result_id"))
     if name in {"search_policy", "search_memory", "search_trains", "get_weather", "find_hotels", "search_commute"}:
         return bool(value.get("sources"))
     return False
@@ -46,6 +42,7 @@ def degraded_output(results, reason):
         "NO_PROGRESS": "本次部分步骤未能完成，已停止重复处理。以下保留可核实的结果。",
         "TURN_TIMEOUT": "本次处理已达到时间上限，以下保留已完成的结果。",
         "UPSTREAM_UNAVAILABLE": "部分服务暂时不可用，以下保留已完成的结果。",
+        "SUPERVISOR_ROUND_LIMIT": "本次处理已达到步骤轮数上限，以下保留已完成的结果。",
     }
     notice = messages.get(reason, "本次处理已达到执行上限，以下保留已完成的结果。")
     if not results:
@@ -63,24 +60,28 @@ def degraded_output(results, reason):
     return result
 
 
-def restore_results(checkpoint, version, is_valid):
-    """Restore completed, committed evidence only; never replay historical writes."""
-    if checkpoint.get("checkpoint_version") != 2:
-        return {}
-    restored = {}
-    discarded = set(checkpoint.get("discarded_results", []))
-    applied = set(checkpoint.get("applied_results", []))
-    for key, raw in list(checkpoint.get("results", {}).items())[-12:]:
+def restore_results(checkpoint, *, max_results=24, max_chars=350000):
+    """Retain bounded same-session evidence, including stale/failed reports.
+
+    A new turn must not inherit executable calls, failure quotas or UI steps.
+    Committed IDs travel separately, so historical proposals cannot be replayed.
+    Whole oldest results are evicted at the retention boundary, never truncated.
+    """
+    from .context_window import encoded_size
+    restored, size = {}, 0
+    for key, raw in reversed(list(checkpoint.get("results", {}).items())):
         try:
             result = SpecialistResult.model_validate(raw)
-            if key in discarded or result.input_version != version or result.status not in {"success", "partial"}:
+            if result.result_id != key:
                 continue
-            proposal = result.role == "trip_context" and (result.data.get("trip") or result.data.get("trip_action", "update") != "update")
-            proposal |= result.role == "memory" and bool(result.data.get("preferences"))
-            if proposal and key not in applied:
+            value = result.model_dump()
+            cost = encoded_size(value)
+            if len(restored) >= max_results:
+                break
+            if size + cost > max_chars:
                 continue
-            if is_valid(result):
-                restored[key] = result.model_dump()
+            restored[key] = value
+            size += cost
         except (ValueError, TypeError, KeyError):
             continue
-    return restored
+    return dict(reversed(list(restored.items())))

@@ -41,7 +41,7 @@ HEADING_RULES: List[HeadingRule] = [
     HeadingRule(
         name="chinese_chapter",
         level=1,
-        pattern=re.compile(r"^第[一二三四五六七八九十百零〇\d]+[章节部分篇]\s*(.*)$"),
+        pattern=re.compile(r"^第[一二三四五六七八九十百零〇\d]+(?:部分|章|节|篇)\s*(.*)$"),
         formats=("txt", "md", "pdf", "docx"),
     ),
     # The dot separators must be followed by whitespace so a decimal amount

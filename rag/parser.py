@@ -12,7 +12,7 @@ from abc import ABC, abstractmethod
 from pathlib import Path
 from typing import Dict, List, Optional
 
-from .block_parser import parse_text_blocks
+from .block_parser import HeadingStack, parse_text_blocks
 from .document_loader import infer_category
 from .encodings import decode_text_bytes
 from .heading_rules import match_heading
@@ -117,6 +117,7 @@ class PdfTextParser(DocumentParser):
         parsed: List[ParsedDocument] = []
         reader = PdfReader(document.source_path)
         doc_title = _derive_title("", document.filename, "pdf")
+        heading_stack = HeadingStack()
         for index, page in enumerate(reader.pages, start=1):
             try:
                 text = (page.extract_text() or "").strip()
@@ -158,7 +159,7 @@ class PdfTextParser(DocumentParser):
                     )
                 )
                 continue
-            blocks = parse_text_blocks(text, page_number=index, file_type="pdf")
+            blocks = parse_text_blocks(text, page_number=index, file_type="pdf", heading_stack=heading_stack)
             parsed.append(
                 ParsedDocument(
                     text=_render_blocks(blocks, text),

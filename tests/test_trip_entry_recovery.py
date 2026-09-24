@@ -12,11 +12,11 @@ from tests.test_supervisor_control import role_of
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text,origin", [("我要去重庆出差", None), ("我准备去重庆出差。", None),
     ("我要从北京去重庆出差", "北京"), ("去重庆出差", None), ("从北京去重庆出差", "北京")])
-async def test_explicit_trip_entry_saves_literal_places_and_returns_form_without_model(text, origin):
+async def test_explicit_trip_entry_saves_literal_places_and_returns_model_selected_form(text, origin):
     services = FakeServices()
     store = FakeStore(services)
     async def model(*args, **kwargs):
-        raise AssertionError("A simple incomplete trip must not wait for the model")
+        return reply(("request_trip_details", {}))
     runtime = Supervisor(model, services, store, CONFIG)
     result = await runtime.run(SCOPE, text)
     card = result["presentation_document"]
@@ -27,7 +27,7 @@ async def test_explicit_trip_entry_saves_literal_places_and_returns_form_without
     assert missing == ({"start_date", "trip_length", "trip_purpose"} if origin else {"origin", "start_date", "trip_length", "trip_purpose"})
     assert not services.trip.get("start_date") and not services.trip.get("trip_purpose")
     assert services.trip.get("origin") == origin and store.writes == 1
-    assert result["public_plan"]["steps"][0]["status"] == "needs_input"
+    assert result["public_plan"]["steps"][0]["status"] == "succeeded"
     replay = await runtime.run(SCOPE, text)
     assert replay["presentation_document"] == card and store.writes == 1
 
@@ -47,7 +47,7 @@ async def test_existing_chongqing_destination_is_reused_without_duplicate_write(
     services = FakeServices()
     services.trip = {"destination": "重庆", "status": "active"}
     store = FakeStore(services)
-    result = await Supervisor(None, services, store, CONFIG).run(SCOPE, "我要去重庆出差")
+    result = await Supervisor(intake_model, services, store, CONFIG).run(SCOPE, "我要去重庆出差")
     assert store.writes == 0
     assert result["outcome"] == "waiting_input"
     assert result["presentation_document"]["progress"] == {"completed": 1, "total": 6}
@@ -67,20 +67,23 @@ async def test_model_false_success_and_empty_finish_question_still_produce_form(
         main_calls += 1
         if not outputs(messages):
             return reply(("delegate", {"role": "trip_context", "task": text}))
-        return reply(("finish", {"kind": "ask"}))
+        if main_calls == 2:
+            return reply(("finish", {"kind": "ask"}))
+        assert outputs(messages)[-1]["error"]
+        return reply(("request_trip_details", {}))
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE, text)
-    assert main_calls == 2 and store.writes == 1
+    assert main_calls == 3 and store.writes == 1
     assert result["presentation_document"]["route"]["destination"] == "重庆"
     assert result["outcome"] == "waiting_input" and not result.get("stop_reason")
     checkpoint = store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]
     extraction = next(iter(checkpoint["results"].values()))
-    assert extraction["status"] == "needs_input" and "origin" in extraction["missing_info"]
-    assert not any(o.get("error") for o in outputs(checkpoint["main"]["messages"]))
+    assert extraction["status"] == "success" and extraction["missing_info"] == []
+    assert sum(bool(o.get("error")) for o in outputs(checkpoint["main"]["messages"])) == 1
 
 
 def test_legacy_successful_trip_result_does_not_disable_fallback_form():
     services = FakeServices()
-    turn = Turn(Supervisor(None, services, FakeStore(services), CONFIG), SCOPE, "我要去重庆出差", "我要去重庆出差", None)
+    turn = Turn(Supervisor(intake_model, services, FakeStore(services), CONFIG), SCOPE, "我要去重庆出差", "我要去重庆出差", None)
     trip = {"destination": "重庆"}
     version = trip_version(trip)
     result = SpecialistResult(result_id="result_old", role="trip_context", task="整理行程", status="success",
@@ -90,16 +93,15 @@ def test_legacy_successful_trip_result_does_not_disable_fallback_form():
         "work_items": {"old": WorkItem(role="trip_context", task="整理行程", result_id=result.result_id,
             input_version=version, status="completed").model_dump()}}
     output = turn.fallback("NO_PROGRESS")
-    assert output["presentation_document"]["type"] == "trip_intake"
-    assert output["presentation_document"]["route"]["destination"] == "重庆"
-    assert output["answer_document"] is None
+    assert output["presentation_document"] is None
+    assert output["outcome"] == "degraded" and "已整理" in output["response"]
 
 
 @pytest.mark.asyncio
 async def test_real_stream_adapter_delivers_intake_document_and_waiting_status():
     from webui_new.manager import HommeyWebInstance
     services = FakeServices()
-    runtime = Supervisor(None, services, FakeStore(services), CONFIG)
+    runtime = Supervisor(intake_model, services, FakeStore(services), CONFIG)
     instance = object.__new__(HommeyWebInstance)
     async def process(message, **kwargs):
         return await runtime.run(SCOPE, message, progress=kwargs.get("progress_callback"))
@@ -109,3 +111,7 @@ async def test_real_stream_adapter_delivers_intake_document_and_waiting_status()
     assert len(cards) == 1 and cards[0]["document"]["route"]["destination"] == "重庆"
     assert events[-1]["type"] == "done" and events[-1]["outcome"] == "waiting_input"
     assert not any(e["type"] in {"answer_document", "error"} for e in events)
+
+
+async def intake_model(*args, **kwargs):
+    return reply(("request_trip_details", {}))

@@ -25,31 +25,14 @@ class Delegate(StrictModel):
     result_ids: list[str] = Field(default_factory=list, max_length=12)
 
 
-class PendingInput(StrictModel):
-    """One displayed question, not a blanket permission to consume short replies."""
-    field: Literal["origin", "destination", "start_date", "end_date", "duration_days", "trip_length", "trip_purpose",
-                   "work_location", "work_schedule"] | None = None
-    choices: list[str] = Field(default_factory=list, max_length=12,
-                               description="按展示顺序列出选项；运行时添加编号，用户可回复编号")
-
-    @model_validator(mode="after")
-    def one_input_type(self):
-        if bool(self.field) == bool(self.choices):
-            raise ValueError("指定一个待补字段或一组选项，不能同时指定")
-        if any(not value.strip() or len(value) > 160 for value in self.choices):
-            raise ValueError("选项必须是非空短文本")
-        if len(set(self.choices)) != len(self.choices):
-            raise ValueError("选项不能重复")
-        return self
-
-
 class Finish(StrictModel):
-    kind: Literal["answer", "ask", "clarify", "refuse"] = Field(default="answer",
-        description="answer 交付结果；ask 已确定任务但缺资料；clarify 意图不明，不启动业务；refuse 明确超范围")
-    result_ids: list[str] = Field(default_factory=list, max_length=16)
+    kind: Literal["answer", "help", "ask", "clarify", "refuse"] = Field(default="answer",
+        description="answer 展示所选业务报告；help 展示服务介绍＋所选业务报告，仅介绍时不需要报告；ask 已确定任务但缺资料；clarify 意图不明，不启动业务；refuse 明确超范围")
+    result_ids: list[str] = Field(default_factory=list, max_length=16,
+        description="需要在本轮完整展示的业务报告，不是参考资料列表。仅介绍助手时留空；用户同时要求业务结论时在此选择报告，读取不会自动展示。")
     question: str = Field(default="", max_length=500)
-    pending_input: PendingInput | None = Field(default=None,
-        description="仅 ask/clarify 使用；记录本次实际询问的字段或展示的编号选项")
+    reuse_reasons: dict[str, str] = Field(default_factory=dict, max_length=16,
+        description="交付历史结果时必填：每个历史 result_id 对应其与本轮问题的具体关联；本轮结果不填。读取历史不等于交付历史，不为凑齐答案附带无关旧报告。")
 
 
 class ReadResult(StrictModel):
@@ -59,7 +42,7 @@ class ReadResult(StrictModel):
 class ReadSkill(StrictModel):
     name: Literal["event-collection", "ask-question", "memory-query", "preference",
                   "query-info", "train-query", "place-query", "plan-trip", "check-trip-compliance"]
-    resource: str = Field(default="", max_length=160, description="按需读取 SKILL.md 引用的 references/ 文件；留空读取入口")
+    resource: str = Field(default="", max_length=160, description="留空读取入口；仅可使用返回的 available_resources 路径，不是工具名或其他 Skill 名")
 
 
 class ApplyChanges(StrictModel):
@@ -77,7 +60,7 @@ class Report(StrictModel):
 class PolicyFinding(StrictModel):
     item: str = Field(min_length=1, max_length=60)
     conclusion: str = Field(min_length=1, max_length=300, description="直接回答用户的具体标准，包含金额、币种、单位或规则；不要只说已查到")
-    applicability: str = Field(default="", max_length=300, description="适用城市、职级、有效期及例外；未知条件明确说明")
+    applicability: str = Field(default="", max_length=300, description="适用机构、经费来源、人员类型、城市、有效期及例外；未知条件明确说明")
     evidence_refs: list[str] = Field(max_length=6, description="必填：确定结论的直接来源；没有来源的未知事项填空数组，不会作为标准展示")
 
 
@@ -152,7 +135,7 @@ class ItineraryDay(StrictModel):
 
 
 class Itinerary(StrictModel):
-    days: list[ItineraryDay] = Field(min_length=1, max_length=30)
+    days: list[ItineraryDay] = Field(max_length=30)
 
 
 class PlanData(StrictModel):
@@ -162,6 +145,12 @@ class PlanData(StrictModel):
 
 class PlanReport(Report):
     data: PlanData
+
+    @model_validator(mode="after")
+    def successful_plan_has_days(self):
+        if self.status == "success" and not self.data.itinerary.days:
+            raise ValueError("成功规划必须包含每日安排；日期未知时返回 needs_input 或 partial")
+        return self
 
 
 class ComplianceCheck(StrictModel):

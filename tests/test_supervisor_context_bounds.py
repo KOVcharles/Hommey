@@ -5,18 +5,18 @@ import pytest
 
 from agent_runtime.context_window import compact_tool_history, encoded_size
 from agent_runtime.contracts import Report, ToolRejected, PolicyReport, schema
-from agent_runtime.engine import MAIN_TOOLS, Supervisor, is_intake_entry, is_direct_policy_query
+from agent_runtime.engine import MAIN_TOOLS, Supervisor, is_direct_policy_query
 from agent_runtime.model_client import assistant_message, tool_message
 from agent_runtime.services import SourceScope
 from agent_runtime.validation import validate_report
-from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply
+from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply, model_payload
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["出差", "chuchai", "chu chai", "我要出差！", "帮我安排出差"])
-async def test_empty_intake_is_zero_model_calls_and_replayable(text):
+async def test_empty_intake_is_model_selected_and_replayable(text):
     async def forbidden(*args, **kwargs):
-        raise AssertionError("intake must not invoke a model")
+        return reply(("request_trip_details", {}))
     services = FakeServices()
     store = FakeStore(services)
     runtime = Supervisor(forbidden, services, store, CONFIG)
@@ -30,9 +30,15 @@ async def test_empty_intake_is_zero_model_calls_and_replayable(text):
     assert (await runtime.run(SCOPE, text))["idempotent_replay"]
 
 
-@pytest.mark.parametrize("text", ["要去重庆出差，看看差旅标准", "取消出差", "上次出差去哪里", "出差帮我写代码", "出差，查天气"])
-def test_intake_shortcut_does_not_swallow_other_intents(text):
-    assert not is_intake_entry(text)
+@pytest.mark.asyncio
+@pytest.mark.parametrize("text", ["取消出差", "上次出差去哪里", "出差，查天气"])
+async def test_intake_does_not_swallow_other_intents(text):
+    async def model(messages, **kwargs):
+        assert model_payload(messages)["conversation"][-1]["content"] == text
+        return reply(("finish", {"kind": "ask", "question": "请补充具体需求"}))
+    services = FakeServices()
+    result = await Supervisor(model, services, FakeStore(services), CONFIG).run(SCOPE, text)
+    assert result["presentation_document"] is None
 
 
 @pytest.mark.parametrize("text", ["要去重庆出差，看看差旅标准", "我准备去上海出差 查一下公司差旅标准", "查询企业差旅制度"])

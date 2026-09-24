@@ -34,7 +34,7 @@ def grounded_date(value, quote):
     return False
 
 
-def validated_changes(result, user_text, current_trip, current_preferences, *, resolved_input=None):
+def validated_changes(result, user_text, current_trip, current_preferences):
     if result.status not in {"success", "partial", "needs_input"}:
         raise ToolRejected("失败结果不能提交变更")
     trip = result.data.get("trip", {}) if result.role == "trip_context" else {}
@@ -72,12 +72,6 @@ def validated_changes(result, user_text, current_trip, current_preferences, *, r
                 raise ToolRejected(f"{key} 缺少本轮用户明确表达的原文依据")
             if not is_safe_preference_value(value):
                 raise ToolRejected("变更包含不允许持久保存的敏感内容")
-            # A bare number is a duration only when the runtime bound it to a
-            # displayed question. Models cannot supply this binding themselves.
-            if (values is trip and key == "duration_days" and type(value) is int and 1 <= value <= 90
-                    and resolved_input and key == resolved_input.get("field")
-                    and value == resolved_input.get("value") and quote == resolved_input.get("quote") == user_text):
-                continue
             if key in {"start_date", "end_date"}:
                 if not isinstance(value, str) or not grounded_date(value, quote):
                     raise ToolRejected(f"{key} 不能从原文确定，请补问明确日期")
@@ -85,7 +79,7 @@ def validated_changes(result, user_text, current_trip, current_preferences, *, r
                 if type(value) is not int or not 1 <= value <= 90:
                     raise ToolRejected("出差天数必须是 1 到 90 的整数")
                 chinese = {"一": 1, "两": 2, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-                if not re.search(rf"(?<!\d){value}\s*天", quote) and not any(n == value and k + "天" in quote for k, n in chinese.items()):
+                if quote.strip() != str(value) and not re.search(rf"(?<!\d){value}\s*天", quote) and not any(n == value and k + "天" in quote for k, n in chinese.items()):
                     raise ToolRejected("出差天数缺少明确依据")
             else:
                 parts = value if key in PREFERENCE_LIST_COLUMNS else [value]

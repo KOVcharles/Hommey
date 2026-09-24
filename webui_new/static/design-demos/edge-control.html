@@ -1,0 +1,196 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <title>Hommey · 原版渐进调整</title>
+    <link rel="icon" href="../brand/hommey-favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="../hommey.css">
+    <link rel="stylesheet" href="edge-control.css">
+    <script src="edge-control.js" defer></script>
+</head>
+<body class="chat-page">
+    <div id="appShell" class="app-shell" data-view="home">
+        <header class="topbar">
+            <div class="topbar-group">
+                <button id="sidebarToggle" class="icon-button" type="button" aria-label="打开侧栏">
+                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+                </button>
+                <div class="brand-stack">
+                    <button id="homeButton" class="product-home" type="button">
+                        <span class="mini-logo" aria-hidden="true">
+                            <svg viewBox="0 -4 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
+                        </span>
+                        <span>Hommey</span>
+                    </button>
+                    <a class="github-icon-link" href="https://github.com/KOVcharles/Hommey" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 Hommey 项目" title="GitHub">
+                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.8c.57.1.78-.25.78-.55v-2.15c-3.17.69-3.84-1.35-3.84-1.35-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.73-1.52-2.53-.29-5.19-1.27-5.19-5.65 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.17A10.9 10.9 0 0 1 12 5.08c.97 0 1.94.13 2.85.39 2.18-1.48 3.14-1.17 3.14-1.17.62 1.57.23 2.73.11 3.02.73.8 1.18 1.82 1.18 3.07 0 4.39-2.67 5.35-5.21 5.63.41.35.78 1.04.78 2.1v3.12c0 .3.21.66.79.55A11.4 11.4 0 0 0 12 .6Z"/></svg>
+                    </a>
+                </div>
+            </div>
+            <div class="topbar-group">
+                <button id="accountButton" class="avatar-button" type="button" aria-label="打开账户设置">
+                    U
+                </button>
+            </div>
+        </header>
+
+        <main id="welcomeView" class="screen welcome-view">
+            <div class="welcome-inner">
+                <svg class="route-intro" viewBox="0 0 500 88" aria-hidden="true">
+                    <defs>
+                        <linearGradient id="route-progress-gradient" gradientUnits="userSpaceOnUse">
+                            <stop class="route-gradient-tail" offset="0"/>
+                            <stop class="route-gradient-body" offset="0.28"/>
+                            <stop class="route-gradient-core" offset="0.68"/>
+                            <stop class="route-gradient-head" offset="1"/>
+                        </linearGradient>
+                    </defs>
+                    <path class="route-track" d="M20 59 C105 59, 150 13, 250 43 S395 27, 480 27"/>
+                    <path class="route-progress" d="M20 59 C105 59, 150 13, 250 43 S395 27, 480 27"/>
+                    <circle class="route-origin" cx="20" cy="59" r="4"/>
+                    <circle class="route-destination" cx="480" cy="27" r="4"/>
+                    <circle class="traveller" cx="20" cy="59" r="3"/>
+                    <path class="route-hit-area" d="M20 59 C105 59, 150 13, 250 43 S395 27, 480 27"/>
+                </svg>
+                <h1 class="welcome-title">出发前，问问 Hommey。<br><span>路线、标准和细节，一次理清。</span></h1>
+
+                <form id="homeComposer" class="composer welcome-composer">
+                    <textarea id="homeInput" rows="1" placeholder="今天想去哪儿？" aria-label="输入差旅需求"></textarea>
+                    <div class="pending-attachments" style="display:none" aria-live="polite"></div>
+                    <div class="composer-tools">
+                        <div class="retrieval-mode-control" data-retrieval-mode-control>
+                            <button class="retrieval-mode-trigger" type="button" data-retrieval-mode-trigger aria-haspopup="menu" aria-expanded="false">
+                                <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 6h14M8 12h8M10 18h4"/><circle cx="19" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></svg>
+                                <span data-retrieval-mode-label>标准检索</span>
+                                <svg class="retrieval-mode-chevron" width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" aria-hidden="true"><path d="m7 10 5 5 5-5"/></svg>
+                            </button>
+                            <div class="retrieval-mode-menu" data-retrieval-mode-menu role="menu" hidden>
+                                <button class="retrieval-mode-option" type="button" data-retrieval-mode-option="standard" role="menuitemradio" aria-checked="true">
+                                    <span class="retrieval-option-mark" aria-hidden="true"></span>
+                                    <span><strong>标准检索</strong><small>快速、稳定</small></span>
+                                </button>
+                                <button class="retrieval-mode-option" type="button" data-retrieval-mode-option="enhanced" role="menuitemradio" aria-checked="false">
+                                    <span class="retrieval-option-mark enhanced" aria-hidden="true"></span>
+                                    <span><strong>增强检索</strong><small>HyDE 辅助召回，准确率更高，响应稍慢</small></span>
+                                </button>
+                            </div>
+                        </div>
+                        <label class="icon-button attach-button" aria-label="添加附件" title="添加附件（txt/md/docx/pdf/图片）">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M21.44 11.05l-9.19 9.19a6 6 0 0 1-8.49-8.49l9.19-9.19a4 4 0 0 1 5.66 5.66l-9.2 9.19a2 2 0 0 1-2.83-2.83l8.49-8.48"/></svg>
+                            <input type="file" multiple hidden accept=".txt,.md,.docx,.pdf,.png,.jpg,.jpeg,.webp">
+                        </label>
+                        <button class="icon-button composer-tool-btn" type="button" data-voice-record aria-label="语音输入" title="语音输入">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><path d="M12 19v3"/></svg>
+                        </button>
+                        <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
+                            <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                        </button>
+                        <button class="quick-trip-trigger" type="button" data-quick-trip-open aria-label="快速差旅" title="快速填写差旅信息">快速差旅</button>
+                        <span class="composer-spacer"></span>
+                        <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送">
+                            <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
+                        </button>
+                    </div>
+                </form>
+
+                <button id="promptRotator" class="prompt-rotator" type="button" data-prompt="下周一去上海出差两天，帮我规划行程">
+                    <span class="prompt-label">试试问</span>
+                    <span class="prompt-window"><span id="rotatingQuestion" class="rotating-question">下周一去上海两天，帮我安排一下</span></span>
+                    <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
+                </button>
+                <p class="privacy-note">重要的动态信息请以官方来源为准。</p>
+            </div>
+            <footer class="icp-footer">
+                <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">赣ICP备2026020278号</a>
+            </footer>
+        </main>
+
+    </div>
+    <aside id="sidebar" class="sidebar" aria-label="会话侧栏">
+        <div class="sidebar-head">
+            <div class="sidebar-brand-row">
+                <div class="sidebar-brand">
+                    <span class="mini-logo" aria-hidden="true">
+                        <svg viewBox="0 -4 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
+                    </span>
+                    <span>Hommey</span>
+                </div>
+                <button id="sidebarClose" class="icon-button" type="button" aria-label="关闭侧栏">
+                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+                </button>
+            </div>
+            <div class="sidebar-actions">
+                <button id="newChatButton" class="sidebar-action" type="button">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
+                    <span>新对话</span>
+                </button>
+                <div class="sidebar-search-group">
+                    <button id="searchToggle" class="sidebar-action" type="button" aria-expanded="false" aria-controls="historySearchBox">
+                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                        <span>搜索会话</span>
+                    </button>
+                    <label id="historySearchBox" class="history-search" aria-hidden="true">
+                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                        <input id="historySearch" type="search" placeholder="输入会话名称" tabindex="-1">
+                    </label>
+                </div>
+                <button id="knowledgeButton" class="sidebar-action knowledge-entry" type="button">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h7"/></svg>
+                    <span>知识库</span>
+                    <span class="sidebar-action-note">在线查阅</span>
+                </button>
+            </div>
+        </div>
+        <div id="historyList" class="history-list">
+            <p class="history-label">最近</p>
+            <div class="history-empty">还没有历史会话。</div>
+        </div>
+        <div class="sidebar-foot">
+            <button id="settingsButton" class="sidebar-action" type="button">
+                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.2 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.6 4.2a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.71 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 8.6c.14.4.36.75.6 1 .3.3.7.4 1.1.4h.1a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.71 1Z"/></svg>
+                <span>设置</span>
+            </button>
+            <button id="accountRow" class="account-row" type="button">
+                <span class="account-avatar">U</span>
+                <span class="account-copy"><strong id="panelName">演示账户</strong><span id="panelLevel">个人账户</span></span>
+                <span>›</span>
+            </button>
+        </div>
+    </aside>
+
+
+    <canvas id="edgeField" aria-hidden="true"></canvas>
+    <button id="edgeOpen" class="ec-edge" type="button" aria-label="打开主控" aria-haspopup="dialog" aria-controls="edgePanel" aria-expanded="false"><span class="ec-edge-label">主控 <span>‹</span></span></button>
+    <span id="edgeHint" class="ec-hint" aria-hidden="true">打开主控 <span>←</span></span>
+    <button id="edgeShade" class="ec-shade" type="button" tabindex="-1" aria-label="关闭主控" hidden></button>
+    <aside id="edgePanel" class="ec-panel" role="dialog" aria-modal="true" aria-labelledby="ecTitle" tabindex="-1" inert>
+        <header class="ec-head"><h2 id="ecTitle">主控</h2><button id="edgeClose" class="icon-button" type="button" aria-label="关闭主控"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5"><path d="m6 6 12 12M18 6 6 18"/></svg></button></header>
+        <div class="ec-scroll" id="ecScroll">
+            <section id="ecHome" class="ec-view">
+                <button id="ecQuick" class="ec-quick" type="button"><span class="ec-plus">＋</span><span><strong>快速差旅</strong><small id="ecQuickNote">填好信息，开始安排</small></span><span class="ec-arrow">↗</span></button>
+                <section class="ec-section"><div class="ec-section-head"><h3>最近差旅</h3><button id="ecAll" type="button">全部 <span>↗</span></button></div><div id="ecTrips" class="ec-trips"></div></section>
+                <section class="ec-section ec-tools"><div class="ec-section-head"><h3>常用功能</h3></div><button type="button" data-ec-tool="policy"><span>差旅制度</span><span>↗</span></button><button type="button" data-ec-tool="checklist"><span>出发清单</span><span id="ecCheckCount">0 / 5</span></button><button type="button" data-ec-tool="preferences"><span>差旅偏好</span><span>↗</span></button></section>
+            </section>
+            <section id="ecFormView" class="ec-view" hidden>
+                <button class="ec-back" data-ec-back type="button">← 返回</button>
+                <h3 class="ec-view-title">快速差旅</h3><p class="ec-description">先把这次出差的信息放在一起。</p>
+                <form id="ecForm">
+                    <div class="ec-grid"><label>出发地<input name="origin" placeholder="城市" maxlength="40" required></label><label>目的地<input name="destination" placeholder="城市" maxlength="40" required></label><label>出发日期<input name="start" type="date" required></label><label>返程日期<input name="end" type="date" required></label></div>
+                    <label>出差目的<input name="purpose" maxlength="100" placeholder="例如：客户拜访" required></label>
+                    <label>工作地点 <span class="ec-optional">选填</span><input name="place" maxlength="150" placeholder="公司、园区或会议地点"></label>
+                    <fieldset><legend>需要安排</legend><label><input name="services" type="checkbox" value="交通" checked>交通</label><label><input name="services" type="checkbox" value="住宿" checked>住宿</label><label><input name="services" type="checkbox" value="日程" checked>日程</label></fieldset>
+                    <p id="ecError" class="ec-error" role="alert" hidden></p>
+                    <div class="ec-form-foot"><small id="ecSaveNote">自动保留未完成的填写</small><button class="ec-primary" type="submit">保存草稿 <span>→</span></button></div>
+                </form>
+            </section>
+            <section id="ecDetail" class="ec-view" hidden></section>
+            <section id="ecTool" class="ec-view" hidden></section>
+        </div>
+        <footer class="ec-foot"><span>界面预览 · 示例数据</span><span>Hommey</span></footer>
+    </aside>
+    <button id="scrim" class="scrim" type="button" aria-label="关闭侧栏"></button>
+    <div id="toast" class="toast" role="status" aria-live="polite"></div>
+
+</body>
+</html>

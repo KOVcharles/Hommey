@@ -9,6 +9,7 @@
     }
 
     function safeUrl(value) {
+        if (!String(value || '').trim()) return '';
         try {
             const url = new URL(String(value || ''), window.location.origin);
             return ['http:', 'https:'].includes(url.protocol) ? url.href : '';

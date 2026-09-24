@@ -18,7 +18,7 @@ from .contracts import (
 
 
 TOOLS = {
-    "search_policy": (Query, "检索企业差旅制度：短来源直接返回完整 evidence（等同回读），长来源只给索引，需 read_source；不要重复读取已有完整 evidence"),
+    "search_policy": (Query, "检索当前知识范围内的报销与差旅制度：短来源直接返回完整 evidence（等同回读），长来源只给索引，需 read_source；不要重复读取已有完整 evidence"),
     "search_memory": (MemorySearch, "仅检索当前用户的偏好、历史计划和对话；支持关键词过滤"),
     "read_source": (SourceRequest, "回读本任务来源；大来源按 offset/limit 分页，next_offset 非空表示还有内容；不得把部分页当成完整条款"),
     "search_trains": (TrainRequest, "查询真实车次和余票；日期必须明确，不支持购票"),
@@ -57,7 +57,7 @@ class BusinessServices:
             from rag.retriever import KnowledgeRetriever
             self.retriever = KnowledgeRetriever()
         if not self.retriever.initialized:
-            raise ToolRejected("企业制度知识库暂不可用")
+            raise ToolRejected("制度知识库暂不可用")
         consume_external_call("rag")
         return self.retriever.search(query, top_k=5)
 
@@ -94,13 +94,9 @@ class BusinessServices:
             with self.pool.connection() as conn, conn.cursor() as cur:
                 cur.execute("""SELECT role, content, sequence_no FROM conversation_messages
                     WHERE user_id=%s AND session_id=%s AND deleted_at IS NULL AND retention_until>NOW()
-                    ORDER BY sequence_no DESC LIMIT 8""", (scope.user_id, stable_uuid(scope.session_id, namespace="session")))
-                recent = [{"role": r["role"], "content": r["content"][:1400]} for r in reversed(cur.fetchall())]
-                cur.execute("""SELECT summary_text, source_sequence_to FROM session_summaries
-                    WHERE user_id=%s AND session_id=%s AND status='done'
-                    ORDER BY source_sequence_to DESC LIMIT 2""", (scope.user_id, stable_uuid(scope.session_id, namespace="session")))
-                summaries = [{"text": r["summary_text"][:1600], "through_sequence": r["source_sequence_to"]} for r in cur.fetchall()]
-            return {"recent": recent, "session_summaries": summaries,
+                    ORDER BY sequence_no DESC LIMIT 100""", (scope.user_id, stable_uuid(scope.session_id, namespace="session")))
+                recent = [{"role": r["role"], "content": r["content"]} for r in reversed(cur.fetchall())]
+            return {"recent": recent,
                     "trip": self.memory.get_active_trip(session_id=scope.session_id) or {},
                     "today": beijing_today()}
         return await run_blocking(read)
