@@ -12,7 +12,7 @@ from agent_runtime.engine import Supervisor, is_direct_policy_query
 from agent_runtime.fast_routes import weather_policy_tasks
 from agent_runtime.store import RunStore
 from context.memory_repository import stable_uuid
-from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply
+from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply, model_payload
 from tests.test_supervisor_control import role_of
 
 TEXT = "给我查一下南京天气以及相关的差旅标准"
@@ -115,7 +115,7 @@ class Model:
         role = role_of(messages)
         assert role in {"policy_rag", "travel_info"}, "Compound route must not call the main model"
         self.roles.append(role)
-        scoped = json.loads(messages[1]["content"])["request"]
+        scoped = json.loads(messages[1]["content"])["task"]
         assert "南京" in scoped
         if role == "travel_info":
             assert "差旅标准" not in scoped
@@ -213,7 +213,7 @@ async def test_extra_intent_preserves_complete_input_in_main_path():
     text = TEXT + "，再帮我规划行程"
     async def model(messages, **kwargs):
         assert role_of(messages) is None
-        assert json.loads(messages[1]["content"])["current_request"] == text
+        assert model_payload(messages)["conversation"][-1]["content"] == text
         return reply(("finish", {"kind": "ask", "question": "请补充出发日期和出差目的"}))
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE, text)
     assert result["outcome"] == "waiting_input" and not services.calls

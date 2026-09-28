@@ -35,7 +35,7 @@
 - 相关 Python 测试：**153 passed，1 skipped**。唯一跳过项为原有 `test_facade_wraps_memory_manager` 占位检查，不是数据库集成测试。
 - `tests/test_concurrent_sessions_integration.py`：真实 PostgreSQL + Redis；同一管理器及两个独立管理器模拟 worker，共享用户下的消息、turn、request、上下文、行程隔离；普通与流式请求并行；读历史/新建不阻塞；同会话冲突；取消隔离；维护互斥及删除后不能恢复。
 - `tests/test_redis_coordination.py`：真实 Redis 租约续期、过期、错误 token、不同 TTL 的并发会话及维护互斥。
-- `scripts/check_session_concurrency_ui.py`：Microsoft Edge 无头双标签页测试；A 的流保持挂起时，B 查看历史、新建、发送；断言两个请求使用不同 session；历史失败/重试、刷新保留选择及会话行程查询；无 JS 异常。此浏览器测试使用 API 桩，不调用模型。
+- `scripts/check_session_concurrency_ui.py`：Microsoft Edge 无头双标签页测试；A 的流保持挂起时，B 查看历史、新建、发送；断言两个请求使用不同 session；历史失败/重试、刷新保留选择及会话行程查询；无 JS 异常。此浏览器测试使用 API 桩，不调用模型。同一脚本另含单页并行场景（见下）。
 - `.repro/session_scope.py`：原有刷新/切换/新标签页边界回归通过。
 - `node --check webui_new/static/app.js` 与 `git diff --check` 通过。
 
@@ -44,7 +44,21 @@
 - 服务启动时会执行迁移 `0024`，需要所有 API worker 一起加载新代码，并刷新前端。开发容器挂载源码时，重启 hommey 服务即可；镜像部署需要重新构建。
 - **不要混跑新旧 worker**：旧版本的用户锁与新版本的会话锁不是同一套互斥范围。应先排空/停止旧 worker，再启动全部新 worker。
 - 尚未重启业务容器，也未用真实模型执行两条完整差旅任务；当前验证覆盖真实协调/存储和浏览器行为，模型阶段用可控等待替身模拟。
-- 同一页面仍只维护一个正在生成的界面；本次交付的是多个窗口/标签页独立会话并发。所有会话仍受既有全局并发配额约束。
+- 本次交付的是多个窗口/标签页独立会话并发。所有会话仍受既有全局并发配额约束。
+
+### 后续（2026-09-19）：单个页面内的并行会话
+
+上一条"同一页面仍只维护一个正在生成的界面"已不再是边界。前端不再用一份全局状态描述
+"当前正在生成的会话"，改为每个会话一个 `SessionRuntime`（`webui_new/static/session-runtime.js`），
+各自持有容器、流、草稿与滚动跟随。一个页面内可同时跑 3 个会话（前端软上限，
+见 `docs/superpowers/specs/2026-09-19-in-page-parallel-sessions-design.md`）。
+
+- 后端不变：本文档描述的会话级锁、迁移 `0024` 已经支持该语义。
+- 运行中的会话切走不销毁容器，切回来不重放历史；跑完的会话丢弃内存态，下次打开从库里重建。
+- 刷新页面仍会丢掉进行中的流（内存态 runtime 的自然结果），服务端继续跑完并落库。
+- `scripts/check_session_concurrency_ui.py` 新增单页并行场景：A 在跑时新建 B 并发送、
+  两个流同时打开、切回 A 复用同一画布且不重拉历史、第四个并发被当场拒绝、
+  A 结束时只有 A 的侧栏指示消失。
 
 ## 一、用户现象
 

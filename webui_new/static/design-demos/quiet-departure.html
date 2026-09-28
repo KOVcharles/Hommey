@@ -1,0 +1,68 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="theme-color" content="#f5f4ef">
+  <title>Hommey · 从容出发</title>
+  <link rel="icon" href="../brand/hommey-favicon.svg" type="image/svg+xml">
+  <link rel="stylesheet" href="quiet-departure.css">
+  <script src="quiet-departure.js" defer></script>
+</head>
+<body>
+  <div class="page" id="page">
+    <header class="masthead">
+      <a class="wordmark" href="quiet-departure.html" aria-label="Hommey 首页"><img src="../brand/hommey-mark.svg" alt=""><span>hommey<span class="wordmark-dot">.</span></span></a>
+      <div class="masthead-note"><span class="status-dot"></span> 为每一次出发，留一点从容</div>
+      <button class="profile" data-open="preferences" aria-label="打开差旅偏好">H<span></span></button>
+    </header>
+    <main class="home-main">
+      <div class="edition"><span>YOUR EVERYDAY DEPARTURE</span><span class="edition-line"></span><span>差旅，也可以轻一点</span></div>
+      <section class="hero">
+        <div class="hero-copy">
+          <div class="small-label"><span class="sun-symbol">✳</span> 下一站，准备好了。</div>
+          <h1>出发前，<br>把一切<span class="headline-serif">理清。</span></h1>
+          <p class="hero-description">从一个目的地，到一段妥帖的行程。<br>那些繁琐的小事，交给 Hommey。</p>
+          <button class="text-link" data-open="quick">开启一段新差旅 <span class="circle-arrow">↗</span></button>
+        </div>
+        <figure class="departure-image">
+          <img src="../travel/airport.webp" alt="晨光穿过机场玻璃幕墙，照亮安静的候机厅">
+          <div class="image-shade"></div>
+          <div class="photo-top"><span>THE ART OF ARRIVING</span><span>NO. 01</span></div>
+          <figcaption><span>留一点时间，<br>给路上的风景。</span><small>A LITTLE LESS HURRY.</small></figcaption>
+          <div class="photo-ticket"><span class="ticket-dot"></span> EVERY JOURNEY BEGINS HERE <span>↗</span></div>
+        </figure>
+      </section>
+      <form class="home-composer" id="homeComposer">
+        <label for="travelThought" class="composer-label">今天，想去哪里？</label>
+        <div class="composer-input"><input id="travelThought" autocomplete="off" maxlength="200" placeholder="例如：下周去上海，拜访客户两天"><button type="submit" aria-label="开始整理差旅">↗</button></div>
+        <div class="composer-bottom"><span><i></i> 从一句话开始，也可以</span><button type="button" data-open="quick">快速差旅 <span>↗</span></button></div>
+      </form>
+      <div class="home-bottom"><button class="resume-link" data-open="recent"><span class="tiny-route">○ ── ◉</span><span>上次的行程，还在这里</span><span>查看最近差旅 ↗</span></button><span class="home-index">LESS FRICTION. MORE JOURNEY.</span></div>
+    </main>
+    <footer class="page-footer"><span>HOMMEY · 差旅随行</span><span class="demo-mark">交互概念 DEMO · 示例数据</span><span>慢一点，也能准时抵达。</span></footer>
+  </div>
+
+  <canvas id="edgeParticles" aria-hidden="true"></canvas>
+  <button id="edgeTrigger" class="edge-trigger" aria-label="打开差旅主控" aria-haspopup="dialog" aria-expanded="false" aria-controls="controlPanel"><span class="edge-icon">✳</span><span class="edge-title">差旅主控</span><span class="edge-chevron">‹</span></button>
+  <div class="edge-whisper" aria-hidden="true"><span>你的差旅，都在这一侧</span><svg width="55" height="18" viewBox="0 0 55 18"><path d="M1 9h50m-6-5 6 5-6 5"/></svg></div>
+  <div class="scrim" id="scrim"></div>
+  <aside id="controlPanel" class="control-panel" role="dialog" aria-modal="true" aria-labelledby="panelTitle" tabindex="-1" inert>
+    <header class="panel-header"><div class="panel-brand"><img src="../brand/hommey-mark.svg" alt=""><span>旅途之间 <small>YOUR TRAVEL SPACE</small></span></div><button class="icon-button close-panel" id="closePanel" aria-label="关闭主控">×</button></header>
+    <div class="panel-scroll" id="panelScroll">
+      <div id="dashboardView" class="panel-view">
+        <div class="panel-greeting"><div><div class="eyebrow">EVERYTHING, IN PLACE</div><h2 id="panelTitle">下一站，从这里开始。</h2></div><span class="greeting-sun">✳</span></div>
+        <button class="quick-feature" id="startQuick"><span class="quick-feature-top"><span class="tag-light">QUICK DEPARTURE</span><span class="feature-number">01</span></span><strong>快速差旅 <span>↗</span></strong><span class="feature-description">几项简单信息，一份清晰的出发准备。</span><span class="feature-bottom"><span><i></i> 路线 · 住宿 · 日程</span><span>即刻开始 <b>→</b></span></span><svg class="feature-route" viewBox="0 0 540 220" aria-hidden="true"><path d="M280 250C190 80 450 240 440 105S590 50 560-40"/><circle cx="440" cy="105" r="6"/></svg></button>
+        <section class="recent-section"><div class="section-heading"><h3>最近差旅 <span id="tripCount">03</span></h3><button class="quiet-button" id="viewAll">查看全部 ↗</button></div><div id="recentTrips" class="recent-trips"></div></section>
+        <section class="tool-section"><div class="section-heading"><h3>随行工具</h3><span class="section-note">小事，也照顾周全</span></div><div class="tool-grid"><button data-tool="policy"><span class="tool-icon">▤</span><strong>差旅制度</strong><small>出发前，心中有数</small><span class="tool-arrow">↗</span></button><button data-tool="checklist"><span class="tool-icon">☷</span><strong>出发清单</strong><small id="checklistSubtitle">让准备少一点遗漏</small><span class="tool-arrow">↗</span></button><button data-tool="preferences"><span class="tool-icon">⌘</span><strong>我的偏好</strong><small>记住你的出行习惯</small><span class="tool-arrow">↗</span></button></div></section>
+        <div class="panel-note"><span class="note-star">✳</span><p>把精力留给重要的事。<br><small>其余的，我们一起慢慢理顺。</small></p></div>
+      </div>
+      <div id="flowView" class="panel-view" hidden></div>
+      <div id="detailView" class="panel-view" hidden></div>
+      <div id="toolView" class="panel-view" hidden></div>
+    </div>
+    <footer class="panel-footer"><span><i></i> HOMMEY，伴你从容出发</span><span>DEMO / 01</span></footer>
+  </aside>
+  <div class="toast" id="toast" role="status"></div>
+</body>
+</html>

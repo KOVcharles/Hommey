@@ -55,6 +55,11 @@ data/documents/*
 !data/documents/.gitkeep
 !data/documents/README.md
 !data/documents/example_*.txt
+!data/documents/cqu/
+data/documents/cqu/*
+!data/documents/cqu/finance/
+data/documents/cqu/finance/*
+!data/documents/cqu/finance/重庆大学财务报销指南-2025年版.pdf
 data/rag_knowledge/*
 !data/rag_knowledge/.gitkeep
 !data/rag_knowledge/README.md

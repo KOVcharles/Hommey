@@ -94,6 +94,19 @@ class SkillLoader:
             print(f"Error reading skill content {target_path}: {exc}")
             return None
 
+    def list_skill_resources(self, skill_name: str) -> list[str]:
+        """List real references, excluding links outside the references directory."""
+        definition = self.get_definition(skill_name)
+        if not definition:
+            return []
+        skill_root = (self.skills_dir / definition.name).resolve()
+        references = skill_root / "references"
+        resources = []
+        for path in references.rglob("*"):
+            if path.is_file() and path.resolve().is_relative_to(references):
+                resources.append(path.relative_to(skill_root).as_posix())
+        return sorted(resources)
+
     def get_skill_resource(self, skill_name: str, relative_path: str) -> Optional[str]:
         """Read a UTF-8 resource without allowing paths outside the Skill package."""
         definition = self.get_definition(skill_name)

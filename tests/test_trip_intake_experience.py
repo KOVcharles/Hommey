@@ -240,7 +240,8 @@ def test_supervisor_intake_persists_trip_intake_presentation():
     from tests.test_supervisor_runtime import CONFIG, FakeServices, FakeStore
 
     async def forbidden(*args, **kwargs):
-        raise AssertionError("明确出差入口不应调用模型")
+        from tests.test_supervisor_runtime import reply
+        return reply(("request_trip_details", {}))
 
     instance = HommeyWebInstance("employee-a")
     instance.initialized = True
@@ -265,7 +266,8 @@ def test_supervisor_prefills_departure_from_saved_home_city():
     from tests.test_supervisor_runtime import CONFIG, FakeServices, FakeStore
 
     async def forbidden(*args, **kwargs):
-        raise AssertionError("明确出差入口不应调用模型")
+        from tests.test_supervisor_runtime import reply
+        return reply(("request_trip_details", {}))
 
     instance = HommeyWebInstance("employee-a")
     instance.initialized = True

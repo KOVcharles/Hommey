@@ -61,8 +61,9 @@ class VectorStore(ABC):
 class InMemoryVectorStore(VectorStore):
     """Small deterministic store for tests and local dry-runs."""
 
-    def __init__(self):
+    def __init__(self, *, search_scopes: tuple[str, ...] = ()):
         self.rows: List[DocumentChunk] = []
+        self.search_scopes = search_scopes
 
     def add_chunks(self, chunks: List[DocumentChunk]) -> Dict[str, Any]:
         # Mirror the production store's idempotent upsert (audit §4.3/§7 P6): a
@@ -94,6 +95,10 @@ class InMemoryVectorStore(VectorStore):
         tokens = _tokens(query)
         candidates: List[Dict[str, Any]] = []
         for index, chunk in enumerate(self.rows, start=1):
+            if self.search_scopes and not any(
+                chunk.document_id.startswith(scope + "/") for scope in self.search_scopes
+            ):
+                continue
             content_tokens = _tokens(chunk.content)
             if not tokens:
                 score = 0.0
@@ -144,7 +149,7 @@ def create_vector_store(config: Any) -> VectorStore:
             f"Unsupported RAG vector backend: {backend}. Use postgres or memory."
         )
     if backend == "memory":
-        return InMemoryVectorStore()
+        return InMemoryVectorStore(search_scopes=getattr(config, "search_scopes", ()))
 
     common = {
         "collection_name": config.collection_name,
@@ -163,6 +168,7 @@ def create_vector_store(config: Any) -> VectorStore:
         "vector_top_k": config.vector_top_k,
         "bm25_top_k": config.bm25_top_k,
         "sparse_backend": config.bm25_backend,
+        "search_scopes": config.search_scopes,
     }
     if backend == "postgres":
         from .postgres_vector_store import PostgresVectorStore

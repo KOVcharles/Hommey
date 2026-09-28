@@ -116,6 +116,7 @@ RAG_CONFIG = {
     # Phase 5: BM25/sparse backend seam (only "python" until the corpus
     # outgrows the full-scan baseline; see audit §11 Phase 5).
     "bm25_backend": os.getenv("HOMMEY_RAG_BM25_BACKEND", "python").lower(),
+    "search_scopes": os.getenv("HOMMEY_RAG_SEARCH_SCOPES", ""),
     "documents_dir": os.getenv(
         "HOMMEY_RAG_DOCUMENTS_DIR",
         "data/documents",

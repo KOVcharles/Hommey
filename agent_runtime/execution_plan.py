@@ -11,7 +11,7 @@ from .contracts import ToolRejected
 ACTIVE = {"pending", "running"}
 LABELS = {
     "trip_context": ("整理并保存出差信息", "核实出发地、目的地、日期和出差目的"),
-    "policy_rag": ("查询差旅标准", "确认适用的交通、住宿和报销要求"),
+    "policy_rag": ("查阅报销与差旅制度", "核对本次事项的制度要求和适用条件"),
     "travel_info": ("整理天气与交通信息", "获取行程所需的实时信息"),
     "memory": ("核对差旅记录与偏好", "使用已有记录减少重复填写"),
     "trip_planner": ("生成出差行程", "结合已核实的信息安排日程"),

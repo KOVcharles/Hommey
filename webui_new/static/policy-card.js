@@ -22,7 +22,7 @@
         });
         if (costs.childElementCount) root.append(costs);
         if (rules.childElementCount) root.append(rules);
-        if (!items.length) root.append(el('p', 'policy-unavailable', '本次尚未取得可核实的差旅标准。'));
+        if (!items.length) root.append(el('p', 'policy-unavailable', '本次尚未取得可核实的制度条款。'));
         const bodies = [...new Set(sections.map(s => s.body).filter(Boolean))];
         if (bodies.length) {
             const more = el('details', 'policy-more');
@@ -44,10 +44,10 @@
         return root;
     }
     function create(data) {
-        const card = el('article', 'policy-card'); card.setAttribute('aria-label', '差旅标准');
+        const card = el('article', 'policy-card'); card.setAttribute('aria-label', '报销与差旅制度');
         const header = el('header', 'policy-header');
         const partial = (data.sections || []).some(s => s.status !== 'success');
-        header.append(el('div', 'policy-eyebrow', 'HOMMEY / 差旅制度'), el('h2', '', data.title === '企业差旅助手' ? '差旅标准' : data.title), el('p', '', partial ? '部分标准或适用条件待确认 · 已核实条款如下' : '按费用查看标准，适用职级与例外条件随条款列示。'));
+        header.append(el('div', 'policy-eyebrow', 'HOMMEY / 制度咨询'), el('h2', '', ['企业差旅助手', '报销与差旅助手'].includes(data.title) ? '报销与差旅制度' : data.title), el('p', '', partial ? '部分要求或适用条件待确认 · 已核实条款如下' : '报销要求与适用条件随条款列示。'));
         card.append(header, content(data));
         if (data.sources?.length) card.append(sources(data));
         return card;

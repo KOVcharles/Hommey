@@ -27,6 +27,8 @@ class RAGPipelineConfig:
     documents_dir: str = "data/documents"
     knowledge_base_path: str = "data/rag_knowledge"
     collection_name: str = "business_travel_knowledge"
+    # Relative document-directory prefixes; empty means the whole collection.
+    search_scopes: Tuple[str, ...] = ()
     postgres_dsn: str = ""
     chunk_size: int = 600
     chunk_overlap: int = 100
@@ -68,6 +70,7 @@ class RAGPipelineConfig:
             "documents_dir": RAG_CONFIG.get("documents_dir", cls.documents_dir),
             "knowledge_base_path": RAG_CONFIG.get("knowledge_base_path", cls.knowledge_base_path),
             "collection_name": RAG_CONFIG.get("collection_name", cls.collection_name),
+            "search_scopes": RAG_CONFIG.get("search_scopes", ()),
             "postgres_dsn": RAG_CONFIG.get("postgres_dsn", cls.postgres_dsn),
             "chunk_size": RAG_CONFIG.get("chunk_size", cls.chunk_size),
             "chunk_overlap": RAG_CONFIG.get("chunk_overlap", cls.chunk_overlap),
@@ -92,6 +95,13 @@ class RAGPipelineConfig:
             data.update({key: value for key, value in overrides.items() if value is not None})
         if "supported_file_types" in data:
             data["supported_file_types"] = _normalize_file_types(data["supported_file_types"])
+        scopes = data.get("search_scopes", ())
+        if isinstance(scopes, str):
+            scopes = scopes.split(",")
+        scopes = tuple(dict.fromkeys(str(s).strip().rstrip("/") for s in scopes if str(s).strip()))
+        if any(not s or "\\" in s or ":" in s or any(p in {"", ".", ".."} for p in s.split("/")) for s in scopes):
+            raise ValueError("RAG search scopes must be relative document directories")
+        data["search_scopes"] = scopes
         return cls(**data)
 
 

@@ -618,26 +618,38 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
     visibility: hidden;
     transform: translateY(-12px);
 }
+/* #chatMessages 只做挂载点：每个会话一个 .session-view 常驻其中，只有 .is-active 显示。
+   滚动交给 .session-view，这样每个会话保留自己的滚动位置。 */
 .chat-messages {
+    display: flex;
+    flex-direction: column;
     width: 100%;
     min-height: 0;
     margin: 0;
+    overflow: hidden;
+}
+.session-view {
+    display: none;
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
     padding: 38px max(18px, calc((100% - var(--content)) / 2)) 100px;
     overflow-y: auto;
     scroll-behavior: smooth;
     scrollbar-width: thin;
     scrollbar-color: color-mix(in srgb, var(--ink) 18%, var(--panel)) transparent;
 }
-.chat-messages.is-scrolling,
-.chat-messages:hover {
+.session-view.is-active { display: block; }
+.session-view.is-scrolling,
+.session-view:hover {
     scrollbar-color: color-mix(in srgb, var(--ink) 52%, var(--panel)) transparent;
 }
-.chat-messages::-webkit-scrollbar-thumb {
+.session-view::-webkit-scrollbar-thumb {
     border-radius: 99px;
     background: color-mix(in srgb, var(--ink) 18%, var(--panel));
 }
-.chat-messages.is-scrolling::-webkit-scrollbar-thumb,
-.chat-messages:hover::-webkit-scrollbar-thumb {
+.session-view.is-scrolling::-webkit-scrollbar-thumb,
+.session-view:hover::-webkit-scrollbar-thumb {
     background: color-mix(in srgb, var(--ink) 52%, var(--panel));
 }
 .message-row {
@@ -934,6 +946,24 @@ html[data-theme="dark"] .msg-avatar.ai {
     white-space: nowrap;
 }
 .session-row.active .session-open { color: var(--ink); font-weight: 560; }
+/* 会话语在跑的时候有个最小的存在感：标题左边一个小点，不占版面。
+   绝对定位是为了不挤掉 .session-row 的两列网格。 */
+.session-running-dot {
+    position: absolute;
+    left: 4px;
+    top: 50%;
+    width: 5px;
+    height: 5px;
+    margin-top: -2.5px;
+    border-radius: 50%;
+    background: var(--route);
+    animation: session-running-pulse 1.7s ease-in-out infinite;
+}
+.session-row.is-running .session-open { padding-left: 15px; }
+@keyframes session-running-pulse {
+    0%, 100% { opacity: .3; }
+    50% { opacity: 1; }
+}
 .session-more {
     width: 27px;
     height: 27px;
@@ -1381,7 +1411,7 @@ html[data-motion="off"] *::after {
     .welcome-composer { margin-top: 26px; }
     .prompt-rotator { width: calc(100% - 12px); padding-right: 9px; padding-left: 9px; }
     .conversation-view { padding-top: 58px; }
-    .chat-messages { width: 100%; padding: 25px 13px 90px; }
+    .session-view { width: 100%; padding: 25px 13px 90px; }
     .msg-avatar.ai { position: static; display: block; margin-bottom: 8px; width: 28px; height: 20px; background-size: 26px auto; }
     .message-row.user .msg-stack { width: 88%; }
     .chat-composer-shell { width: calc(100% - 26px); padding-right: 0; padding-left: 0; }
@@ -1963,8 +1993,8 @@ html[data-motion="off"] *::after {
 }
 
 /* Keep the same brand position as progress throughout a response. */
-#processingIndicator { min-height: 46px; margin-bottom: 24px; }
-#processingIndicator .agent-indicator { min-height: 38px; }
+.processing-indicator { min-height: 46px; margin-bottom: 24px; }
+.processing-indicator .agent-indicator { min-height: 38px; }
 .message-row.ai .trip-intake-card .hommey-card-logo,
 .message-row.ai .answer-card .hommey-card-logo,
 .message-row.ai .journey-card .hommey-card-logo { display: none; }

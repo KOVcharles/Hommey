@@ -1,6 +1,6 @@
 /**
  * Hommey WebUI
- * Production interaction layer for authentication, onboarding, streaming chat,
+ * Production interaction layer for authentication, streaming chat,
  * session history, appearance settings, and responsive navigation.
  */
 (function () {
@@ -66,20 +66,25 @@
     const SESSION_MEMORY_KEY_PREFIX = 'hommey.session';
     const defaultPlaceholder = '继续问 Hommey';
 
-    let isProcessing = false;
-    let isOnboarding = false;
-    let onboardingIndex = 0;
-    let customInputCallback = null;
-    let activeSessionId = '';
+    // 当前显示哪个会话的指针。会话自己的全部状态都在 HommeySessionRuntime 里，
+    // 这里只回答"现在看的是哪一个"，不再承载会话状态。
+    function activeSessionId() { return window.HommeySessionRuntime.activeId(); }
+    function setActiveSession(sessionId) {
+        window.HommeySessionRuntime.setActive(sessionId || '');
+        return sessionId || '';
+    }
+    function activeRuntime() { return window.HommeySessionRuntime.active(); }
+    // 取代原来的全局 isProcessing：问的是"当前查看的会话是否在跑"。
+    // 别的会话在跑不影响这里。
+    function isActiveProcessing() {
+        const runtime = activeRuntime();
+        return !!(runtime && runtime.processing);
+    }
     let selectedSessionId = '';
     let confirmCallback = null;
     let rotationTimer;
     let rotationIndex = 0;
     let toastTimer;
-    let processingStatusTimer;
-    let processingStatusQueue = [];
-    let lastProcessingStatusAt = 0;
-    let contextualPlaceholder = '';
     let scrollIdleTimer;
     let knowledgeDocuments = [];
     let activeKnowledgeDocumentId = '';
@@ -98,7 +103,7 @@
     const progressMessages = {
         request_analyzing: '正在理解你的需求',
         tasks_decomposing: '正在准备这次出行所需的信息',
-        policy_searching: '正在检索适用的差旅制度',
+        policy_searching: '正在检索适用的报销与差旅制度',
         travel_info_searching: '正在查询目的地天气与出行信息',
         train_query_searching: '正在查询高铁车次与余票',
         memory_searching: '正在查找相关差旅记录',
@@ -116,7 +121,7 @@
 
     // 进度标签：优先用 GET /api/intents 动态填充，失败时退回本地保底 map。
     const progressAgentLabels = {
-        rag_knowledge: '差旅标准',
+        rag_knowledge: '制度咨询',
         information_query: '天气与出行',
         train_query: '高铁车次',
         memory_query: '差旅记录',
@@ -126,7 +131,6 @@
         trip_compliance: '合规检查',
     };
     let dynamicAgentLabels = null;
-    let followConversation = true;
 
     function getAgentLabel(intent) {
         if (dynamicAgentLabels && dynamicAgentLabels[intent]) return dynamicAgentLabels[intent];
@@ -145,12 +149,22 @@
         }
     }
 
-    // 多模态附件：待发送的已上传附件 + 消息级 X-Request-ID（上传/聊天/重试共用）。
-    let pendingAttachments = [];
-    let currentRequestId = '';
-    let retryRequestPending = false;
-    let submissionRetry = null;
-    let interruptPending = false;
+    // 多模态附件：待发送的已上传附件，属于草稿的一部分，跟着会话走。
+    // 请求 ID、重试状态、中断状态都在各自的 SessionRuntime 上，不在这里。
+    // 首页（还没进任何会话）也有一个输入区，它的草稿先记在这个匿名草稿位，
+    // 进会话时由 mountSession 搬过去。
+    const looseDraft = { text: '', attachments: [], placeholder: '' };
+
+    function draftSlot(runtime) {
+        if (!runtime) return looseDraft;
+        if (!runtime.draft.attachments) runtime.draft.attachments = [];
+        return runtime.draft;
+    }
+
+    // 当前输入区正在编辑的那份草稿。附件卡片、上传回执都写到这里。
+    function activeAttachments() {
+        return draftSlot(window.HommeySessionRuntime.active()).attachments;
+    }
 
     // 语音输入（Mode A）：MediaRecorder → 16kHz mono WAV → ASR 转写文本回填。
     let voiceRecorder = null;
@@ -159,6 +173,8 @@
     let recordingButton = null;
 
     const rotatingPrompts = [
+        { label: '版面费报销需要什么材料？', prompt: '版面费报销需要什么材料？' },
+        { label: '电子发票可以上传截图吗？', prompt: '电子发票可以上传截图报销吗？' },
         { label: '下周一去上海两天，帮我安排一下', prompt: '下周一去上海出差两天，帮我规划行程' },
         { label: '查一下北京的住宿和交通标准', prompt: '北京出差的住宿和交通标准是什么' },
         { label: '找到我上次去深圳的差旅行程', prompt: '查看我上次去深圳的差旅行程' },
@@ -167,34 +183,9 @@
         { label: '准备一条航班延误的备选路线', prompt: '如果航班延误，帮我准备一条备选路线' },
     ];
 
-    const onboardingSteps = [
-        {
-            question: '先告诉我，你平时从哪个城市出发比较多？',
-            key: 'home_location',
-            hint: '之后规划行程时，我会优先按这个城市计算出发方案。',
-            options: ['北京', '上海', '广州', '深圳', '成都', '杭州', '其他'],
-        },
-        {
-            question: '出差路上，你更偏好哪种交通方式？',
-            key: 'transportation_preference',
-            hint: '我会在时间、舒适度和预算之间做更贴近偏好的取舍。',
-            options: ['高铁', '飞机', '自驾', '都可以', '其他'],
-        },
-        {
-            question: '住宿方面，有固定喜欢的酒店或风格吗？',
-            key: 'hotel_brands',
-            hint: '品牌、安静程度、通勤距离都可以告诉我。',
-            options: ['汉庭', '如家', '全季', '亚朵', '锦江之星', '其他'],
-        },
-        {
-            question: '最后，座位或舱位有什么偏好吗？',
-            key: 'seat_preference',
-            hint: '如果没有固定偏好，我会优先选择更稳妥的方案。',
-            options: ['商务座', '一等座', '二等座', '经济舱', '不指定', '其他'],
-        },
-    ];
-
     applyStoredAppearance();
+    // 会话运行时要往 #chatMessages 里挂各会话自己的画布。
+    window.HommeySessionRuntime.configure({ mountPoint: chatMessages });
     bindEvents();
     routeMotionController = initializeInteractiveRoute();
     document.addEventListener('DOMContentLoaded', initialize);
@@ -424,16 +415,17 @@
     function bindEvents() {
         chatInput.addEventListener('input', () => {
             resizeInput(chatInput);
-            if (retryRequestPending) {
-                resetRequestId();
-                retryRequestPending = false;
+            const runtime = activeRuntime();
+            if (runtime?.retryRequestPending) {
+                resetRequestId(runtime);
+                runtime.retryRequestPending = false;
             }
         });
         homeInput.addEventListener('input', () => resizeInput(homeInput));
         chatInput.addEventListener('keydown', handleComposerKeydown);
         homeInput.addEventListener('keydown', handleComposerKeydown);
         sendBtn.addEventListener('click', () => {
-            if (isProcessing) interruptCurrentTurn();
+            if (isActiveProcessing()) interruptCurrentTurn();
             else submitCurrentInput();
         });
         homeComposer.addEventListener('submit', (event) => {
@@ -590,10 +582,16 @@
             hideQuickTripSuggestions();
             setQuickTripPlaceStatus('目的地已改变，请在新的城市范围内重新选择工作地点。');
         });
-        chatMessages.addEventListener('scroll', () => {
-            markConversationScrolling();
-            followConversation = chatMessages.scrollHeight - chatMessages.scrollTop - chatMessages.clientHeight < 96;
-        }, { passive: true });
+        // 滚动发生在各会话自己的 .session-view 上，切走再切回时滚动位置天然保留。
+        // scroll 不冒泡，所以在挂载点用捕获阶段接。
+        chatMessages.addEventListener('scroll', (event) => {
+            const view = event.target.closest?.('.session-view');
+            if (!view) return;
+            const runtime = window.HommeySessionRuntime.get(view.dataset.sessionId);
+            if (!runtime) return;
+            markConversationScrolling(view);
+            runtime.followConversation = view.scrollHeight - view.scrollTop - view.clientHeight < 96;
+        }, { passive: true, capture: true });
 
         document.addEventListener('click', (event) => {
             if (!event.target.closest('[data-retrieval-mode-control]')) closeRetrievalModeMenus();
@@ -608,7 +606,7 @@
         });
     }
 
-    function retrievalModeStorageKey(sessionId = activeSessionId) {
+    function retrievalModeStorageKey(sessionId = activeSessionId()) {
         return `${RETRIEVAL_MODE_KEY_PREFIX}.${userId}.${sessionId || 'pending'}`;
     }
 
@@ -680,11 +678,11 @@
         if (disabled) closeRetrievalModeMenus();
     }
 
-    function markConversationScrolling() {
-        chatMessages.classList.add('is-scrolling');
+    function markConversationScrolling(view) {
+        view.classList.add('is-scrolling');
         clearTimeout(scrollIdleTimer);
         scrollIdleTimer = setTimeout(() => {
-            chatMessages.classList.remove('is-scrolling');
+            view.classList.remove('is-scrolling');
         }, 900);
     }
 
@@ -705,13 +703,7 @@
             setInputEnabled(true);
             startPromptRotation();
 
-            const newData = await fetchJson(`/api/${encodeURIComponent(userId)}/is-new`);
-            if (newData.is_new) {
-                enterChatView();
-                startOnboarding();
-            } else {
-                showHome();
-            }
+            showHome();
         } catch (err) {
             showInitError(err.message || '无法连接到服务器，请检查网络后刷新页面');
         }
@@ -724,44 +716,40 @@
         else submitCurrentInput();
     }
 
+    // 首页是"新对话的起点"，不该续写上一次的会话。例外是刚点过「新建会话」的那块
+    // 空画布——它还一条消息都没有，复用它，否则每问一句都会多出一条空会话。
+    function homeStartsNewConversation() {
+        const runtime = activeRuntime();
+        return !runtime || runtime.container.children.length > 0;
+    }
+
     function submitHomeInput() {
         const text = homeInput.value.trim();
-        const hasReadyAttachments = pendingAttachments.some((attachment) => attachment.status === 'ready');
-        if ((!text && !hasReadyAttachments) || isProcessing || isOnboarding) return;
+        const hasReadyAttachments = activeAttachments().some((attachment) => attachment.status === 'ready');
+        if ((!text && !hasReadyAttachments) || isActiveProcessing()) return;
         homeInput.value = '';
         resizeInput(homeInput);
         chatInput.value = text;
         enterChatView();
-        sendMessage();
+        sendMessage(undefined, { newConversation: homeStartsNewConversation() });
     }
 
     function submitPrompt(prompt) {
-        if (!prompt || isProcessing || isOnboarding) return;
+        if (!prompt || isActiveProcessing()) return;
         chatInput.value = prompt;
         enterChatView();
-        sendMessage();
+        sendMessage(undefined, { newConversation: homeStartsNewConversation() });
     }
 
     function submitCurrentInput() {
-        if (customInputCallback) {
-            const value = chatInput.value.trim();
-            if (!value) return;
-            const callback = customInputCallback;
-            customInputCallback = null;
-            chatInput.value = '';
-            chatInput.placeholder = defaultPlaceholder;
-            resizeInput(chatInput);
-            callback(value);
-            return;
-        }
         sendMessage();
     }
 
     function handlePresentationSubmit(event) {
         const text = String(event.detail?.text || '').trim();
-        if (!text || isProcessing || isOnboarding || event.detail?.card?.dataset.archived === 'true') {
+        if (!text || isActiveProcessing() || event.detail?.card?.dataset.archived === 'true') {
             event.preventDefault();
-            if (isProcessing) showToast('当前任务正在处理，请完成后再提交。');
+            if (isActiveProcessing()) showToast('当前任务正在处理，请完成后再提交。');
             return;
         }
         // Card submissions use the same chat endpoint, request id, locking and
@@ -781,21 +769,21 @@
     function enterChatView() {
         setMainView('chat');
         closeSidebar();
-        requestAnimationFrame(scrollToBottom);
+        requestAnimationFrame(() => {
+            const runtime = activeRuntime();
+            if (runtime) scrollToBottom(runtime);
+        });
     }
 
+    // 首页只在当前会话真的在跑时才拦——别的会话在跑不该把人锁在首页。
     function showHome() {
-        if (isOnboarding || isProcessing) return;
+        if (isActiveProcessing()) return;
         setMainView('home');
         closeSidebar();
         setTimeout(() => homeInput.focus(), 180);
     }
 
     function showKnowledge() {
-        if (isOnboarding) {
-            showToast('完成首次设置后即可查阅知识库。');
-            return;
-        }
         const currentView = appShell.dataset.view;
         if (currentView === 'home' || currentView === 'chat') {
             knowledgeReturnView = currentView;
@@ -845,6 +833,10 @@
         knowledgeLoading = true;
         try {
             const data = await fetchJson('/api/knowledge/documents');
+            const scopes = Array.isArray(data.search_scopes) ? data.search_scopes : [];
+            document.getElementById('knowledgeScopeNote').textContent = scopes.length
+                ? `当前回答使用 ${scopes.join('、')} 分区的资料；其他分区仅供查阅。新上传资料进入 ${scopes[0]}。`
+                : '当前回答可检索全部制度资料。';
             knowledgeDocuments = Array.isArray(data.documents) ? data.documents : [];
             knowledgeLoaded = true;
             document.getElementById('knowledgeDocumentCount').textContent = String(data.total ?? knowledgeDocuments.length);
@@ -1267,16 +1259,16 @@
     }
 
     async function loadActiveTrip() {
-        const sessionId = activeSessionId;
+        const sessionId = activeSessionId();
         try {
             // 没有选择会话时，不读取任何其他会话的行程。
-            if (!activeSessionId) {
+            if (!activeSessionId()) {
                 activeTrip.replaceChildren();
                 activeTrip.appendChild(createEmptyState('当前没有进行中的出差任务。'));
                 return;
             }
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/trip/active?session_id=${encodeURIComponent(sessionId)}`);
-            if (activeSessionId !== sessionId) return;
+            if (activeSessionId() !== sessionId) return;
             const trip = data.active_trip;
             activeTrip.replaceChildren();
             if (!trip) {
@@ -1301,7 +1293,7 @@
                 activeTrip.appendChild(row);
             });
         } catch (err) {
-            if (activeSessionId !== sessionId) return;
+            if (activeSessionId() !== sessionId) return;
             activeTrip.replaceChildren(createEmptyState('暂时无法读取行程。'));
         }
     }
@@ -1336,19 +1328,19 @@
     async function loadSessions() {
         try {
             const remembered = rememberedSession();
-            activeSessionId = '';
+            setActiveSession('');
             if (remembered) {
                 try {
                     await fetchJson(
                         `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(remembered)}/activate`,
                         { method: 'POST' }
                     );
-                    activeSessionId = remembered;
+                    setActiveSession(remembered);
                 } catch (err) {
                     if (err instanceof ApiError && err.code === 'SESSION_NOT_FOUND') {
                         rememberSession('');
                     } else {
-                        activeSessionId = remembered;
+                        setActiveSession(remembered);
                         throw err;
                     }
                 }
@@ -1386,13 +1378,33 @@
     }
 
     // 这一轮浏览还没开过会话（刚进入，或上次那个已经不可用）：现在建一个，
-    // 每个聊天请求都必须携带明确的会话 ID。
-    async function ensureActiveSession() {
-        if (activeSessionId) return activeSessionId;
+    // 每个聊天请求都必须携带明确的会话 ID。startNew 为真时，手上那条会话不用，
+    // 另开一条——首页的提问要用这个语义，见 homeStartsNewConversation。
+    async function ensureActiveSession(startNew = false) {
+        const previous = window.HommeySessionRuntime.active();
+        if (!startNew && activeSessionId()) return activeSessionId();
         const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
-        activeSessionId = data.session_id || '';
-        rememberSession(activeSessionId);
-        return activeSessionId;
+        const sessionId = data.session_id || '';
+        const runtime = window.HommeySessionRuntime.ensure(sessionId);
+        // 两个输入区共用一份草稿，附件是在"认领时活动的那个会话"下记的（见 handleFilePick）。
+        // 换会话时它们必须跟着这条消息走，否则首页上看得见的 chips 会留在旧会话里发不出去。
+        runtime.draft.attachments = [
+            ...(previous ? previous.draft.attachments : looseDraft.attachments),
+            ...looseDraft.attachments,
+            ...(runtime.draft.attachments || []),
+        ];
+        if (previous) {
+            previous.draft.attachments = [];
+            // 和切会话一样：丢内存态，下次从库里重建，避免首页每问一句就留下一个容器。
+            window.HommeySessionRuntime.release(previous.id);
+        }
+        looseDraft.attachments = [];
+        setActiveSession(sessionId);
+        rememberSession(sessionId);
+        window.HommeySessionRuntime.mount(runtime);
+        syncComposerToActive();
+        renderPendingAttachments();
+        return sessionId;
     }
 
     function renderSessions(sessions) {
@@ -1401,13 +1413,23 @@
         label.className = 'history-label';
         label.textContent = '最近';
         historyList.appendChild(label);
-        if (!sessions.length) {
+
+        // 服务端的列表是从消息推出来的，刚建、还一条消息都没发出去的会话不在里面。
+        // 正在跑的那种必须补进来，否则用户切走之后就没有入口回去了。
+        const listed = new Set(sessions.map((session) => session.session_id));
+        const runningOnly = window.HommeySessionRuntime.all()
+            .filter((runtime) => runtime.processing && !listed.has(runtime.id))
+            .map((runtime) => ({ session_id: runtime.id, title: '新会话', preview: '' }));
+        const rows = [...sessions, ...runningOnly];
+
+        if (!rows.length) {
             historyList.appendChild(createEmptyState('还没有历史会话。发送第一条消息后会自动保存。'));
             return;
         }
-        sessions.forEach((session) => {
+        rows.forEach((session) => {
+            const running = window.HommeySessionRuntime.isRunning(session.session_id);
             const row = document.createElement('div');
-            row.className = `session-row${session.session_id === activeSessionId ? ' active' : ''}`;
+            row.className = `session-row${session.session_id === activeSessionId() ? ' active' : ''}`;
             row.dataset.sessionId = session.session_id;
             row.dataset.title = session.title;
 
@@ -1425,21 +1447,91 @@
             more.textContent = '•••';
             more.addEventListener('click', (event) => openSessionPopover(event, session));
             row.append(open, more);
+            if (running) {
+                row.classList.add('is-running');
+                const dot = document.createElement('span');
+                dot.className = 'session-running-dot';
+                dot.setAttribute('aria-label', '正在运行');
+                row.insertBefore(dot, open);
+            }
             historyList.appendChild(row);
         });
         filterHistory();
     }
 
+    // 把一个会话的画布挂到 #chatMessages，并交换草稿。
+    // 切走的上一个会话交给保留规则：还在跑就留在内存里继续往自己的容器写，
+    // 跑完了就丢掉，下次打开从库里重建。这里不再有"正在生成就不许切"的限制。
+    // 换会话才交换草稿：停在同一个会话上重复调用（比如发消息前确保画布挂上）
+    // 不能动用户正在输入的草稿。
+    function mountSession(sessionId) {
+        const next = window.HommeySessionRuntime.ensure(sessionId);
+        const previous = window.HommeySessionRuntime.active();
+        if (previous !== next) {
+            if (previous) {
+                previous.draft.text = chatInput.value;
+                window.HommeySessionRuntime.release(previous.id);
+            } else {
+                // 从首页进来：首页那份匿名草稿（含待发附件）交给这个会话。
+                next.draft.attachments = [
+                    ...looseDraft.attachments,
+                    ...(next.draft.attachments || []),
+                ];
+                looseDraft.attachments = [];
+            }
+            chatInput.value = next.draft.text || '';
+            resizeInput(chatInput);
+            renderPendingAttachments();
+        }
+        setActiveSession(sessionId);
+        window.HommeySessionRuntime.mount(next);
+        syncComposerToActive();
+        // 收起时布局为 0，滚动位置只能在重新显示之后落。
+        requestAnimationFrame(() => scrollToBottom(next));
+        return next;
+    }
+
+    // 把历史画进会话自己的容器。只做 DOM、不碰网络，所以中途不会被切换打断。
+    function buildHistory(runtime, messages, plans) {
+        messages.forEach((message) => {
+            const role = message.role === 'assistant' ? 'ai' : message.role;
+            if (role === 'user' && message.content_type === 'trip_submission') {
+                collapseTripIntakeCards(runtime);
+                return;
+            }
+            if (role === 'ai') {
+                const plan = plans.find(item => item.run_id === message.request_id);
+                if (plan) window.ExecutionPlan?.update(runtime.container, plan);
+            }
+            if (role === 'ai' || role === 'user') {
+                if (role === 'ai' && message.answer_document) {
+                    addAnswerMessage(runtime, message.answer_document, message.timestamp);
+                } else if (role === 'ai' && message.presentation_document) {
+                    addPresentationMessage(runtime, {...message.presentation_document, interaction_id: message.presentation_document.interaction_id || message.request_id}, message.timestamp);
+                } else {
+                    addMessage(runtime, role, message.content || '', message.timestamp, message.attachments);
+                }
+            }
+        });
+        plans.forEach(plan => window.ExecutionPlan?.update(runtime.container, plan));
+        const latest = messages[messages.length - 1];
+        setSessionPlaceholder(
+            runtime,
+            latest?.presentation_document?.type === 'trip_intake'
+                ? latest.presentation_document.input_placeholder
+                : ''
+        );
+    }
+
     async function createNewSession() {
-        if (isProcessing || isOnboarding) return;
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
-            activeSessionId = data.session_id || '';
-            rememberSession(activeSessionId);
+            const runtime = mountSession(data.session_id || '');
+            runtime.container.replaceChildren();
+            runtime.followConversation = true;
+            rememberSession(activeSessionId());
             setRetrievalMode('standard', { persist: true });
-            followConversation = true;
-            chatMessages.replaceChildren();
-            setComposerContext('');
+            setSessionPlaceholder(runtime, '');
             showHome();
             await Promise.all([refreshSessionList(), loadActiveTrip()]);
         } catch (err) {
@@ -1448,49 +1540,33 @@
     }
 
     async function openSession(sessionId) {
-        if (isProcessing || isOnboarding) return;
+        // 还在跑的会话，容器和它的流都活着：直接挂回来，不重拉历史，
+        // 已经收到的内容也还在。
+        const live = window.HommeySessionRuntime.get(sessionId);
+        if (live && live.processing) {
+            mountSession(sessionId);
+            rememberSession(sessionId);
+            restoreRetrievalMode();
+            enterChatView();
+            await Promise.all([refreshSessionList(), loadActiveTrip()]);
+            return;
+        }
         try {
             const data = await fetchJson(
                 `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/activate`,
                 { method: 'POST' }
             );
-            activeSessionId = sessionId;
-            rememberSession(sessionId);
-            restoreRetrievalMode();
-            followConversation = true;
-            chatMessages.replaceChildren();
-            const messages = data.messages || [];
             let plans = [];
             try {
                 plans = (await fetchJson(`/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(sessionId)}/execution-plans`)).plans || [];
             } catch (_) { /* Chat history remains usable if progress recovery is unavailable. */ }
-            messages.forEach((message) => {
-                const role = message.role === 'assistant' ? 'ai' : message.role;
-                if (role === 'user' && message.content_type === 'trip_submission') {
-                    collapseTripIntakeCards();
-                    return;
-                }
-                if (role === 'ai') {
-                    const plan = plans.find(item => item.run_id === message.request_id);
-                    if (plan) window.ExecutionPlan?.update(chatMessages, plan);
-                }
-                if (role === 'ai' || role === 'user') {
-                    if (role === 'ai' && message.answer_document) {
-                        addAnswerMessage(message.answer_document, message.timestamp);
-                    } else if (role === 'ai' && message.presentation_document) {
-                        addPresentationMessage({...message.presentation_document, interaction_id: message.presentation_document.interaction_id || message.request_id}, message.timestamp);
-                    } else {
-                        addMessage(role, message.content || '', message.timestamp, message.attachments);
-                    }
-                }
-            });
-            plans.forEach(plan => window.ExecutionPlan?.update(chatMessages, plan));
-            const latest = messages[messages.length - 1];
-            setComposerContext(
-                latest?.presentation_document?.type === 'trip_intake'
-                    ? latest.presentation_document.input_placeholder
-                    : ''
-            );
+            // 数据取完才开始建 DOM，中间没有 await，不会被切换打断。
+            const runtime = mountSession(sessionId);
+            runtime.container.replaceChildren();
+            runtime.followConversation = true;
+            buildHistory(runtime, data.messages || [], plans);
+            rememberSession(sessionId);
+            restoreRetrievalMode();
             enterChatView();
             await Promise.all([refreshSessionList(), loadActiveTrip()]);
         } catch (err) {
@@ -1566,16 +1642,19 @@
     function confirmDeleteSession() {
         sessionPopover.hidden = true;
         openConfirm('删除这条会话？', '删除后无法恢复，但不会影响你的差旅偏好。', async () => {
+            const target = selectedSessionId;
+            // 正在跑的会话先停掉：后端这条会话一旦删除，那个流就没有落点了。
+            const runtime = window.HommeySessionRuntime.get(target);
+            if (runtime && runtime.processing) await interruptTurn(runtime);
             await fetchJson(
-                `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(selectedSessionId)}`,
+                `/api/${encodeURIComponent(userId)}/sessions/${encodeURIComponent(target)}`,
                 { method: 'DELETE' }
             );
-            if (selectedSessionId === activeSessionId) {
-                followConversation = true;
-                chatMessages.replaceChildren();
-                setMainView('home');
-                activeSessionId = '';
+            window.HommeySessionRuntime.discard(target);
+            if (target === activeSessionId()) {
+                setActiveSession('');
                 rememberSession('');
+                setMainView('home');
             }
             await Promise.all([refreshSessionList(), loadActiveTrip()]);
             showToast('会话已删除');
@@ -1584,11 +1663,15 @@
 
     function confirmClearHistory() {
         openConfirm('清空全部聊天记录？', '所有历史会话都会被删除，此操作无法恢复。', async () => {
+            await Promise.all(
+                window.HommeySessionRuntime.all()
+                    .filter(runtime => runtime.processing)
+                    .map(runtime => interruptTurn(runtime))
+            );
             await fetchJson(`/api/${encodeURIComponent(userId)}/history`, { method: 'DELETE' });
-            activeSessionId = '';
+            window.HommeySessionRuntime.discardAll();
+            setActiveSession('');
             rememberSession('');
-            followConversation = true;
-            chatMessages.replaceChildren();
             closeSettings();
             setMainView('home');
             await Promise.all([refreshSessionList(), loadActiveTrip()]);
@@ -1615,109 +1698,25 @@
         }
     }
 
-    function startOnboarding() {
-        isOnboarding = true;
-        addMessage('ai', '你好，我是 Hommey。第一次见面，我想先了解几项偏好，让之后的差旅建议更贴近你。');
-        setTimeout(() => showOnboardingQuestion(0), 360);
+    function newRequestId() {
+        // 简单 uuid v4，无需依赖外部库。
+        return (crypto && crypto.randomUUID)
+            ? crypto.randomUUID()
+            : 'xxxxxxxxxxxx4xxx'.replace(/x/g, (c) => ((Math.random() * 16) | 0).toString(16));
     }
 
-    function showOnboardingQuestion(index) {
-        if (index >= onboardingSteps.length) {
-            finishOnboarding();
-            return;
-        }
-        onboardingIndex = index;
-        const step = onboardingSteps[index];
-        addOptionsMessage(step.question, step.options, step.hint);
+    function ensureRequestId(runtime) {
+        if (!runtime.requestId) runtime.requestId = newRequestId();
+        return runtime.requestId;
     }
 
-    function addOptionsMessage(question, options, hint) {
-        const row = createMessageShell('ai');
-        const stack = row.querySelector('.msg-stack');
-        const bubble = document.createElement('div');
-        bubble.className = 'msg-bubble ai';
-        bubble.append(createStrong(question));
-        if (hint) bubble.append(document.createElement('br'), createMutedText(hint));
-        const optionList = document.createElement('div');
-        optionList.className = 'option-list';
-        options.forEach((option) => {
-            const pill = document.createElement('button');
-            pill.type = 'button';
-            pill.className = 'option-pill';
-            pill.textContent = option;
-            pill.addEventListener('click', () => handleOnboardingOption(option, optionList));
-            optionList.appendChild(pill);
-        });
-        stack.append(bubble, optionList);
-        chatMessages.appendChild(row);
-        scrollToBottom();
-    }
-
-    function handleOnboardingOption(option, optionList) {
-        optionList.querySelectorAll('button').forEach((button) => { button.disabled = true; });
-        if (option === '其他') {
-            chatInput.placeholder = '输入你的偏好';
-            chatInput.focus();
-            customInputCallback = (value) => {
-                addMessage('user', value);
-                sendOnboardingAnswer(value);
-            };
-            return;
-        }
-        addMessage('user', option);
-        sendOnboardingAnswer(option);
-    }
-
-    async function sendOnboardingAnswer(value) {
-        const step = onboardingSteps[onboardingIndex];
-        isProcessing = true;
-        showProcessingIndicator([]);
-        try {
-            const data = await fetchJson(`/api/${encodeURIComponent(userId)}/onboarding/preference`, {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ key: step.key, value }),
-            });
-            removeProcessingIndicator();
-            if (data.error || data.success === false) {
-                addMessage('ai', getErrorMessage(data, '偏好保存失败，请再试一次。'));
-                return;
-            }
-            addMessage('ai', data.message || `我记住了：${value}`);
-            await loadUserSummary();
-            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 360);
-        } catch (err) {
-            removeProcessingIndicator();
-            addMessage('ai', '偏好已先记录在当前对话里，稍后会继续尝试同步。');
-            setTimeout(() => showOnboardingQuestion(onboardingIndex + 1), 360);
-        } finally {
-            isProcessing = false;
-        }
-    }
-
-    function finishOnboarding() {
-        isOnboarding = false;
-        chatInput.placeholder = defaultPlaceholder;
-        addMessage('ai', '偏好设置完成。现在可以把你的出行计划交给我。');
-        refreshSessionList();
-    }
-
-    function ensureRequestId() {
-        if (!currentRequestId) {
-            // 简单 uuid v4，无需依赖外部库。
-            currentRequestId = (crypto && crypto.randomUUID)
-                ? crypto.randomUUID()
-                : 'xxxxxxxxxxxx4xxx'.replace(/x/g, (c) => ((Math.random() * 16) | 0).toString(16));
-        }
-        return currentRequestId;
-    }
-
-    function resetRequestId() {
-        currentRequestId = '';
+    function resetRequestId(runtime) {
+        runtime.requestId = '';
     }
 
     async function uploadAttachment(file, onProgress) {
-        const requestId = ensureRequestId();
+        // 附件上传有它自己的幂等键，与会话的聊天轮次无关。
+        const requestId = newRequestId();
         return new Promise((resolve, reject) => {
             const xhr = new XMLHttpRequest();
             xhr.open('POST', `/api/${encodeURIComponent(userId)}/attachments`);
@@ -1761,9 +1760,11 @@
     }
 
     function renderPendingAttachments() {
+        // 两个输入区（首页 / 会话）共用一份草稿，所以两边画的是同一组附件。
+        const attachments = activeAttachments();
         pendingContainers().forEach((c) => {
             c.replaceChildren();
-            pendingAttachments.forEach((attachment) => {
+            attachments.forEach((attachment) => {
                 const chip = document.createElement('span');
                 chip.className = attachment.status === 'failed' ? 'pending-chip failed' : 'pending-chip';
                 chip.dataset.id = attachment.id || '';
@@ -1782,30 +1783,34 @@
                 remove.title = '移除附件';
                 remove.textContent = '×';
                 remove.addEventListener('click', () => {
-                    pendingAttachments = pendingAttachments.filter((item) => {
+                    const draft = draftSlot(window.HommeySessionRuntime.active());
+                    draft.attachments = draft.attachments.filter((item) => {
                         const sameId = !!chip.dataset.id && (item.id || '') === chip.dataset.id;
                         const sameTemporaryId = !!chip.dataset.tmpId
                             && (item.tmpId || '') === chip.dataset.tmpId;
                         return !(sameId || sameTemporaryId);
                     });
-                    if (retryRequestPending) {
-                        resetRequestId();
-                        retryRequestPending = false;
+                    const runtime = activeRuntime();
+                    if (runtime?.retryRequestPending) {
+                        resetRequestId(runtime);
+                        runtime.retryRequestPending = false;
                     }
                     renderPendingAttachments();
                 });
                 chip.appendChild(remove);
                 c.appendChild(chip);
             });
-            c.style.display = pendingAttachments.length ? '' : 'none';
+            c.style.display = attachments.length ? '' : 'none';
         });
     }
 
     async function handleFilePick(fileList) {
         const files = Array.from(fileList || []);
+        // 上传是异步的：在这里先认下草稿位，上传期间用户切走也不会把附件落到别人头上。
+        const draft = draftSlot(window.HommeySessionRuntime.active());
         for (const file of files) {
             const entry = { tmpId: 'tmp_' + Math.random().toString(36).slice(2), filename: file.name, status: 'uploading' };
-            pendingAttachments.push(entry);
+            draft.attachments.push(entry);
             renderPendingAttachments();
             try {
                 const res = await uploadAttachment(file);
@@ -1952,14 +1957,16 @@
 
     function reAttachAttachment(att) {
         if (att.status !== 'ready') { showToast('该附件暂不可用'); return; }
-        if (pendingAttachments.some((item) => item.id === att.id)) {
+        const attachments = activeAttachments();
+        if (attachments.some((item) => item.id === att.id)) {
             showToast('该附件已在待发送列表中');
             return;
         }
-        pendingAttachments.push({ id: att.id, filename: att.filename, kind: att.kind, status: 'ready' });
-        if (retryRequestPending) {
-            resetRequestId();
-            retryRequestPending = false;
+        attachments.push({ id: att.id, filename: att.filename, kind: att.kind, status: 'ready' });
+        const runtime = activeRuntime();
+        if (runtime?.retryRequestPending) {
+            resetRequestId(runtime);
+            runtime.retryRequestPending = false;
         }
         renderPendingAttachments();
         closeLayer('attachmentsLayer');
@@ -2017,8 +2024,8 @@
     }
 
     function openQuickTrip() {
-        if (isProcessing || isOnboarding) {
-            showToast(isProcessing ? '当前任务完成后即可使用快速差旅。' : '请先完成首次设置。');
+        if (isActiveProcessing()) {
+            showToast('当前任务完成后即可使用快速差旅。');
             return;
         }
         closeSidebar();
@@ -2126,7 +2133,7 @@
 
     function submitQuickTrip(event) {
         event.preventDefault();
-        if (isProcessing || !quickTripForm.reportValidity()) return;
+        if (isActiveProcessing() || !quickTripForm.reportValidity()) return;
         const origin = document.getElementById('quickTripOrigin').value.trim();
         const destination = document.getElementById('quickTripDestination').value.trim();
         const startDate = document.getElementById('quickTripStartDate').value;
@@ -2179,60 +2186,78 @@
         const hasExplicitText = typeof explicitText === 'string';
         const text = hasExplicitText ? explicitText.trim() : chatInput.value.trim();
         const includeAttachments = options.includeAttachments !== false;
-        const hasAttachments = includeAttachments && pendingAttachments.some((a) => a.status === 'ready');
-        if ((!text && !hasAttachments) || isProcessing || isOnboarding) return;
-        if (options.retryRequestId) currentRequestId = options.retryRequestId;
-        else if (submissionRetry) resetRequestId();
-        submissionRetry = null;
-        chatMessages.querySelector('.submission-retry')?.remove();
+        const hasAttachments = includeAttachments && activeAttachments().some((a) => a.status === 'ready');
+        if ((!text && !hasAttachments)) return;
+        // 上限按"整个页面同时在跑几个"算。撞到后端全局信号量的失败模式是无反馈地
+        // 等 120s 再报 GLOBAL_CONCURRENCY_LIMIT，这里直接说清楚。
+        if (!window.HommeySessionRuntime.canStart()) {
+            showToast(`最多同时跑 ${window.HommeySessionRuntime.MAX_CONCURRENT} 个会话，等一个完成再开。`);
+            return;
+        }
+        // 这一轮浏览还没有会话就先建一个，否则这条消息会落进上一次的对话里。
+        // 首页来的提交（options.newConversation）即使有会话也要另开一条。
+        try {
+            await ensureActiveSession(options.newConversation === true);
+        } catch (err) {
+            showToast(formatDisplayError(err, '无法开始新会话，请重试'));
+            return;
+        }
+        // 会话锁定在这里：后面的 await 期间用户可能切走，甚至把这个会话删掉。
+        // 流、请求 ID 和渲染目标都从 runtime 取，不再读"当前是哪个会话"。
+        const runtime = window.HommeySessionRuntime.ensure(activeSessionId());
+        // 同一个会话内并发是后端设计性拒绝的（409 SESSION_BUSY），这里先挡掉。
+        if (runtime.processing) return;
+        // 保证这一屏挂着画布（从首页直接发第一条消息时可能还没有）。
+        // 这里不交换草稿——卡片内提交（preserveComposer）会带用户正在写的输入。
+        setActiveSession(runtime.id);
+        window.HommeySessionRuntime.mount(runtime);
+        syncComposerToActive();
+        if (options.retryRequestId) runtime.requestId = options.retryRequestId;
+        else if (runtime.submissionRetry) resetRequestId(runtime);
+        runtime.submissionRetry = null;
+        runtime.container.querySelector('.submission-retry')?.remove();
         clearTimeout(toastTimer);
         toast.classList.remove('visible');
+        // 附件从本会话的草稿里取，不从"当前输入区"取：上面的 await 期间可能切过会话。
         const sendingEntries = includeAttachments
-            ? pendingAttachments.filter((a) => a.status === 'ready')
+            ? draftSlot(runtime).attachments.filter((a) => a.status === 'ready')
             : [];
         const sendingAttachmentIds = sendingEntries.map((a) => a.id);
         const sendingAttachments = sendingEntries.map((a) => ({ filename: a.filename, kind: a.kind }));
         let requestCompleted = false;
         let submissionAccepted = false;
-        // 这一轮浏览还没有会话就先建一个，否则这条消息会落进上一次的对话里。
-        try {
-            await ensureActiveSession();
-        } catch (err) {
-            showToast(formatDisplayError(err, '无法开始新会话，请重试'));
-            return;
-        }
         enterChatView();
-        followConversation = true;
+        runtime.followConversation = true;
         const silentSubmission = options.silentSubmission || options.requestPayload?.input_source === 'quick_trip_form';
-        if (!silentSubmission) addMessage('user', text, undefined, sendingAttachments);
+        if (!silentSubmission) addMessage(runtime, 'user', text, undefined, sendingAttachments);
         if (!options.preserveComposer) {
             chatInput.value = '';
             resizeInput(chatInput);
         }
         if (includeAttachments) {
-            pendingAttachments = [];
+            draftSlot(runtime).attachments = [];
             renderPendingAttachments();
         }
-        isProcessing = true;
+        runtime.processing = true;
         setRetrievalModeControlsDisabled(true);
-        interruptPending = false;
+        runtime.interruptPending = false;
         sendBtn.disabled = false;
         chatInput.placeholder = 'Hommey 正在整理…';
         setSendLoading(true);
-        showProcessingIndicator([]);
+        showProcessingIndicator(runtime, []);
 
         try {
             const response = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
                 method: 'POST',
                 headers: {
                     'Content-Type': 'application/json',
-                    'X-Request-ID': ensureRequestId(),
+                    'X-Request-ID': ensureRequestId(runtime),
                 },
                 body: JSON.stringify({
                     message: text,
                     attachment_ids: sendingAttachmentIds,
-                    client_request_id: currentRequestId,
-                    session_id: activeSessionId || null,
+                    client_request_id: runtime.requestId,
+                    session_id: runtime.id || null,
                     retrieval_mode: retrievalMode,
                     ...(options.requestPayload || {}),
                 }),
@@ -2243,7 +2268,7 @@
             }
             if (!response.body) throw new Error('当前浏览器不支持流式响应');
             submissionAccepted = true;
-            collapseTripIntakeCards();
+            collapseTripIntakeCards(runtime);
 
             let streamMessage = null;
             let presentationRendered = false;
@@ -2266,42 +2291,42 @@
                     if (!event) continue;
                     if (event.type === 'error') throw createApiError(event, '处理失败，请重试');
                     if (event.type === 'execution_plan') {
-                        window.ExecutionPlan?.update(chatMessages, event);
-                        removeProcessingIndicator();
+                        window.ExecutionPlan?.update(runtime.container, event);
+                        removeProcessingIndicator(runtime);
                     }
-                    if (event.type === 'done' && event.public_plan) window.ExecutionPlan?.update(chatMessages, event.public_plan);
-                    if (event.type === 'status' || event.type === 'task_status') updateProcessingStatus(event);
+                    if (event.type === 'done' && event.public_plan) window.ExecutionPlan?.update(runtime.container, event.public_plan);
+                    if (event.type === 'status' || event.type === 'task_status') updateProcessingStatus(runtime, event);
                     if (event.type === 'attachment_context') {
                         responseSources = event.sources || [];
                         if (event.warnings && event.warnings.length) {
                             showToast(event.warnings.join('；'));
                         }
                     }
-                    if (event.type === 'agents') updateAgentTags(event.agents);
+                    if (event.type === 'agents') updateAgentTags(runtime, event.agents);
                     if (event.type === 'interrupted') {
                         turnInterrupted = true;
-                        removeProcessingIndicator();
-                        addMessage('ai', '已停止当前执行。输入“继续”可以从最近一次安全状态接着完成。');
+                        removeProcessingIndicator(runtime);
+                        addMessage(runtime, 'ai', '已停止当前执行。输入“继续”可以从最近一次安全状态接着完成。');
                     }
                     if (event.type === 'answer_document') {
-                        removeProcessingIndicator();
-                        addAnswerMessage(event.document);
+                        removeProcessingIndicator(runtime);
+                        addAnswerMessage(runtime, event.document);
                         presentationRendered = true;
                     }
                     if (event.type === 'presentation_document') {
-                        removeProcessingIndicator();
-                        addPresentationMessage({...event.document, interaction_id: event.document?.interaction_id || currentRequestId});
+                        removeProcessingIndicator(runtime);
+                        addPresentationMessage(runtime, {...event.document, interaction_id: event.document?.interaction_id || runtime.requestId});
                         presentationRendered = true;
                         nextPlaceholder = event.document?.input_placeholder || '';
                     }
                     if (event.type === 'chunk') {
                         if (!streamMessage) {
-                            removeProcessingIndicator();
-                            streamMessage = createStreamingMessage();
+                            removeProcessingIndicator(runtime);
+                            streamMessage = createStreamingMessage(runtime);
                         }
                         streamMessage.text += event.text || '';
                         renderMessageInto(streamMessage.bubble, streamMessage.text);
-                        scrollToBottom();
+                        scrollToBottom(runtime);
                     }
                     if (event.type === 'done') preferencesUpdated = !!event.preferences_updated;
                 }
@@ -2309,83 +2334,96 @@
 
             const tail = parseStreamLine(buffer);
             if (tail?.type === 'error') throw createApiError(tail, '处理失败，请重试');
-            if (tail?.type === 'execution_plan') window.ExecutionPlan?.update(chatMessages, tail);
-            if (tail?.type === 'done' && tail.public_plan) window.ExecutionPlan?.update(chatMessages, tail.public_plan);
-            if (tail && (tail.type === 'status' || tail.type === 'task_status')) updateProcessingStatus(tail);
+            if (tail?.type === 'execution_plan') window.ExecutionPlan?.update(runtime.container, tail);
+            if (tail?.type === 'done' && tail.public_plan) window.ExecutionPlan?.update(runtime.container, tail.public_plan);
+            if (tail && (tail.type === 'status' || tail.type === 'task_status')) updateProcessingStatus(runtime, tail);
             if (tail && tail.type === 'answer_document') {
-                removeProcessingIndicator();
-                addAnswerMessage(tail.document);
+                removeProcessingIndicator(runtime);
+                addAnswerMessage(runtime, tail.document);
                 presentationRendered = true;
             }
             if (tail && tail.type === 'presentation_document') {
-                removeProcessingIndicator();
-                addPresentationMessage({...tail.document, interaction_id: tail.document?.interaction_id || currentRequestId});
+                removeProcessingIndicator(runtime);
+                addPresentationMessage(runtime, {...tail.document, interaction_id: tail.document?.interaction_id || runtime.requestId});
                 presentationRendered = true;
                 nextPlaceholder = tail.document?.input_placeholder || '';
             }
             if (tail && tail.type === 'chunk') {
                 if (!streamMessage) {
-                    removeProcessingIndicator();
-                    streamMessage = createStreamingMessage();
+                    removeProcessingIndicator(runtime);
+                    streamMessage = createStreamingMessage(runtime);
                 }
                 streamMessage.text += tail.text || '';
                 renderMessageInto(streamMessage.bubble, streamMessage.text);
             }
             if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
 
-            removeProcessingIndicator();
+            removeProcessingIndicator(runtime);
             if (!streamMessage && !presentationRendered && !turnInterrupted) {
-                addMessage('ai', '我收到了，但这次没有返回具体内容。');
+                addMessage(runtime, 'ai', '我收到了，但这次没有返回具体内容。');
             }
             if (streamMessage && responseSources.length) {
                 renderAttachmentCards(streamMessage.stack, responseSources);
             }
-            setComposerContext(nextPlaceholder);
+            setSessionPlaceholder(runtime, nextPlaceholder);
             if (preferencesUpdated) await loadUserSummary();
-            await Promise.all([loadActiveTrip(), refreshSessionList()]);
+            // 侧栏的运行指示在 finally 里统一重画，这里不重复拉一次。
+            await loadActiveTrip();
             requestCompleted = true;
         } catch (err) {
-            removeProcessingIndicator();
-            window.ExecutionPlan?.connectionLost(chatMessages, currentRequestId);
+            removeProcessingIndicator(runtime);
+            window.ExecutionPlan?.connectionLost(runtime.container, runtime.requestId);
             const errorText = formatDisplayError(err, '网络错误，请检查连接后重试。');
+            // 错误落进这个会话自己的容器。用户可能已经切到别的会话去了，
+            // 那里不该被这条流的结果影响。
             if (options.inlineSubmission) showToast(errorText);
-            else addMessage('ai', errorText);
+            else addMessage(runtime, 'ai', errorText);
             if (options.inlineSubmission && submissionAccepted && (!(err instanceof ApiError) || err.retryable)) {
-                showSubmissionRetry(text, options, currentRequestId);
+                showSubmissionRetry(runtime, text, options, runtime.requestId);
             }
             // Preserve the body and request ID so an explicit retry remains
             // idempotent. Inline card submissions retain their values in-card
             // and never overwrite an unrelated composer draft.
-            if (!options.preserveComposer) chatInput.value = text;
+            if (!options.preserveComposer && runtime === window.HommeySessionRuntime.active()) chatInput.value = text;
             if (includeAttachments) {
+                // 还原到发起这次请求的那个会话，不是用户此刻正看着的那个。
+                const draft = draftSlot(runtime);
                 const sendingIds = new Set(sendingAttachmentIds);
-                pendingAttachments = [
+                draft.attachments = [
                     ...sendingEntries,
-                    ...pendingAttachments.filter((entry) => !sendingIds.has(entry.id)),
+                    ...draft.attachments.filter((entry) => !sendingIds.has(entry.id)),
                 ];
             }
-            retryRequestPending = true;
-            if (includeAttachments) renderPendingAttachments();
-            if (!options.preserveComposer) resizeInput(chatInput);
-        } finally {
-            isProcessing = false;
-            setRetrievalModeControlsDisabled(false);
-            interruptPending = false;
-            sendBtn.disabled = false;
-            setSendLoading(false);
-            chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
-            if (requestCompleted) {
-                resetRequestId();
-                retryRequestPending = false;
+            runtime.retryRequestPending = true;
+            if (includeAttachments && runtime === window.HommeySessionRuntime.active()) {
+                renderPendingAttachments();
             }
-            chatInput.focus();
+            if (!options.preserveComposer && runtime === window.HommeySessionRuntime.active()) resizeInput(chatInput);
+        } finally {
+            runtime.processing = false;
+            // 检索模式是按会话存的（retrievalModeStorageKey），后台会话跑完不能把
+            // 用户正在看的那个会话的控件解开。
+            setRetrievalModeControlsDisabled(isActiveProcessing());
+            runtime.interruptPending = false;
+            sendBtn.disabled = false;
+            if (requestCompleted) {
+                resetRequestId(runtime);
+                runtime.retryRequestPending = false;
+            }
+            // 共享输入区只跟随当前会话：后台会话跑完不该动用户正在用的输入框。
+            if (runtime === window.HommeySessionRuntime.active()) {
+                syncComposerToActive();
+                chatInput.focus();
+            }
+            // 侧边栏的运行指示要跟着变。
+            refreshSessionList();
         }
         return requestCompleted;
     }
 
-    function showSubmissionRetry(text, options, requestId) {
-        const pending = {text, options, requestId, sessionId: activeSessionId};
-        submissionRetry = pending;
+    function showSubmissionRetry(runtime, text, options, requestId) {
+        const pending = {text, options, requestId, sessionId: runtime.id};
+        runtime.submissionRetry = pending;
         const row = document.createElement('div');
         row.className = 'submission-retry';
         const copy = document.createElement('span');
@@ -2394,18 +2432,21 @@
         retry.type = 'button';
         retry.textContent = '重试';
         retry.addEventListener('click', () => {
-            if (isProcessing || submissionRetry !== pending || activeSessionId !== pending.sessionId) return;
+            if (runtime.processing || runtime.submissionRetry !== pending) return;
+            // 重试要把用户带回到这个会话，否则消息会落进当前看的那个。
+            if (activeSessionId() !== pending.sessionId) mountSession(pending.sessionId);
             sendMessage(text, {...options, retryRequestId: requestId});
         });
         row.append(copy, retry);
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
     }
 
-    async function interruptCurrentTurn() {
-        if (!isProcessing || interruptPending || !currentRequestId) return;
-        interruptPending = true;
-        setSendLoading(true, true);
+    // 停掉指定会话的运行。与当前查看的是哪一个无关——后台会话也能被停。
+    async function interruptTurn(runtime) {
+        if (!runtime || !runtime.processing || runtime.interruptPending || !runtime.requestId) return;
+        runtime.interruptPending = true;
+        if (runtime === window.HommeySessionRuntime.active()) setSendLoading(true, true);
         try {
             const response = await authFetch(
                 `/api/${encodeURIComponent(userId)}/orchestration/interrupt`,
@@ -2413,8 +2454,8 @@
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify({
-                        client_request_id: currentRequestId,
-                        session_id: activeSessionId || null,
+                        client_request_id: runtime.requestId,
+                        session_id: runtime.id || null,
                     }),
                 },
             );
@@ -2422,12 +2463,17 @@
                 const error = await response.json();
                 throw createApiError(error, '停止失败，请重试', response.status);
             }
-            chatInput.placeholder = '正在停止当前执行…';
+            setSessionPlaceholder(runtime, '正在停止当前执行…');
+            if (runtime === window.HommeySessionRuntime.active()) chatInput.placeholder = '正在停止当前执行…';
         } catch (err) {
-            interruptPending = false;
-            setSendLoading(true);
+            runtime.interruptPending = false;
+            if (runtime === window.HommeySessionRuntime.active()) setSendLoading(true);
             showToast(formatDisplayError(err, '停止失败，请重试。'));
         }
+    }
+
+    function interruptCurrentTurn() {
+        return interruptTurn(window.HommeySessionRuntime.active());
     }
 
     function createMessageShell(role) {
@@ -2443,8 +2489,10 @@
         return row;
     }
 
-    function addMessage(role, text, timestamp, attachments) {
-        collapseTripIntakeCards();
+    // 渲染函数一律显式接收目标 runtime。后台会话的流要继续写进它自己的容器，
+    // "当前查看的会话"不是渲染目标。
+    function addMessage(runtime, role, text, timestamp, attachments) {
+        collapseTripIntakeCards(runtime);
         const row = createMessageShell(role);
         const stack = row.querySelector('.msg-stack');
         const visibleText = role === 'user' ? userMessageText(text, attachments) : String(text || '');
@@ -2459,8 +2507,8 @@
             renderAttachmentCards(stack, attachments);
         }
         if (timestamp) stack.appendChild(createTime(timestamp));
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
         return row;
     }
 
@@ -2477,44 +2525,45 @@
         return value.slice(0, manifestStart).trim();
     }
 
-    function addAnswerMessage(documentData, timestamp) {
-        collapseTripIntakeCards();
+    function addAnswerMessage(runtime, documentData, timestamp) {
+        collapseTripIntakeCards(runtime);
         if (!window.HommeyAnswerCard || !documentData) {
-            return addMessage('ai', documentData?.plain_text || '查询结果已生成。', timestamp);
+            return addMessage(runtime, 'ai', documentData?.plain_text || '查询结果已生成。', timestamp);
         }
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
         stack.appendChild(window.HommeyAnswerCard.create(documentData));
         if (timestamp) stack.appendChild(createTime(timestamp));
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
         return row;
     }
 
-    function addPresentationMessage(documentData, timestamp) {
+    function addPresentationMessage(runtime, documentData, timestamp) {
         if (!documentData || documentData.type !== 'trip_intake' || !window.HommeyTripIntakeCard) {
-            return addMessage('ai', documentData?.plain_text || '请补充行程信息。', timestamp);
+            return addMessage(runtime, 'ai', documentData?.plain_text || '请补充行程信息。', timestamp);
         }
-        collapseTripIntakeCards();
+        collapseTripIntakeCards(runtime);
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
         const card = window.HommeyTripIntakeCard.create(documentData);
         stack.appendChild(card);
         if (documentData.archived) card.archive?.();
         if (timestamp) stack.appendChild(createTime(timestamp));
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
         return row;
     }
 
-    function collapseTripIntakeCards() {
-        chatMessages.querySelectorAll('.trip-intake-card').forEach(card => card.archive?.());
+    function collapseTripIntakeCards(runtime) {
+        runtime.container.querySelectorAll('.trip-intake-card').forEach(card => card.archive?.());
     }
 
-    function showProcessingIndicator(agents) {
-        removeProcessingIndicator();
+    function showProcessingIndicator(runtime, agents) {
+        removeProcessingIndicator(runtime);
         const row = createMessageShell('ai');
-        row.id = 'processingIndicator';
+        // 用 class 而不是 id：多个会话同时跑时会有多个指示器共存。
+        row.classList.add('processing-indicator');
         const stack = row.querySelector('.msg-stack');
         const box = document.createElement('div');
         box.className = 'agent-indicator';
@@ -2529,54 +2578,61 @@
         dots.innerHTML = '<i class="typing-dot"></i><i class="typing-dot"></i><i class="typing-dot"></i>';
         box.append(text, dots);
         stack.appendChild(box);
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
+        return row;
     }
 
-    function removeProcessingIndicator() {
-        clearTimeout(processingStatusTimer);
-        processingStatusQueue = [];
-        lastProcessingStatusAt = 0;
-        document.getElementById('processingIndicator')?.remove();
+    function processingIndicatorOf(runtime) {
+        return runtime.container.querySelector('.processing-indicator');
     }
 
-    function updateProcessingStatus(event) {
-        const indicator = document.getElementById('processingIndicator');
+    function removeProcessingIndicator(runtime) {
+        if (!runtime) return;
+        clearTimeout(runtime.statusTimer);
+        runtime.statusTimer = null;
+        runtime.statusQueue = [];
+        runtime.lastStatusAt = 0;
+        processingIndicatorOf(runtime)?.remove();
+    }
+
+    function updateProcessingStatus(runtime, event) {
+        const indicator = processingIndicatorOf(runtime);
         if (!indicator) return;
         const message = progressMessages[event.message_key] || event.message || '正在整理';
         const current = indicator.querySelector('.thinking-text')?.textContent;
-        if (message && message !== current && !processingStatusQueue.includes(message)) {
-            processingStatusQueue.push(message);
-            flushProcessingStatus();
+        if (message && message !== current && !runtime.statusQueue.includes(message)) {
+            runtime.statusQueue.push(message);
+            flushProcessingStatus(runtime);
         }
         if (event.type === 'task_status' && event.intent && event.phase === 'running') {
             const label = event.display || getAgentLabel(event.intent);
-            if (label) updateAgentTags([{ name: event.intent, display: label }]);
+            if (label) updateAgentTags(runtime, [{ name: event.intent, display: label }]);
         }
     }
 
-    function flushProcessingStatus() {
-        if (processingStatusTimer || !processingStatusQueue.length) return;
-        const elapsed = Date.now() - lastProcessingStatusAt;
+    function flushProcessingStatus(runtime) {
+        if (runtime.statusTimer || !runtime.statusQueue.length) return;
+        const elapsed = Date.now() - runtime.lastStatusAt;
         const delay = Math.max(0, 650 - elapsed);
-        processingStatusTimer = setTimeout(() => {
-            processingStatusTimer = null;
-            const text = document.querySelector('#processingIndicator .thinking-text');
+        runtime.statusTimer = setTimeout(() => {
+            runtime.statusTimer = null;
+            const text = processingIndicatorOf(runtime)?.querySelector('.thinking-text');
             if (!text) return;
-            const next = processingStatusQueue.shift();
+            const next = runtime.statusQueue.shift();
             text.classList.add('is-changing');
             setTimeout(() => {
                 if (!text.isConnected) return;
                 text.textContent = next;
                 text.classList.remove('is-changing');
-                lastProcessingStatusAt = Date.now();
-                flushProcessingStatus();
+                runtime.lastStatusAt = Date.now();
+                flushProcessingStatus(runtime);
             }, 160);
         }, delay);
     }
 
-    function updateAgentTags(agents) {
-        const tags = document.querySelector('#processingIndicator .agent-tags');
+    function updateAgentTags(runtime, agents) {
+        const tags = processingIndicatorOf(runtime)?.querySelector('.agent-tags');
         if (tags) renderAgentTagsInto(tags, agents);
     }
 
@@ -2591,15 +2647,15 @@
         });
     }
 
-    function createStreamingMessage() {
-        collapseTripIntakeCards();
+    function createStreamingMessage(runtime) {
+        collapseTripIntakeCards(runtime);
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
         const bubble = document.createElement('div');
         bubble.className = 'msg-bubble ai';
         stack.appendChild(bubble);
-        chatMessages.appendChild(row);
-        scrollToBottom();
+        runtime.container.appendChild(row);
+        scrollToBottom(runtime);
         return { bubble, stack, text: '' };
     }
 
@@ -2623,14 +2679,34 @@
         element.replaceChildren(document.createTextNode(String(text || '')));
     }
 
+    // 输入区是共享的一个，它的显示状态跟着当前会话走。
+    function setSessionPlaceholder(runtime, placeholder) {
+        runtime.draft.placeholder = String(placeholder || '');
+        if (runtime === window.HommeySessionRuntime.active() && !runtime.processing) {
+            chatInput.placeholder = runtime.draft.placeholder || defaultPlaceholder;
+        }
+    }
+
     function setComposerContext(placeholder) {
-        contextualPlaceholder = String(placeholder || '');
-        if (!isProcessing) chatInput.placeholder = contextualPlaceholder || defaultPlaceholder;
+        const runtime = window.HommeySessionRuntime.active();
+        if (runtime) setSessionPlaceholder(runtime, placeholder);
+    }
+
+    // 切会话之后把共享输入区同步到新会话：占位文案、发送键语义。
+    function syncComposerToActive() {
+        const runtime = window.HommeySessionRuntime.active();
+        const processing = !!(runtime && runtime.processing);
+        chatInput.placeholder = processing
+            ? (runtime.interruptPending ? '正在停止当前执行…' : 'Hommey 正在整理…')
+            : (runtime?.draft.placeholder || defaultPlaceholder);
+        setSendLoading(processing, !!(runtime && runtime.interruptPending));
+        // 检索模式是按会话存的，控件可用性也得跟着当前会话，而不是跟着"有没有人在跑"。
+        setRetrievalModeControlsDisabled(processing);
     }
 
     function handlePresentationFill(event) {
         const value = String(event.detail?.text || '').trim();
-        if (!value || isProcessing || isOnboarding) return;
+        if (!value || isActiveProcessing()) return;
         enterChatView();
         const current = chatInput.value.trim();
         chatInput.value = current ? `${current}，${value}` : value;
@@ -2649,7 +2725,7 @@
             stopVoiceRecording();
             return;
         }
-        if (isProcessing || isOnboarding) {
+        if (isActiveProcessing()) {
             showToast('当前正在处理，请稍后再试');
             return;
         }
@@ -2725,7 +2801,7 @@
         form.append('file', blob, 'voice.wav');
         const response = await authFetch(`/api/${encodeURIComponent(userId)}/asr/transcribe`, {
             method: 'POST',
-            headers: { 'X-Request-ID': ensureRequestId() },
+            headers: { 'X-Request-ID': newRequestId() },
             body: form,
         });
         if (!response.ok) {
@@ -2787,7 +2863,7 @@
     }
 
     function backfillComposer(text) {
-        if (!text || isProcessing || isOnboarding) return;
+        if (!text || isActiveProcessing()) return;
         enterChatView();
         const current = chatInput.value.trim();
         chatInput.value = current ? `${current}，${text}` : text;
@@ -2800,14 +2876,6 @@
         const strong = document.createElement('strong');
         strong.textContent = text;
         return strong;
-    }
-
-    function createMutedText(text) {
-        const span = document.createElement('span');
-        span.style.color = 'var(--ink-2)';
-        span.style.fontSize = '11px';
-        span.textContent = text;
-        return span;
     }
 
     function createTime(value) {
@@ -2837,8 +2905,12 @@
             : '<svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>';
     }
 
-    function scrollToBottom() {
-        if (followConversation) chatMessages.scrollTo({top: chatMessages.scrollHeight, behavior: 'instant'});
+    // runtime 的容器在后台时是脱离 DOM 的，脱离的节点没有 scrollHeight，滚动也无意义。
+    function scrollToBottom(runtime) {
+        const container = runtime.container;
+        if (runtime.followConversation && container.isConnected) {
+            container.scrollTo({ top: container.scrollHeight, behavior: 'instant' });
+        }
     }
 
     function openSidebar() {

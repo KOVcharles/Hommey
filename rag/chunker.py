@@ -537,18 +537,24 @@ class BlockChunker:
 
     @staticmethod
     def _heading_path(blocks: List[Block]) -> List[str]:
-        for block in blocks:
-            if block.block_type != BLOCK_TYPE_HEADING and block.heading_path:
-                return list(block.heading_path)
-        return []
+        # Merged sibling clauses share only their common ancestors. Using the
+        # first clause's full path falsely attributes all later clauses to it.
+        paths = [block.heading_path for block in blocks
+                 if block.block_type != BLOCK_TYPE_HEADING and block.heading_path]
+        if not paths:
+            return []
+        common = list(paths[0])
+        for path in paths[1:]:
+            while common and path[:len(common)] != common:
+                common.pop()
+        return common
 
     @staticmethod
     def _effective_heading_path(blocks: List[Block], carried: List[str]) -> List[str]:
         """The heading path a part inherits: its own content blocks' path when
         present, otherwise the stack carried over from the previous page."""
-        for block in blocks:
-            if block.block_type != BLOCK_TYPE_HEADING and block.heading_path:
-                return list(block.heading_path)
+        if any(block.block_type != BLOCK_TYPE_HEADING and block.heading_path for block in blocks):
+            return BlockChunker._heading_path(blocks)
         return list(carried)
 
     @staticmethod

@@ -22,13 +22,13 @@ from typing import Any, Dict, List, Optional
 SCHEMA_VERSION = "rag.v2.metadata.1"
 # v2: PDF pages now recognize the Chinese heading registry and the chunker
 # carries a section's heading stack across PDF page breaks (audit §6.1.2).
-CHUNKER_VERSION = "block-chunker-v2"
+CHUNKER_VERSION = "block-chunker-v3"
 # Parser contract versions; bump when a parser's output shape changes so that
 # the index fingerprint changes and a rebuild is forced.
 PARSER_VERSIONS: Dict[str, str] = {
     "txt": "txt-block-v1",
     "md": "txt-block-v1",
-    "pdf": "pdf-text-block-v2",
+    "pdf": "pdf-text-block-v3",
     # Phase 2 (audit §11 Phase 2): DOCX keeps paragraph/table original order;
     # CSV/XLSX form sheet/table/cell structure.
     "docx": "docx-block-v1",

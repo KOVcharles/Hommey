@@ -9,7 +9,7 @@ from agent_runtime.control import made_progress
 from agent_runtime.engine import Supervisor, Turn
 from agent_runtime.store import trip_version
 from core.presentation.trip_intake_document import build_trip_intake_document
-from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply
+from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, outputs, reply, model_payload
 from tests.test_supervisor_control import role_of
 
 
@@ -26,146 +26,108 @@ def scope(number, session=None):
     return SCOPE.model_copy(update={"request_id": f"request-{number}", "session_id": session or SCOPE.session_id})
 
 
-class NoModel:
+class ConversationServices(FakeServices):
     def __init__(self):
-        self.calls = 0
+        super().__init__()
+        self.history = []
 
-    async def __call__(self, *args, **kwargs):
-        self.calls += 1
-        raise AssertionError("this route must not invoke the model")
+    async def context(self, scope):
+        return {"trip": dict(self.trip), "recent": deepcopy(self.history)}
+
+
+async def exchange(runtime, number, text):
+    runtime.services.history.append({"role": "user", "content": text})
+    output = await runtime.run(scope(number), text)
+    runtime.services.history.append({"role": "assistant", "content": output["response"]})
+    return output
 
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("text", ["1", "2", "999", "随便看看", "嗯", "？？", "北京"])
 @pytest.mark.parametrize("active_trip", [False, True])
-async def test_unbound_input_has_no_model_delegation_write_or_trip_card(text, active_trip):
-    services, model = FakeServices(), NoModel()
-    services.prefs = {"home_location": "北京"}
+async def test_short_or_unclear_input_reaches_model_without_automatic_write(text, active_trip):
+    services, seen = FakeServices(), []
     if active_trip:
         services.trip = {"destination": "南京", "status": "active"}
     before = dict(services.trip)
+    async def model(messages, **kwargs):
+        seen.append(model_payload(messages))
+        return reply(("finish", {"kind": "clarify", "question": "请说明具体需求"}))
     store = ConversationStore(services)
     runtime = Supervisor(model, services, store, CONFIG)
     result = await runtime.run(scope(1), text)
-    assert model.calls == 0 and store.writes == 0 and services.calls == []
-    assert services.trip == before and result["agents"] == []
+    assert len(seen) == 1 and seen[0]["conversation"][-1]["content"] == text
+    assert services.trip == before and store.writes == 0 and services.calls == []
     assert result["outcome"] == "waiting_input" and result["presentation_document"] is None
-    assert "已保存" not in result["response"]
-    assert (await runtime.run(scope(1), text))["idempotent_replay"]
-    assert model.calls == 0
+    assert (await runtime.run(scope(1), text))["idempotent_replay"] and len(seen) == 1
 
 
 @pytest.mark.asyncio
 async def test_explicit_empty_intake_can_show_form_but_profile_is_not_a_save_receipt():
-    services, model = FakeServices(), NoModel()
+    services = FakeServices()
     services.prefs = {"home_location": "北京"}
+    async def model(messages, **kwargs):
+        return reply(("request_trip_details", {}))
     store = ConversationStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(scope(1), "出差")
     assert result["presentation_document"]["route"]["origin"] == "北京"
-    assert "已保存" not in result["response"] and model.calls == store.writes == 0
-
-
-def duration_services():
-    services = FakeServices()
-    services.trip = {"origin": "北京", "destination": "南京", "start_date": "2026-09-20"}
-    return services
+    assert "已保存" not in result["response"] and store.writes == 0
 
 
 @pytest.mark.asyncio
-async def test_number_answers_displayed_duration_question_and_is_replayable():
-    services, model = duration_services(), NoModel()
-    store = ConversationStore(services)
-    runtime = Supervisor(model, services, store, CONFIG)
-    first = await runtime.run(scope(1), "出差")
-    assert first["presentation_document"]["missing_required"][0]["key"] == "trip_length"
-    second = await runtime.run(scope(2), "1")
-    assert services.trip["duration_days"] == 1 and store.writes == 1 and model.calls == 0
-    assert second["outcome"] == "waiting_input" and "已保存" in second["response"]
-    assert (await runtime.run(scope(2), "1"))["idempotent_replay"]
-    assert store.writes == 1
-    # The primary question is now purpose, so another numeric answer cannot overwrite it.
-    third = await runtime.run(scope(3), "2")
-    assert third["presentation_document"] is None and store.writes == 1 and model.calls == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("invalidation", ["different_session", "changed_trip", "intervening_turn"])
-async def test_pending_question_does_not_leak_across_contexts(invalidation):
-    services, model = duration_services(), NoModel()
-    store = ConversationStore(services)
-    runtime = Supervisor(model, services, store, CONFIG)
-    await runtime.run(scope(1), "出差")
-    if invalidation == "changed_trip":
-        services.trip["destination"] = "上海"
-    if invalidation == "intervening_turn":
-        await runtime.run(scope(2), "你好")
-    result = await runtime.run(scope(3, "another-session" if invalidation == "different_session" else None), "1")
-    assert result["presentation_document"] is None and "duration_days" not in services.trip
-    assert model.calls == store.writes == 0
-
-
-@pytest.mark.asyncio
-async def test_invalid_duration_reasks_without_losing_the_pending_question():
-    services, model = duration_services(), NoModel()
-    store = ConversationStore(services)
-    runtime = Supervisor(model, services, store, CONFIG)
-    await runtime.run(scope(1), "出差")
-    invalid = await runtime.run(scope(2), "91")
-    assert invalid["presentation_document"] is None and store.writes == 0
-    assert "行程" in invalid["response"] or "天数" in invalid["response"]
-    await runtime.run(scope(3), "1")
-    assert services.trip["duration_days"] == 1 and store.writes == 1 and model.calls == 0
-
-
-@pytest.mark.asyncio
-async def test_displayed_numbered_choices_bind_to_the_selected_label():
-    services, seen = FakeServices(), []
+@pytest.mark.parametrize("interrupted", [False, True])
+@pytest.mark.parametrize("field,value", [("origin", "北京"), ("trip_purpose", "培训"),
+                                         ("start_date", "明天"), ("end_date", "明天"),
+                                         ("duration_days", "两天"), ("duration_days", "1")])
+async def test_short_answer_reaches_extractor_with_actual_question(field, value, interrupted):
+    from datetime import date, timedelta
+    from core.trip_intake import beijing_today
+    services = ConversationServices()
+    question = "请补充出发地" if field == "origin" else "请补充" + field
+    stored_value = (date.fromisoformat(beijing_today()) + timedelta(days=1)).isoformat() if value == "明天" else 2 if value == "两天" else 1 if value == "1" else value
     async def model(messages, **kwargs):
-        context = json.loads(messages[1]["content"])["context"]
-        seen.append(context.get("resolved_input"))
+        payload = model_payload(messages)
+        if role_of(messages) == "trip_context":
+            assert payload["conversation"][-1]["content"] == value
+            assert "request" not in payload
+            assert question in payload["conversation"][-2]["content"]
+            assert "resolved_input" not in payload
+            return reply(("report", {"summary": "已整理用户提供的字段", "data": {
+                "trip": {field: stored_value}, "field_sources": {field: value}}}))
+        if payload["conversation"][-1]["content"] != value:
+            return reply(("finish", {"kind": "ask", "question": question}))
+        assert question in payload["conversation"][-2]["content"]
+        if not outputs(messages):
+            return reply(("delegate", {"role": "trip_context", "task": "根据上一问整理用户补充的字段"}))
+        return reply(("request_trip_details", {}))
+    store = ConversationStore(services)
+    runtime = Supervisor(model, services, store, CONFIG)
+    await exchange(runtime, 1, "帮我整理出差信息")
+    if interrupted:
+        store.rows[(SCOPE.user_id, "request-1")]["status"] = "interrupted"
+    result = await exchange(runtime, 2, value)
+    assert services.trip[field] == stored_value and store.writes == 1
+    assert result["presentation_document"]["type"] == "trip_intake"
+    assert (await runtime.run(scope(2), value))["idempotent_replay"] and store.writes == 1
+
+
+@pytest.mark.asyncio
+async def test_numbered_choices_are_carried_by_conversation_without_binding_state():
+    services, seen = ConversationServices(), []
+    async def model(messages, **kwargs):
+        payload = model_payload(messages)
+        seen.append(payload)
         if len(seen) == 1:
-            return reply(("finish", {"kind": "clarify", "question": "你想先处理哪一项？",
-                                      "pending_input": {"choices": ["差旅制度", "行程规划"]}}))
+            return reply(("finish", {"kind": "clarify", "question": "你想先处理哪一项？\n1. 差旅制度\n2. 行程规划"}))
+        assert "1. 差旅制度" in payload["conversation"][-2]["content"]
         return reply(("finish", {"kind": "ask", "question": "需要查询哪个城市的制度？"}))
     store = ConversationStore(services)
     runtime = Supervisor(model, services, store, CONFIG)
-    first = await runtime.run(scope(1), "帮我处理一下这个事情")
-    assert "1. 差旅制度" in first["response"] and "2. 行程规划" in first["response"]
-    invalid = await runtime.run(scope(2), "3")
-    assert len(seen) == 1 and "1. 差旅制度" in invalid["response"]
-    await runtime.run(scope(3), "1")
-    assert seen[-1] == {"choice": "差旅制度", "quote": "1"} and len(seen) == 2
-    assert store.writes == 0
-
-
-@pytest.mark.asyncio
-@pytest.mark.parametrize("field,value", [("origin", "北京"), ("trip_purpose", "培训"),
-                                         ("start_date", "明天"), ("trip_length", "明天"), ("duration_days", "两天")])
-async def test_short_field_answer_keeps_original_text_and_reaches_extraction(field, value):
-    services = FakeServices()
-    from datetime import date, timedelta
-    from core.trip_intake import beijing_today
-    stored_field = "end_date" if field == "trip_length" else field
-    stored_value = (date.fromisoformat(beijing_today()) + timedelta(days=1)).isoformat() if value == "明天" else 2 if value == "两天" else value
-    async def model(messages, **kwargs):
-        if role_of(messages) == "trip_context":
-            context = json.loads(messages[1]["content"])
-            assert context["request"] == value and context["resolved_input"]["field"] == field
-            return reply(("report", {"summary": "已整理用户提供的字段", "data": {
-                "trip": {stored_field: stored_value}, "field_sources": {stored_field: value}}}))
-        context = json.loads(messages[1]["content"])
-        if context["current_request"] != value:
-            return reply(("finish", {"kind": "ask", "question": "请补充这个行程字段。", "pending_input": {"field": field}}))
-        out = outputs(messages)
-        if not out:
-            return reply(("delegate", {"role": "trip_context", "task": "整理用户补充的出差信息"}))
-        return reply(("finish", {"result_ids": [out[0]["result_id"]]}))
-    store = ConversationStore(services)
-    runtime = Supervisor(model, services, store, CONFIG)
-    await runtime.run(scope(1), "帮我整理出差信息")
-    result = await runtime.run(scope(2), value)
-    assert services.trip[stored_field] == stored_value and store.writes == 1
-    assert result["presentation_document"]["type"] == "trip_intake"
+    await exchange(runtime, 1, "帮我处理一下这个事情")
+    await exchange(runtime, 2, "1")
+    assert len(seen) == 2 and store.writes == 0
+    checkpoint = store.rows[(SCOPE.user_id, "request-2")]["checkpoint"]
+    assert not {"pending_input", "resolved_input", "reply_to", "work_context", "choice_output", "checkpoint_version"} & checkpoint.keys()
 
 
 @pytest.mark.asyncio
@@ -179,7 +141,7 @@ async def test_empty_or_failed_trip_does_not_become_saved_card(mode):
             out = outputs(messages)
             if not out:
                 return reply(("delegate", {"role": "trip_context", "task": "整理出差信息"}))
-            return reply(("finish", {"result_ids": [out[0]["result_id"]]}))
+            return reply(("finish", {"kind": "ask", "question": "请提供出差地点"}))
         counts["child"] += 1
         if mode == "failed":
             raise OSError("synthetic failure")
@@ -190,7 +152,7 @@ async def test_empty_or_failed_trip_does_not_become_saved_card(mode):
     assert result["presentation_document"] is None and "已保存" not in result["response"]
     assert store.writes == 0 and counts["child"] <= 2 and counts["main"] <= 2
     if mode != "failed":
-        assert result["outcome"] == "waiting_input" and counts["main"] == 1
+        assert result["outcome"] == "waiting_input" and counts["main"] == 2
 
 
 @pytest.mark.asyncio
@@ -230,12 +192,14 @@ async def test_prepare_options_cannot_create_empty_intake_from_unclear_task():
     calls = []
     async def model(*args, **kwargs):
         calls.append(True)
-        return reply(("prepare_trip_options", {}))
+        if len(calls) == 1:
+            return reply(("prepare_trip_options", {}))
+        return reply(("finish", {"kind": "clarify", "question": "请说明具体需求"}))
     services = FakeServices()
     services.prefs = {"home_location": "北京"}
     store = ConversationStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(scope(1), "帮我处理一下这个事情")
-    assert len(calls) == 1 and store.writes == 0 and services.calls == []
+    assert len(calls) == 2 and store.writes == 0 and services.calls == []
     assert result["presentation_document"] is None and result["outcome"] == "waiting_input"
 
 
@@ -250,11 +214,13 @@ async def test_empty_changeset_stops_instead_of_reasking_model_to_save():
         out = outputs(messages)
         if not out:
             return reply(("delegate", {"role": "memory", "task": "整理差旅偏好"}))
-        return reply(("apply_changes", {"result_id": out[0]["result_id"]}))
+        if len(out) == 1:
+            return reply(("apply_changes", {"result_id": out[0]["result_id"]}))
+        return reply(("finish", {"kind": "ask", "question": "请说明具体偏好"}))
     services = FakeServices()
     store = ConversationStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(scope(1), "帮我整理差旅偏好")
-    assert counts["main"] == 2 and store.writes == 0
+    assert counts["main"] == 3 and store.writes == 0
     assert result["outcome"] == "waiting_input" and result["presentation_document"] is None
     checkpoint = store.rows[(SCOPE.user_id, "request-1")]["checkpoint"]
     assert checkpoint["main"]["last_error"]["code"] == "EMPTY_CHANGESET"
@@ -265,6 +231,9 @@ async def test_missing_trip_information_preserves_parallel_weather_answer():
     async def model(messages, **kwargs):
         role = role_of(messages)
         if role is None:
+            out = outputs(messages)
+            if out:
+                return reply(("finish", {"kind": "ask", "question": "请补充出差地点", "result_ids": [v["result_id"] for v in out if v.get("role") == "travel_info"]}))
             return reply(("delegate", {"role": "trip_context", "task": "整理出差需求"}),
                          ("delegate", {"role": "travel_info", "task": "查询上海天气"}))
         if role == "trip_context":
@@ -306,17 +275,18 @@ async def test_preparatory_skill_reads_do_not_erase_prior_failures():
 
 
 @pytest.mark.asyncio
-async def test_reading_guides_cannot_replace_initial_intent_decision():
+async def test_model_can_read_guidance_before_deciding_how_to_collect():
     calls = []
     async def model(messages, **kwargs):
         names = {t["function"]["name"] for t in kwargs["tools"]}
-        assert names == {"delegate", "finish"}
+        assert {"read_skill", "request_trip_details", "finish"} <= names
         calls.append(True)
-        # Even a provider ignoring the current schema cannot load guides.
-        return reply(("read_skill", {"name": "plan-trip"}))
+        if len(calls) == 1:
+            return reply(("read_skill", {"name": "plan-trip"}))
+        return reply(("finish", {"kind": "clarify", "question": "请说明具体需求"}))
     services = FakeServices()
     store = ConversationStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(scope(1), "这个要怎么弄呢")
-    assert len(calls) == 1 and result["presentation_document"] is None
+    assert len(calls) == 2 and result["presentation_document"] is None
     checkpoint = store.rows[(SCOPE.user_id, "request-1")]["checkpoint"]
-    assert not checkpoint["main"].get("skills_read") and store.writes == 0
+    assert checkpoint["main"]["skills_read"] == ["plan-trip:"] and store.writes == 0

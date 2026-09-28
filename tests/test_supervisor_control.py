@@ -200,9 +200,10 @@ async def test_continue_restores_only_completed_results_and_does_not_requery_or_
     count = len(services.calls)
     async def resume_model(messages, **kwargs):
         assert role_of(messages) is None
-        resumed = json.loads(messages[2]["content"])["completed_results"]
+        resumed = json.loads(messages[1]["content"])["reference_results"]
         assert {r["role"] for r in resumed} == set(REPORT_MODELS)
-        return reply(("finish", {"result_ids": [r["result_id"] for r in resumed if r["role"] == "travel_info"]}))
+        ids = [r["result_id"] for r in resumed if r["role"] == "travel_info"]
+        return reply(("finish", {"result_ids": ids, "reuse_reasons": {key: "用户要求继续查看出行结果" for key in ids}}))
     result = await Supervisor(resume_model, services, store, CONFIG).run(SCOPE.model_copy(update={"request_id": "continue"}), "继续")
     assert result["answer_document"]["sources"] and len(services.calls) == count and store.writes == 1
 
@@ -213,9 +214,9 @@ def test_recovery_filters_stale_discarded_uncommitted_and_legacy_results():
     stale = {"id": "src_stale", "kind": "weather", "data": {}, "retrieved_at": (datetime.now(timezone.utc) - timedelta(hours=1)).isoformat()}
     checkpoint = {"checkpoint_version": 2, "results": {"good": result("good"), "stale": result("stale", sources=[stale]), "discarded": result("discarded")}, "discarded_results": ["discarded"]}
     from agent_runtime.engine import Turn
-    assert set(restore_results(checkpoint, 1, Turn.source_fresh)) == {"good"}
-    assert not restore_results(checkpoint, 2, Turn.source_fresh)
-    assert not restore_results({**checkpoint, "checkpoint_version": 1}, 1, Turn.source_fresh)
+    assert set(restore_results(checkpoint)) == {"good", "stale", "discarded"}
+    assert set(restore_results(checkpoint, max_results=1)) == {"discarded"}
+    assert set(restore_results({**checkpoint, "checkpoint_version": 1})) == set(checkpoint["results"])
 
 
 def test_checkpoint_redaction_preserves_protocol_pairs_and_still_redacts_personal_text():
@@ -248,7 +249,7 @@ async def test_first_trip_new_action_is_safe_but_missing_values_are_repaired():
     store = FakeStore(services)
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE, TEXT)
     assert store.writes == 1 and services.trip["destination"] == "上海" and attempts == 2
-    assert result["presentation_document"]["type"] == "trip_intake"
+    assert result["presentation_document"] is None and result["answer_document"]
 
 
 def test_new_action_cannot_replace_existing_trip_without_explicit_authorization():
@@ -288,9 +289,9 @@ async def test_card_wire_fields_commit_before_any_model_and_survive_outage():
 
 
 @pytest.mark.asyncio
-async def test_partial_card_fields_return_form_without_model():
+async def test_partial_card_fields_return_model_selected_form():
     async def forbidden(*args, **kwargs):
-        pytest.fail("partial labelled intake must not require a model")
+        return reply(("request_trip_details", {}))
     services = FakeServices()
     store = FakeStore(services)
     result = await Supervisor(forbidden, services, store, CONFIG).run(SCOPE, "从北京出发，目的地：南京")
@@ -378,7 +379,7 @@ async def test_unread_fact_is_dropped_without_discarding_verified_facts():
 
 
 @pytest.mark.asyncio
-async def test_form_plan_is_delivered_without_another_main_model_round():
+async def test_form_plan_is_delivered_when_model_selects_result():
     services = FakeServices()
     store = FakeStore(services)
     parent_calls = 0
@@ -386,14 +387,16 @@ async def test_form_plan_is_delivered_without_another_main_model_round():
         nonlocal parent_calls
         if role_of(messages) is None:
             parent_calls += 1
-            assert parent_calls == 1, "completed plan must not wait for a model finish call"
+            if parent_calls > 1:
+                result_id = next(v["result_id"] for v in outputs(messages) if v.get("role") == "trip_planner")
+                return reply(("finish", {"result_ids": [result_id]}))
             return reply(("delegate", {"role": "trip_planner", "task": "安排出差会议工作日程"}))
         assert [t["function"]["name"] for t in kwargs["tools"]] == ["report"]
         return reply(("report", {"summary": "会议时间尚待确认", "status": "partial", "missing_info": ["会议时间"],
             "data": {"itinerary": {"days": [{"date": "2026-09-11", "activities": ["参加会议（时间待确认）"]}]}}}))
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE,
         "从北京出发，目的地：南京，2026-09-11出发，出差2天，出差目的：参加会议")
-    assert result["outcome"] == "partial" and parent_calls == 1 and store.writes == 1
+    assert result["outcome"] == "partial" and parent_calls == 2 and store.writes == 1
     assert "会议时间" in result["response"]
 
 

@@ -1,0 +1,277 @@
+/* 天气卡片改版 demo · 堆叠长条。
+   生产落地时，.departure-* 这几段替换 answer-card.css 第 400-408 行的旧样式；
+   .wd-* 只是 demo 页外壳，不用带过去。
+
+   折叠靠三个量算出来，全部由 JS 量完写回 custom property：
+   --peek     收起时露出的脊线高度（= 脊线行自身高度）
+   --strip-h  单条完全展开的高度
+   重叠量 = --peek - --strip-h，正好把详情行藏掉。 */
+
+/* ---------- demo 页外壳 ---------- */
+.wd-page { min-height: 100vh; padding-bottom: 72px; background: var(--bg); color: var(--ink); }
+.wd-topbar {
+    width: min(1020px, calc(100% - 40px));
+    margin: 0 auto;
+    padding: 44px 0 30px;
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 24px;
+}
+.wd-topbar-text { max-width: 620px; }
+.wd-eyebrow { margin: 0 0 9px; color: var(--ink-3); font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+.wd-topbar h1 { margin: 0; font-size: 22px; font-weight: 680; letter-spacing: -.035em; }
+.wd-lede { margin: 9px 0 0; color: var(--ink-2); font-size: 12.5px; line-height: 1.7; }
+.wd-theme-toggle {
+    flex: none;
+    padding: 7px 13px;
+    border: 1px solid var(--line);
+    border-radius: 999px;
+    color: var(--ink-2);
+    background: var(--panel);
+    font: inherit;
+    font-size: 11px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .18s ease, border-color .18s ease;
+}
+.wd-theme-toggle:hover { color: var(--ink); border-color: var(--line-2); }
+.wd-stage {
+    width: min(1020px, calc(100% - 40px));
+    margin: 0 auto;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(300px, 1fr));
+    gap: 26px 20px;
+    align-items: start;
+}
+.wd-frame { min-width: 0; display: grid; gap: 11px; grid-template-columns: minmax(0, 1fr); }
+.wd-frame-label { display: flex; align-items: center; gap: 8px; color: var(--ink-3); font-size: 10px; font-weight: 650; letter-spacing: .07em; text-transform: uppercase; }
+.wd-frame-label i { flex: 1; height: 1px; background: var(--line); }
+
+/* ---------- 面板 ---------- */
+.departure-weather-panel {
+    --weather-tint: var(--ink-3);
+    min-width: 0;
+    padding: 16px 17px 17px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    position: relative;
+    overflow: hidden;
+    background:
+        radial-gradient(132% 96% at 100% 0%, color-mix(in srgb, var(--weather-tint) 16%, transparent), transparent 60%),
+        color-mix(in srgb, var(--panel) 88%, transparent);
+}
+.departure-weather-panel.is-sun { --weather-tint: #e08a1e; }
+.departure-weather-panel.is-rain { --weather-tint: #3f6f9c; }
+.departure-weather-panel.is-cloud { --weather-tint: var(--ink-2); }
+.departure-weather-panel.is-snow { --weather-tint: #5b8ea8; }
+
+.departure-weather-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; }
+.departure-weather-heading {
+    margin: 0;
+    color: var(--ink-3);
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: .08em;
+    text-transform: uppercase;
+}
+.departure-weather-toggle {
+    flex: none;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 4px 8px;
+    margin: -4px -8px -4px 0;
+    border: 0;
+    border-radius: 8px;
+    color: var(--ink-3);
+    background: none;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 620;
+    cursor: pointer;
+    transition: color .18s ease, background .18s ease;
+}
+.departure-weather-toggle:hover { color: var(--ink); background: var(--soft); }
+.departure-weather-toggle-icon {
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform .34s var(--ease);
+}
+.departure-weather-panel:not(.is-folded) .departure-weather-toggle-icon { margin-top: 3px; transform: rotate(225deg); }
+
+.departure-weather-deck { margin-top: 13px; }
+
+/* ---------- 长条 ---------- */
+.departure-weather-strip {
+    position: relative;
+    min-width: 0;
+    border: 1px solid var(--line);
+    border-radius: 13px;
+    background: color-mix(in srgb, var(--panel) 92%, transparent);
+    overflow: hidden;
+    transition:
+        margin-top .42s var(--ease),
+        transform .42s var(--ease),
+        box-shadow .42s var(--ease);
+}
+.departure-weather-strip.is-today {
+    z-index: 20;
+    background:
+        radial-gradient(120% 140% at 100% 0%, color-mix(in srgb, var(--weather-tint) 13%, transparent), transparent 62%),
+        color-mix(in srgb, var(--panel) 96%, transparent);
+    box-shadow: 0 10px 24px rgba(25, 25, 22, .06);
+}
+.departure-weather-stack .departure-weather-strip { z-index: calc(12 - var(--depth, 0)); }
+
+/* 脊线是收起时唯一露出来的部分，高度由它自己撑开，JS 量完写回 --peek。 */
+.departure-weather-spine {
+    padding: 11px 13px;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+}
+.strip-glyph {
+    flex: none;
+    width: 26px;
+    height: 26px;
+    display: grid;
+    place-items: center;
+    border-radius: 9px;
+    color: color-mix(in srgb, var(--weather-tint) 84%, var(--ink));
+    background: color-mix(in srgb, var(--weather-tint) 13%, transparent);
+    box-shadow: inset 0 0 0 1px color-mix(in srgb, var(--weather-tint) 22%, transparent);
+}
+.strip-glyph svg { width: 15px; height: 15px; display: block; }
+.strip-when { flex: none; color: var(--ink); font-size: 11.5px; font-weight: 650; letter-spacing: -.01em; }
+.strip-date { flex: none; color: var(--ink-3); font-size: 10.5px; font-variant-numeric: tabular-nums; }
+.strip-condition { min-width: 0; flex: 1; overflow: hidden; color: var(--ink-2); font-size: 11.5px; font-weight: 550; text-overflow: ellipsis; white-space: nowrap; }
+.strip-temp { flex: none; color: var(--ink); font-size: 12.5px; font-weight: 640; letter-spacing: -.02em; font-variant-numeric: tabular-nums; }
+.departure-weather-strip.is-today .strip-temp { font-size: 21px; font-weight: 650; letter-spacing: -.04em; }
+
+/* 详情行：白天/夜间/风，来自 amap 的 forecasts。收起时整行被 max-height 裁掉。 */
+.departure-weather-detail {
+    min-width: 0;
+    padding: 1px 13px 12px;
+    display: flex;
+    align-items: baseline;
+    flex-wrap: wrap;
+    gap: 2px 9px;
+    color: var(--ink-3);
+    font-size: 10.5px;
+}
+.departure-weather-detail span { white-space: nowrap; }
+.departure-weather-detail span { position: relative; }
+.departure-weather-detail span + span::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -5px;
+    width: 2px;
+    height: 2px;
+    border-radius: 50%;
+    background: currentColor;
+    transform: translateY(-50%);
+}
+
+/* ---------- 折叠 ----------
+   用 max-height 而不是 height：两端都是确定值才能过渡（auto 不可动画）。
+   --peek 和 --strip-h 由 JS 量完写回，见 weather-card.js 的 measure()。 */
+.departure-weather-stack .departure-weather-strip + .departure-weather-strip { margin-top: 6px; }
+.departure-weather-stack .departure-weather-strip {
+    max-height: var(--strip-h, 120px);
+    transition: max-height .42s var(--ease), transform .42s var(--ease), margin-top .42s var(--ease);
+    transition-delay: calc(var(--depth, 0) * 32ms);
+}
+/* 收起：压紧并按层往里收，上一条压在吓一条上，投影落在下一条的顶边上。
+   -4px 只吃掉脊线 11px 上内边距的一部分，图形和文字都不会被切到。 */
+.departure-weather-panel.is-folded .departure-weather-stack .departure-weather-strip {
+    max-height: var(--peek, 44px);
+    transform: scaleX(calc(1 - var(--depth, 0) * .026));
+    box-shadow: 0 7px 12px -9px color-mix(in srgb, var(--ink) 55%, transparent);
+    transition-delay: calc((var(--count, 3) - 1 - var(--depth, 0)) * 32ms);
+}
+.departure-weather-panel.is-folded .departure-weather-stack .departure-weather-strip + .departure-weather-strip {
+    margin-top: -4px;
+}
+
+/* ---------- 今天那条 ---------- */
+.departure-weather-today-body { padding: 0 13px 13px; }
+.departure-weather-meta { display: flex; flex-wrap: wrap; align-items: center; gap: 0 9px; color: var(--ink-3); font-size: 10.5px; }
+.departure-weather-meta span { position: relative; }
+.departure-weather-meta span + span::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: -5px;
+    width: 2px;
+    height: 2px;
+    border-radius: 50%;
+    background: currentColor;
+    transform: translateY(-50%);
+}
+.departure-preparation-tags { margin-top: 10px; display: flex; flex-wrap: wrap; gap: 6px; }
+.departure-preparation-tags span {
+    padding: 4px 9px;
+    border: 1px solid color-mix(in srgb, var(--weather-tint) 22%, var(--line));
+    border-radius: 999px;
+    color: var(--ink-2);
+    background: color-mix(in srgb, var(--weather-tint) 8%, var(--panel));
+    font-size: 10.5px;
+    font-weight: 550;
+}
+.departure-weather-advice { margin-top: 12px; padding-top: 11px; border-top: 1px solid var(--line); }
+.departure-weather-advice-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.departure-weather-advice-label { color: var(--ink-3); font-size: 10px; font-weight: 700; letter-spacing: .08em; text-transform: uppercase; }
+.departure-weather-more {
+    display: inline-flex;
+    align-items: center;
+    gap: 4px;
+    padding: 3px 5px;
+    margin: -3px -5px -3px 0;
+    border: 0;
+    border-radius: 7px;
+    color: var(--ink-3);
+    background: none;
+    font: inherit;
+    font-size: 10.5px;
+    font-weight: 600;
+    cursor: pointer;
+    transition: color .18s ease, background .18s ease;
+}
+.departure-weather-more:hover { color: var(--ink); background: var(--soft); }
+.departure-weather-more-icon {
+    width: 6px;
+    height: 6px;
+    margin-top: -3px;
+    border-right: 1.5px solid currentColor;
+    border-bottom: 1.5px solid currentColor;
+    transform: rotate(45deg);
+    transition: transform .34s var(--ease);
+}
+.departure-weather-more[aria-expanded="true"] .departure-weather-more-icon { margin-top: 3px; transform: rotate(225deg); }
+.departure-weather-advice-text { margin: 8px 0 0; color: var(--ink-2); font-size: 11.5px; line-height: 1.7; }
+.departure-weather-advice-text.is-clamped {
+    overflow: hidden;
+    display: -webkit-box;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+}
+.departure-weather-more[hidden] { display: none; }
+.departure-weather-toggle[hidden] { display: none; }
+
+@media (max-width: 560px) {
+    .wd-topbar { align-items: flex-start; flex-direction: column; gap: 16px; }
+    .wd-stage { grid-template-columns: minmax(0, 1fr); }
+}
+
+@media (prefers-reduced-motion: reduce) {
+    .departure-weather-strip,
+    .departure-weather-stack,
+    .departure-weather-toggle-icon,
+    .departure-weather-more-icon { transition: none; }
+}

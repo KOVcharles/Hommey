@@ -8,6 +8,7 @@ from .schemas import SourceDocument
 
 
 DEFAULT_CATEGORY_MAPPING = {
+    "财务报销": "reimbursement_policy",
     "policy_authority": "policy_governance",
     "travel_standards": "travel_policy",
     "international_travel": "international_travel_policy",

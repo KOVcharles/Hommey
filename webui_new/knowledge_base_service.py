@@ -98,12 +98,15 @@ class KnowledgeBaseManagementService:
             )
         self._validate_content(file_type, content)
 
-        self.documents_dir.mkdir(parents=True, exist_ok=True)
-        destination = (self.documents_dir / safe_name).resolve()
+        # Uploads join the deployment's first active directory. The existing
+        # relative document ID remains the only stored source of membership.
+        directory = self.config.search_scopes[0] if self.config.search_scopes else ""
+        destination = (self.documents_dir / directory / safe_name).resolve()
         try:
             destination.relative_to(self.documents_dir)
         except ValueError as exc:
             raise BusinessError("KNOWLEDGE_FILENAME_INVALID", "文档名称不合法", status_code=400) from exc
+        destination.parent.mkdir(parents=True, exist_ok=True)
 
         published = False
 
@@ -115,7 +118,7 @@ class KnowledgeBaseManagementService:
                     "同名文档已存在。为避免误覆盖制度文件，请先使用新文件名上传",
                     status_code=409,
                 )
-            temporary = self.documents_dir / f".{uuid.uuid4().hex}.upload"
+            temporary = destination.parent / f".{uuid.uuid4().hex}.upload"
             try:
                 with temporary.open("xb") as handle:
                     handle.write(content)

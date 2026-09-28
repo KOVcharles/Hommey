@@ -1,12 +1,12 @@
-"""Cheap scope/empty-input checks; the runtime binds replies, the model handles remaining semantics."""
+"""Fixed product scope checks; dialogue interpretation belongs to the model."""
 from __future__ import annotations
 
 from dataclasses import dataclass
 import re
 from typing import Optional
 
-from core.guard_rules import (BOOKING_KEYWORDS, FORBIDDEN_ACTIONS, GIBBERISH_RE,
-    OUT_OF_SCOPE_KEYWORDS, PERSONAL_TRAVEL_KEYWORDS, UNCLEAR_EXACT)
+from core.guard_rules import (BOOKING_KEYWORDS, FORBIDDEN_ACTIONS,
+    OUT_OF_SCOPE_KEYWORDS, PERSONAL_TRAVEL_KEYWORDS)
 from core.intent_catalog import CHITCHAT_EXACT
 
 
@@ -23,26 +23,12 @@ def normalize_query(query: str) -> str:
     return re.sub(r"\s+", " ", (query or "").strip())
 
 
-def meaningful_length(query: str) -> int:
-    return len(re.findall(r"[\w\u4e00-\u9fff]", query or ""))
-
-
-def guard_user_input(user_query: str, *, allow_short_reply: bool = False) -> Optional[GuardResult]:
+def guard_user_input(user_query: str) -> Optional[GuardResult]:
     q = normalize_query(user_query)
     q_lower = q.lower()
-    length = meaningful_length(q)
-
-    if not q:
-        return _unclear("输入为空，缺少可识别的用户意图")
 
     if q_lower in CHITCHAT_EXACT or q in CHITCHAT_EXACT:
         return _chitchat()
-
-    if q_lower in UNCLEAR_EXACT or q in UNCLEAR_EXACT:
-        return _unclear("输入过短或缺少明确任务")
-
-    if GIBBERISH_RE.match(q):
-        return _unclear("输入疑似乱码或只有标点")
 
     if any(keyword in q for keyword in FORBIDDEN_ACTIONS):
         return _unsupported("用户请求包含系统不应执行的高风险操作")
@@ -60,11 +46,6 @@ def guard_user_input(user_query: str, *, allow_short_reply: bool = False) -> Opt
     ):
         return _unsupported("用户请求是私人旅游需求，不属于公司差旅范围")
 
-    # The caller must bind short answers to a concrete pending question.
-    # A nonempty transcript or an existing trip is not such a binding.
-    if (length <= 2 or q.isdecimal()) and not allow_short_reply:
-        return _unclear("输入太短，无法判断具体意图")
-
     return None
 
 
@@ -81,16 +62,6 @@ def has_explicit_business_context(query: str, conversation_context: str = "") ->
         "会议地点", "会场", "差旅任务", "出差任务", "报销", "差旅政策", "差旅制度",
     )
     return any(keyword in combined for keyword in explicit_terms)
-
-
-def _unclear(reason: str) -> GuardResult:
-    return GuardResult(
-        intent="unclear",
-        confidence=0.9,
-        reason=reason,
-        should_call_skill=False,
-        clarification="我还不太确定你的意思。你是想查询差旅政策、规划行程，还是查某个旅行信息？",
-    )
 
 
 def _chitchat() -> GuardResult:

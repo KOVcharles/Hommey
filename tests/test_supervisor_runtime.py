@@ -29,6 +29,14 @@ def outputs(messages):
     return [json.loads(m["content"]) for m in messages if m["role"] == "tool"]
 
 
+def model_payload(messages):
+    """Inspect main native dialogue or the unchanged specialist input envelope."""
+    payload = json.loads(messages[1]["content"])
+    if payload.get("context_kind") == "runtime_reference":
+        payload["conversation"] = messages[2:2 + payload["dialogue_message_count"]]
+    return payload
+
+
 class FakeServices:
     def __init__(self):
         self.trip = {}
@@ -138,7 +146,7 @@ class JourneyModel:
         role = next(role for role, profile in PROFILES.items() if profile.instructions in system)
         self.roles.add(role)
         if role in {"policy_rag", "memory", "travel_info"}:
-            assert names <= set(PROFILES[role].tools) | {"report"}
+            assert names <= set(PROFILES[role].tools) | {"read_skill", "report"}
         else:
             assert names == {"report"}
         if role == "trip_context":
@@ -305,7 +313,7 @@ def test_checkpoint_redaction_keeps_json_replayable():
 
 
 @pytest.mark.asyncio
-async def test_partial_trip_renders_existing_intake_form_without_default_date():
+async def test_partial_trip_can_ask_specific_question_without_forced_form_or_default_date():
     class IntakeModel(JourneyModel):
         async def __call__(self, messages, tools, tool_choice):
             names = {t["function"]["name"] for t in tools}
@@ -320,5 +328,5 @@ async def test_partial_trip_renders_existing_intake_form_without_default_date():
     services = FakeServices()
     result = await Supervisor(IntakeModel(), services, FakeStore(services), CONFIG).run(SCOPE, "到上海出差")
     assert "start_date" not in services.trip
-    assert result["answer_document"] is None
-    assert result["presentation_document"]["status"] == "collecting_required"
+    assert result["presentation_document"] is None
+    assert "从哪里出发" in result["response"] and result["outcome"] == "waiting_input"

@@ -68,10 +68,10 @@
                     <circle class="traveller" cx="20" cy="59" r="3"/>
                     <path class="route-hit-area" d="M20 59 C105 59, 150 13, 250 43 S395 27, 480 27"/>
                 </svg>
-                <h1 class="welcome-title">出发前，问问 Hommey。<br><span>路线、标准和细节，一次理清。</span></h1>
+                <h1 class="welcome-title">报销和出差，问问 Hommey。<br><span>制度、材料和行程，一次理清。</span></h1>
 
                 <form id="homeComposer" class="composer welcome-composer">
-                    <textarea id="homeInput" rows="1" placeholder="今天想去哪儿？" aria-label="输入差旅需求" disabled></textarea>
+                    <textarea id="homeInput" rows="1" placeholder="例如：版面费报销需要什么材料？" aria-label="输入报销问题或差旅需求" disabled></textarea>
                     <div class="pending-attachments" style="display:none" aria-live="polite"></div>
                     <div class="composer-tools">
                         <div class="retrieval-mode-control" data-retrieval-mode-control>
@@ -162,11 +162,11 @@
                         </button>
                     </div>
                 </div>
-                <p class="disclaimer">Hommey 可能会出错，请核对重要的出行信息。</p>
+                <p class="disclaimer">Hommey 可能会出错，请核对重要的制度与出行信息。</p>
             </footer>
         </main>
 
-        <main id="knowledgeView" class="screen knowledge-view" aria-label="企业知识库">
+        <main id="knowledgeView" class="screen knowledge-view" aria-label="制度知识库">
             <div class="knowledge-shell">
                 <header class="knowledge-overview">
                     <div>
@@ -180,8 +180,8 @@
                                 <span>RAG SOURCE LIBRARY</span>
                             </div>
                         </div>
-                        <h1>企业知识库</h1>
-                        <p>查阅 Hommey 回答差旅问题时所依据的制度与指南。</p>
+                        <h1>制度知识库</h1>
+                        <p id="knowledgeScopeNote">查阅 Hommey 回答报销与差旅问题时所依据的制度与指南。</p>
                     </div>
                     <div class="knowledge-header-side">
                         <div class="knowledge-summary" aria-label="知识库统计">
@@ -467,11 +467,12 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/journey-map.js?v=20260913-map-v3"></script>
-    <script src="/static/policy-card.js?v=20260913-v1"></script>
+    <script src="/static/policy-card.js?v=20260920-reimbursement"></script>
     <script src="/static/trip-choices.js?v=20260914-train-expand"></script>
-    <script src="/static/answer-card.js?v=20260913-complete-v1"></script>
+    <script src="/static/answer-card.js?v=20260920-reimbursement"></script>
     <script src="/static/trip-intake-card.js?v=20260914-city-suggest"></script>
     <script src="/static/execution-plan.js?v=20260914-plan-disclosure"></script>
-    <script src="/static/app.js?v=20260915-concurrent-sessions"></script>
+    <script src="/static/session-runtime.js?v=20260919-in-page-parallel"></script>
+    <script src="/static/app.js?v=20260920-reimbursement"></script>
 </body>
 </html>

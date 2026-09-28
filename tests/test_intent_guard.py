@@ -8,12 +8,15 @@ from core.intent_guard import (
 )
 
 
+@pytest.mark.parametrize("text", ["好的", "ok", "okay", "算了", "没事", "没什么"])
+def test_contextual_acknowledgements_are_not_fixed_greetings(text):
+    assert guard_user_input(text) is None
+
+
 def test_short_input_does_not_call_information_query():
     result = guard_user_input("你?")
 
-    assert result is not None
-    assert result.intent == "unclear"
-    assert result.should_call_skill is False
+    assert result is None  # Semantic clarification belongs to the model.
 
 
 def test_short_field_value_with_trip_context_is_not_blocked():
@@ -21,19 +24,16 @@ def test_short_field_value_with_trip_context_is_not_blocked():
     # 不应被通用短输入规则拦截为 unclear，应放行给 LLM 结合上下文识别。
     result = guard_user_input(
         "培训",
-        allow_short_reply=True,
     )
 
     assert result is None
 
 
-def test_short_input_without_context_is_still_blocked():
-    # 首轮无上下文时，短输入仍按 unclear 拦截（安全网保持）。
+def test_short_input_without_context_reaches_model():
+    # 运行时不根据字数推断意图。
     result = guard_user_input("培训")
 
-    assert result is not None
-    assert result.intent == "unclear"
-    assert result.should_call_skill is False
+    assert result is None  # Semantic clarification belongs to the model.
 
 
 def test_booking_request_is_denied_as_unsupported():
@@ -79,7 +79,6 @@ def test_payment_receipt_policy_question_is_not_mistaken_for_payment_action():
 def test_private_tourism_is_rejected_even_after_business_trip_context():
     result = guard_user_input(
         "接下来帮我规划三亚蜜月旅游",
-        allow_short_reply=True,
     )
 
     assert result is not None
@@ -89,6 +88,4 @@ def test_private_tourism_is_rejected_even_after_business_trip_context():
 def test_vague_browse_input_is_unclear_without_skill():
     result = guard_user_input("随便看看")
 
-    assert result is not None
-    assert result.intent == "unclear"
-    assert result.should_call_skill is False
+    assert result is None  # Semantic clarification belongs to the model.
