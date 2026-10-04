@@ -7,9 +7,9 @@ this harness produces instead of relying on subjective feel.
 The harness runs the exact production path — loader → parser → normalizer →
 chunker → vector store → retriever — so the baseline reflects what agents will
 actually see.  It defaults to :class:`InMemoryVectorStore` so the whole run is
-deterministic and needs no embedding service or vector database. PDFs are skipped in
-this mode (their parser requires the optional ``pypdf`` package); every skipped
-file is reported so the baseline always states its coverage.
+deterministic and needs no embedding service or vector database. PDF sources use
+the same parser as ingestion, and relative document paths are preserved so the
+evaluation retains directory identity. README files are directory instructions.
 
 Metrics reported (audit §11 Phase 0):
     - Recall@5 / Recall@10 (did the expected file appear)
@@ -33,6 +33,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional
 
 from .config import RAGPipelineConfig
+from .loader import is_source_filename
 from .pipeline import RAGPipeline
 from .trace import append_retrieval_trace, build_retrieval_trace, new_trace_id
 from .vector_store import InMemoryVectorStore, VectorStore
@@ -161,27 +162,36 @@ def run_baseline_eval(
     supported = ("txt", "md", "pdf", "docx", "csv", "xlsx")
     files = sorted(
         item for item in root.rglob("*")
-        if item.is_file() and item.suffix.lower().lstrip(".") in supported
+        if item.is_file()
+        and is_source_filename(item.name)
+        and item.suffix.lower().lstrip(".") in supported
     )
     if include:
-        files = [item for item in files if item.name in include]
+        files = [
+            item for item in files
+            if item.relative_to(root).as_posix() in include or item.name in include
+        ]
 
     skipped: List[str] = []
 
     if not files:
-        raise FileNotFoundError(f"No txt/md sources under {root}")
+        raise FileNotFoundError(f"No supported knowledge sources under {root}")
 
     with tempfile.TemporaryDirectory(prefix="hommey-rag-eval-") as tmp:
         corpus_dir = Path(tmp) / "corpus"
         corpus_dir.mkdir()
         for source in files:
-            (corpus_dir / source.name).write_bytes(source.read_bytes())
+            target = corpus_dir / source.relative_to(root)
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_bytes(source.read_bytes())
 
         config = RAGPipelineConfig.from_settings(
             {
                 "documents_dir": str(corpus_dir),
                 "knowledge_base_path": str(Path(tmp) / "kb"),
                 "top_k": top_k,
+                "supported_file_types": supported,
+                "ocr_enabled": False,
             }
         )
         store: VectorStore = InMemoryVectorStore()
@@ -192,7 +202,7 @@ def run_baseline_eval(
             pipeline.close()
 
         eval_report = EvalReport(
-            corpus_files=[item.name for item in files],
+            corpus_files=[item.relative_to(root).as_posix() for item in files],
             skipped_files=skipped,
             chunks_indexed=report.chunks_loaded,
             index_version=(report.metadata.get("index") or {}).get("version", ""),
@@ -251,7 +261,8 @@ def _evaluate_query(golden: Dict[str, Any], results: List[Dict[str, Any]], laten
 def _result_filename(result: Dict[str, Any]) -> str:
     metadata = result.get("metadata") if isinstance(result.get("metadata"), dict) else {}
     return (
-        metadata.get("filename")
+        metadata.get("document_id")
+        or metadata.get("filename")
         or metadata.get("file_name")
         or metadata.get("name")
         or metadata.get("parent_doc")

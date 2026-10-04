@@ -22,13 +22,21 @@ def trip_version(trip: dict | None) -> int:
     return int(fingerprint(data)[:12], 16)
 
 
-def safe_checkpoint(value):
+def safe_checkpoint(value, _path=()):
     """Redact nested JSON messages without corrupting their replayable syntax."""
     if isinstance(value, dict):
-        return {k: safe_checkpoint(v) for k, v in value.items()}
+        return {k: safe_checkpoint(v, (*_path, k)) for k, v in value.items()}
     if isinstance(value, list):
-        return [safe_checkpoint(v) for v in value]
+        return [safe_checkpoint(v, (*_path, index)) for index, v in enumerate(value)]
     if isinstance(value, str):
+        # These validated, user-authorized funding identifiers must remain exact.
+        # Numeric project codes can resemble phone, bank-card or identity numbers.
+        project_identifier = (len(_path) >= 5 and _path[-5:-2] == ("user_profile", "funding", "projects")
+                              and isinstance(_path[-2], int) and _path[-1] in {"id", "financial_project_code"})
+        default_identifier = (_path[-3:] == ("user_profile", "funding", "default_project_id")
+                              or _path[-3:] == ("user_profile", "default_funding", "financial_project_code"))
+        if project_identifier or default_identifier:
+            return value
         # Opaque protocol IDs can contain eleven consecutive digits. Redacting
         # them as phone numbers breaks tool-call pairs and evidence references.
         if re.fullmatch(r"(?:call_|src_|result_)[a-fA-F0-9]{8,64}", value):
@@ -39,7 +47,7 @@ def safe_checkpoint(value):
             except (ValueError, TypeError):
                 pass
             else:
-                return json.dumps(safe_checkpoint(parsed), ensure_ascii=False)
+                return json.dumps(safe_checkpoint(parsed, _path), ensure_ascii=False)
         return redact_sensitive_text(value)
     return value
 

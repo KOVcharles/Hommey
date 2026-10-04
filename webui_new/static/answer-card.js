@@ -18,6 +18,12 @@
         }
     }
 
+    function rich(tag, className, text, inline = true) {
+        const node = element(tag, className, text);
+        window.HommeyMarkdown?.render(node, text, {inline});
+        return node;
+    }
+
     function fillComposer(text) {
         document.dispatchEvent(new CustomEvent('hommey:fill-composer', {
             detail: { text: String(text || '') },
@@ -277,10 +283,10 @@
         row.appendChild(marker);
         const content = element('div', 'departure-check-content');
         const title = element('div', 'departure-check-title');
-        title.appendChild(element('strong', '', item.label));
+        title.appendChild(rich('strong', '', item.label));
         title.appendChild(element('span', 'departure-check-status', item.status_label));
         content.appendChild(title);
-        if (item.detail) content.appendChild(element('p', '', item.detail));
+        if (item.detail) content.appendChild(rich('p', '', item.detail));
         row.appendChild(content);
         if (item.action_label && item.action_value) {
             const button = element('button', 'departure-check-action', `${item.action_label} →`);
@@ -312,7 +318,7 @@
             weather.preparation.forEach((value) => tags.appendChild(element('span', '', value)));
             panel.appendChild(tags);
         }
-        if (weather.advice) panel.appendChild(element('p', 'departure-weather-advice', weather.advice));
+        if (weather.advice) panel.appendChild(rich('p', 'departure-weather-advice', weather.advice));
         return panel;
     }
 
@@ -321,7 +327,7 @@
         const header = element('div', 'departure-header');
         const heading = element('div');
         heading.appendChild(element('h3', '', checklist.title || '出发前确认'));
-        if (checklist.summary) heading.appendChild(element('p', '', checklist.summary));
+        if (checklist.summary) heading.appendChild(rich('p', '', checklist.summary));
         header.appendChild(heading);
         const pending = Number(checklist.pending_count || 0);
         header.appendChild(element('span', pending ? 'departure-pending-count has-pending' : 'departure-pending-count', pending ? `${pending} 项待处理` : '已检查'));
@@ -550,7 +556,7 @@
 
     function renderTransportValue(item, fact, legs = transportLegs(item)) {
         if (!legs.length) {
-            fact.appendChild(element('strong', 'answer-fact-value', item.value));
+            fact.appendChild(rich('strong', 'answer-fact-value', item.value));
             return;
         }
 
@@ -582,7 +588,7 @@
                 route.appendChild(renderTransportPoint(leg.arrival, leg.destination, true));
                 card.appendChild(route);
             } else {
-                card.appendChild(element('p', 'answer-transport-copy', leg.description));
+                card.appendChild(rich('p', 'answer-transport-copy', leg.description));
             }
 
             if (leg.metadata.length) {
@@ -623,21 +629,21 @@
             if (String(item.value || '').length + String(item.detail || '').length > 110) {
                 fact.classList.add('is-wide');
             }
-            if (!isTrain || !legs.length) fact.appendChild(element('span', 'answer-fact-label', item.label));
+            if (!isTrain || !legs.length) fact.appendChild(rich('span', 'answer-fact-label', item.label));
             if (item.activities?.length) {
                 fact.classList.add('is-wide');
                 const activities = element('ul', 'answer-activities');
-                item.activities.forEach(text => activities.appendChild(element('li', '', text)));
+                item.activities.forEach(text => activities.appendChild(rich('li', '', text)));
                 fact.appendChild(activities);
             } else if (hasStructuredTransport || (isTrain && legs.length) || (isOverview && fact.classList.contains('is-transport'))) {
                 renderTransportValue(item, fact, legs);
             } else {
-                fact.appendChild(element('strong', 'answer-fact-value', item.value));
+                fact.appendChild(rich('strong', 'answer-fact-value', item.value));
             }
             const detailValue = isTimeline ? cleanTimelineDetail(item.detail)
                 : isTrain && legs.length ? remainingTransportDetail(item, legs) : item.detail;
             if (detailValue) {
-                const detail = element('span', 'answer-fact-detail', detailValue);
+                const detail = rich('span', 'answer-fact-detail', detailValue);
                 if (isOverview && fact.classList.contains('is-transport')) {
                     detail.classList.add('answer-transport-note');
                 }
@@ -703,6 +709,7 @@
 
     function renderBody(value) {
         const body = element('div', 'answer-section-body');
+        if (window.HommeyMarkdown) return window.HommeyMarkdown.render(body, value);
         let list = null;
         String(value || '').split(/\n+/).forEach((rawLine) => {
             const line = rawLine.trim();
@@ -755,7 +762,7 @@
         if (sectionTitle && sectionTitle !== String(documentTitle || '').trim()) {
             const heading = element('div', 'answer-section-heading');
             heading.appendChild(element('span', 'answer-section-mark'));
-            heading.appendChild(element('h3', '', section.title));
+            heading.appendChild(rich('h3', '', section.title));
             block.appendChild(heading);
         }
         const content = element('div', 'answer-section-content');
@@ -792,11 +799,11 @@
 
     function renderNotices(values) {
         const notices = element('div', 'answer-notices');
-        values.slice(0, 2).forEach((notice) => notices.appendChild(element('p', '', notice)));
+        values.slice(0, 2).forEach((notice) => notices.appendChild(rich('p', '', notice)));
         if (values.length > 2) {
             const more = element('details', 'answer-notice-details');
             more.appendChild(element('summary', '', `查看其余 ${values.length - 2} 项提醒`));
-            values.slice(2).forEach((notice) => more.appendChild(element('p', '', notice)));
+            values.slice(2).forEach((notice) => more.appendChild(rich('p', '', notice)));
             notices.appendChild(more);
         }
         return notices;
@@ -872,8 +879,8 @@
             eyebrow.appendChild(badge);
         }
         header.appendChild(eyebrow);
-        header.appendChild(element('h2', '', data.title || '查询结果'));
-        if (data.summary) header.appendChild(element('p', '', data.summary));
+        header.appendChild(rich('h2', '', data.title || '查询结果'));
+        if (data.summary) header.appendChild(rich('p', '', data.summary));
         card.appendChild(header);
 
         const sections = element('div', 'answer-card-sections');
@@ -889,7 +896,7 @@
         }
 
         const footer = element('footer', 'answer-card-footer');
-        if (data.plain_text) footer.appendChild(renderDetails('查看文字版', element('pre', 'answer-plain-text', data.plain_text)));
+        if (data.plain_text) footer.appendChild(renderDetails('查看文字版', rich('div', 'answer-plain-text', data.plain_text, false)));
         if (Array.isArray(data.sources) && data.sources.length) {
             footer.appendChild(renderDetails(`来源与更新时间 · ${data.sources.length}`, renderSources(data.sources)));
         }

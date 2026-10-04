@@ -10,10 +10,10 @@ from __future__ import annotations
 import re
 from abc import ABC, abstractmethod
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from .block_parser import HeadingStack, parse_text_blocks
-from .document_loader import infer_category
+from .categories import infer_category
 from .encodings import decode_text_bytes
 from .heading_rules import match_heading
 from .schemas import (

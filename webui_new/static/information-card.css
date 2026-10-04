@@ -1,0 +1,48 @@
+.information-card { min-width: 0; border: 1px solid var(--line); border-radius: 18px; background: var(--panel); color: var(--ink); overflow: hidden; box-shadow: var(--shadow-1); font-size: 13px; }
+.information-header { padding: 23px 25px 19px; border-bottom: 1px solid var(--line); }
+.information-eyebrow { color: var(--sage); font-size: 10px; letter-spacing: .13em; font-weight: 600; }
+.information-header h2 { margin: 10px 0 0; font-size: 21px; font-weight: 600; line-height: 1.5; overflow-wrap: anywhere; }
+.information-description { color: var(--ink-2); font-size: 13px; margin-top: 10px; }
+.information-fields { padding: 4px 25px; }
+.information-field { border: 0; padding: 18px 0 20px; margin: 0; min-width: 0; }
+.information-field + .information-field { border-top: 1px solid var(--line); }
+.information-field legend { display: contents; }
+.information-field legend > span { display: inline; font-weight: 600; font-size: 13px; overflow-wrap: anywhere; }
+.information-field legend > small { margin-left: 9px; font-size: 10px; font-weight: 400; color: var(--ink-2); }
+.information-help { color: var(--ink-2); font-size: 12px; line-height: 1.6; margin: 6px 0 0; }
+.information-choices { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 11px; }
+.information-choice { position: relative; display: inline-flex; cursor: pointer; max-width: 100%; }
+.information-choice input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.information-choice span { display: block; padding: 8px 13px; border: 1px solid var(--line-2); border-radius: 9px; color: var(--ink-2); background: var(--panel); font-size: 12px; line-height: 1.6; overflow-wrap: anywhere; transition: background .15s, border-color .15s; }
+.information-choice:hover span { background: var(--soft); color: var(--ink); }
+.information-choice input:checked + span { border-color: var(--sage); background: var(--sage-bg); color: var(--sage); font-weight: 600; }
+.information-choice input:focus-visible + span { outline: 2px solid var(--sage); outline-offset: 3px; }
+.information-choice input:disabled + span { opacity: .6; cursor: default; }
+.information-input,.information-select { box-sizing: border-box; display: block; width: 100%; min-width: 0; margin-top: 11px; padding: 10px 12px; border: 1px solid var(--line-2); border-radius: 9px; background: var(--panel); color: var(--ink); font: inherit; line-height: 1.6; }
+.information-select { cursor: pointer; }
+.information-input:focus-visible,.information-select:focus-visible { outline: 2px solid var(--sage); outline-offset: 2px; }
+.information-custom[hidden] { display: none; }
+.information-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 16px 25px; border-top: 1px solid var(--line); background: color-mix(in srgb, var(--soft) 35%, var(--panel)); }
+.information-tip { color: var(--ink-2); font-size: 11px; }
+.information-status { color: var(--ink-2); font-size: 11px; margin: 5px 0 0; min-height: 1.5em; }
+.information-submit { flex: none; border: 1px solid var(--sage); border-radius: 9px; padding: 10px 16px; color: var(--panel); background: var(--sage); font-size: 12px; font-weight: 600; cursor: pointer; }
+.information-submit:hover:not(:disabled) { filter: brightness(.94); }
+.information-submit:focus-visible { outline: 2px solid var(--sage); outline-offset: 3px; }
+.information-submit:disabled { opacity: .4; cursor: default; }
+.information-card.is-archived { box-shadow: none; background: transparent; }
+.information-archive summary { display: flex; gap: 12px; align-items: center; cursor: pointer; padding: 14px 18px; font-weight: 500; }
+.information-archive summary::before { content: '›'; color: var(--ink-2); font-size: 18px; transition: transform .15s; }
+.information-archive[open] summary::before { transform: rotate(90deg); }
+.information-archive summary span { flex: 1; overflow-wrap: anywhere; }
+.information-archive summary small { color: var(--ink-2); font-size: 10px; white-space: nowrap; font-weight: 400; }
+.information-archive-body { padding: 0 18px 17px; font-size: 12px; color: var(--ink-2); line-height: 1.8; }
+.information-archive-body p { white-space: pre-wrap; margin: 0 0 9px; overflow-wrap: anywhere; }
+.information-archive-body small { font-size: 11px; }
+@media (max-width: 540px) {
+    .information-header { padding: 19px 17px 16px; }
+    .information-header h2 { font-size: 19px; }
+    .information-fields { padding: 2px 17px; }
+    .information-footer { padding: 14px 17px; flex-wrap: wrap; gap: 10px; }
+    .information-input,.information-select { font-size: 16px; }
+    .information-choice span { min-height: 42px; display: flex; align-items: center; padding: 9px 12px; }
+}

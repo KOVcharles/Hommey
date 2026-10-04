@@ -52,15 +52,6 @@ class AttachmentSource(BaseModel):
     page_count: Optional[int] = None
 
 
-class MessageInput(BaseModel):
-    """路由层组装的原始输入（MessageInput(原始)，见方案 §5.1）。"""
-    text: str = ""
-    attachment_ids: list[str] = Field(default_factory=list)
-    user_id: str
-    session_id: Optional[str] = None
-    request_id: Optional[str] = None
-
-
 class NormalizedInput(BaseModel):
     """InputProcessingService.normalize 的产物（见方案 §1.1 / §4.5）。
 

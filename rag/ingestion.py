@@ -16,16 +16,12 @@ def ingest_documents(
     knowledge_base_path: str,
     collection_name: str,
     rebuild: bool = False,
-    max_chars: int = 600,
-    overlap: int = 100,
 ) -> Dict[str, Any]:
     config = RAGPipelineConfig.from_settings(
         {
             "documents_dir": documents_dir,
             "knowledge_base_path": knowledge_base_path,
             "collection_name": collection_name,
-            "chunk_size": max_chars,
-            "chunk_overlap": overlap,
         }
     )
     try:

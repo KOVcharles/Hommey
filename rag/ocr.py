@@ -18,7 +18,7 @@ from __future__ import annotations
 
 import logging
 from dataclasses import replace
-from typing import Any, Dict, List, Optional
+from typing import Any, List
 
 from .block_parser import parse_text_blocks
 from .parser import _render_blocks

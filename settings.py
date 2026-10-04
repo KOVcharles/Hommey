@@ -77,13 +77,10 @@ AMAP_CONFIG = {
     "max_retries": _int_env("HOMMEY_AMAP_MAX_RETRIES", 1),
     "cache_ttl_sec": _int_env("HOMMEY_AMAP_CACHE_TTL_SEC", 300),
     "hotel_radius_m": _int_env("HOMMEY_AMAP_HOTEL_RADIUS_M", 5000),
-    "hotel_limit": 3,
-    "mainland_only": True,
 }
 
 
 SYSTEM_CONFIG = {
-    "enable_llm": _bool_env("HOMMEY_ENABLE_LLM", True),
     "log_level": os.getenv("HOMMEY_LOG_LEVEL", "INFO"),
     "log_format": os.getenv("HOMMEY_LOG_FORMAT", "text"),
     "preflight_include_network": _bool_env("HOMMEY_PREFLIGHT_INCLUDE_NETWORK", False),
@@ -138,26 +135,12 @@ RAG_CONFIG = {
     "refresh_retry_delay_seconds": _int_env("HOMMEY_RAG_REFRESH_RETRY_DELAY_SECONDS", 5),
     "refresh_poll_seconds": _float_env("HOMMEY_RAG_REFRESH_POLL_SECONDS", 2.0),
     "refresh_worker_stale_seconds": _int_env("HOMMEY_RAG_REFRESH_WORKER_STALE_SECONDS", 45),
-    "chunk_size": _int_env("HOMMEY_RAG_CHUNK_SIZE", 600),
-    "chunk_overlap": _int_env("HOMMEY_RAG_CHUNK_OVERLAP", 100),
     "chunk_min_tokens": _int_env("HOMMEY_RAG_CHUNK_MIN_TOKENS", 150),
     "chunk_max_tokens": _int_env("HOMMEY_RAG_CHUNK_MAX_TOKENS", 400),
     "chunk_overlap_tokens": _int_env("HOMMEY_RAG_CHUNK_OVERLAP_TOKENS", 60),
     "top_k": _int_env("HOMMEY_RAG_TOP_K", 3),
     "vector_top_k": _int_env("HOMMEY_RAG_VECTOR_TOP_K", 10),
     "bm25_top_k": _int_env("HOMMEY_RAG_BM25_TOP_K", 10),
-    # HyDE is a user-selected retrieval capability. Requests remain on
-    # standard retrieval unless the chat payload explicitly asks for enhanced.
-    "hyde_enabled": _bool_env("HOMMEY_RAG_HYDE_ENABLED", True),
-    "hyde_timeout_sec": _float_env("HOMMEY_RAG_HYDE_TIMEOUT_SEC", 12.0),
-    "hyde_max_chars": _int_env("HOMMEY_RAG_HYDE_MAX_CHARS", 600),
-    "hyde_candidate_top_k": _int_env("HOMMEY_RAG_HYDE_CANDIDATE_TOP_K", 10),
-    "hyde_rrf_weight": _float_env("HOMMEY_RAG_HYDE_RRF_WEIGHT", 0.6),
-    "hyde_prompt_version": os.getenv("HOMMEY_RAG_HYDE_PROMPT_VERSION", "hyde-policy-v1"),
-    "hyde_trace_file": os.getenv(
-        "HOMMEY_RAG_HYDE_TRACE_FILE",
-        "data/rag_knowledge/hyde_traces.jsonl",
-    ),
     # Phase 2: ingestion-accepted file types (comma-separated).  DOCX/CSV/XLSX
     # are new; operators can narrow the set without code changes.
     "supported_file_types": os.getenv(
@@ -200,7 +183,6 @@ EVALUATION_CONFIG = {
     "judge_model": os.getenv("HOMMEY_EVALUATION_JUDGE_MODEL", ""),
     "judge_api_key": _optional_env("HOMMEY_EVALUATION_API_KEY") or LLM_CONFIG["api_key"],
     "judge_base_url": os.getenv("HOMMEY_EVALUATION_BASE_URL") or LLM_CONFIG["base_url"],
-    "context_messages": _int_env("HOMMEY_EVALUATION_CONTEXT_MESSAGES", 4),
     "retention_days": _int_env("HOMMEY_EVALUATION_RETENTION_DAYS", 30),
     "database_pool_size": _int_env("HOMMEY_EVALUATION_DB_POOL_SIZE", 2),
     "database_timeout_sec": _float_env("HOMMEY_EVALUATION_DB_TIMEOUT_SEC", 5.0),
@@ -287,18 +269,6 @@ MEMORY_CONFIG = {
     "safety": {
         "enabled": _bool_env("HOMMEY_MEMORY_SAFETY_ENABLED", True),
     },
-    "v2": {
-        "enabled": _bool_env("HOMMEY_MEMORY_V2_ENABLED", False),
-        "dual_write": _bool_env("HOMMEY_MEMORY_V2_DUAL_WRITE", False),
-        "read_mode": os.getenv("HOMMEY_MEMORY_V2_READ_MODE", "legacy").lower(),
-    },
-    # 增量会话摘要（v1）：读取路径惰性生成，水位推进驱动；max_turns 或 max_chars 谁先到谁触发。
-    "summary": {
-        "enabled": _bool_env("HOMMEY_SUMMARY_ENABLED", True),
-        "max_turns": _int_env("HOMMEY_SUMMARY_MAX_TURNS", 5),
-        "max_chars": _int_env("HOMMEY_SUMMARY_MAX_CHARS", 6000),
-        "prompt_version": os.getenv("HOMMEY_SUMMARY_PROMPT_VERSION", "segment-v1"),
-    },
 }
 
 
@@ -375,29 +345,6 @@ ASR_CONFIG = {
     "timeout_sec": _float_env("HOMMEY_ASR_TIMEOUT_SEC", 60.0),
     "max_size_bytes": _int_env("HOMMEY_ASR_MAX_BYTES", 25 * 1024 * 1024),
     "daily_limit": _int_env("HOMMEY_ASR_DAILY_LIMIT", 100),
-}
-
-
-MCP_CONFIG = {
-    "auto_connect": _bool_env("HOMMEY_MCP_AUTO_CONNECT", True),
-    "connect_timeout": _float_env("HOMMEY_MCP_CONNECT_TIMEOUT", 10.0),
-    "servers": {
-        "filesystem": {
-            "transport": "stdio",
-            "command": os.getenv("HOMMEY_MCP_FILESYSTEM_COMMAND", "npx"),
-            "args": ["-y", "@anthropic/mcp-server-filesystem", "."],
-            "env": {},
-            "timeout": _float_env("HOMMEY_MCP_FILESYSTEM_TIMEOUT", 30.0),
-            "execution_timeout": _float_env(
-                "HOMMEY_MCP_FILESYSTEM_EXECUTION_TIMEOUT",
-                60.0,
-            ),
-            "enabled": _bool_env("HOMMEY_MCP_FILESYSTEM_ENABLED", False),
-            "description": (
-                "Filesystem operations: read, write, list, and create project files."
-            ),
-        },
-    },
 }
 
 

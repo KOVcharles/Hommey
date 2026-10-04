@@ -12,7 +12,6 @@ from utils.memory_safety import redact_sensitive_text
 from .long_term_memory import DisabledLongTermMemory, FileLongTermMemory
 from .memory_repository import PostgresCompatibilityStore, PostgresMemoryRepository
 from .postgres_pool import get_postgres_pool
-from .profile_repository import PostgresProfileRepository
 from .short_term_memory import ShortTermMemory
 
 logger = logging.getLogger(__name__)
@@ -38,14 +37,6 @@ class RecentContextFacade:
     def get_recent_context(self, n_turns: int | None = None) -> list[dict[str, Any]]:
         return self._service.get_recent_context(n_turns)
 
-    def get_context_string(self, n_turns: int = 5) -> str:
-        messages = self.get_recent_context(n_turns)
-        if not messages:
-            return "无历史对话"
-        return "\n".join(
-            f"{'用户' if message['role'] == 'user' else '助手'}: {message['content']}"
-            for message in messages
-        )
 
     def get_statistics(self) -> dict[str, Any]:
         return self._service.get_statistics()
@@ -70,7 +61,6 @@ class MemoryService:
         self.idle_timeout_sec = max(int(short_config.get("session_idle_timeout_sec", 600)), 1)
         self.cache_backend = str(short_config.get("backend", "memory")).lower()
         self.repository: PostgresMemoryRepository | None = None
-        self.profile_repository: PostgresProfileRepository | None = None
 
         backend = str(long_config.get("backend", "file")).lower()
         self.backend = backend
@@ -82,7 +72,6 @@ class MemoryService:
                     "raw_message_days", 14
                 ),
             )
-            self.profile_repository = PostgresProfileRepository(pool)
             # No implicit "current conversation": a supplied ID must identify
             # an existing owned session; creation is a separate operation.
             session = self.repository.resume_session(self.user_id, requested_session_id) if requested_session_id else None

@@ -1,0 +1,29 @@
+.hommey-markdown { min-width: 0; white-space: normal; overflow-wrap: anywhere; line-height: 1.8; }
+.hommey-markdown > :first-child { margin-top: 0; }
+.hommey-markdown > :last-child { margin-bottom: 0; }
+.hommey-markdown p { margin: 0 0 .8em; }
+.hommey-markdown :is(h1,h2,h3,h4,h5,h6) { color: var(--ink); line-height: 1.5; margin: 1.2em 0 .55em; font-weight: 650; }
+.hommey-markdown h1 { font-size: 1.25em; }
+.hommey-markdown h2 { font-size: 1.15em; }
+.hommey-markdown :is(h3,h4,h5,h6) { font-size: 1.05em; }
+.hommey-markdown :is(ul,ol) { margin: .45em 0 .9em; padding-left: 1.65em; list-style-position: outside; }
+.hommey-markdown ul { list-style-type: disc; }
+.hommey-markdown ol { list-style-type: decimal; }
+.hommey-markdown li { margin: .25em 0; padding-left: .15em; }
+.hommey-markdown li > p { margin: .3em 0; }
+.hommey-markdown li :is(ul,ol) { margin-bottom: .25em; }
+:is(.hommey-markdown,.hommey-markdown-inline) strong { font-weight: 650; color: var(--ink); }
+:is(.hommey-markdown,.hommey-markdown-inline) a { color: var(--sage); text-decoration: underline; text-underline-offset: 3px; overflow-wrap: anywhere; }
+:is(.hommey-markdown,.hommey-markdown-inline) code { padding: .12em .35em; border-radius: 4px; background: var(--soft); font-size: .9em; }
+.hommey-markdown pre { max-width: 100%; overflow-x: auto; padding: 14px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); white-space: pre; line-height: 1.6; }
+.hommey-markdown pre code { padding: 0; background: transparent; }
+.hommey-markdown blockquote { margin: .8em 0; padding: .25em 0 .25em 1em; border-left: 3px solid var(--line-2); color: var(--ink-2); }
+.hommey-markdown blockquote p:last-child { margin-bottom: 0; }
+.hommey-markdown hr { border: 0; border-top: 1px solid var(--line); margin: 1.1em 0; }
+.markdown-table-scroll { width: 100%; overflow-x: auto; margin: .8em 0; border: 1px solid var(--line); border-radius: 10px; }
+.markdown-table-scroll:focus-visible { outline: 2px solid var(--sage); outline-offset: 3px; }
+.hommey-markdown table { width: 100%; border-collapse: collapse; font-size: .94em; text-align: left; }
+.hommey-markdown :is(th,td) { min-width: 6em; max-width: 26em; padding: 9px 12px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.hommey-markdown th { background: var(--soft); color: var(--ink); font-weight: 600; }
+.hommey-markdown tr:last-child td { border-bottom: 0; }
+.hommey-markdown tbody tr:nth-child(even) { background: color-mix(in srgb, var(--soft) 35%, transparent); }

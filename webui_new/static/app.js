@@ -7,6 +7,7 @@
     'use strict';
 
     const userId = String(document.body.dataset.userId || '');
+    let userSummaryName = userId;
     const appShell = document.getElementById('appShell');
     const chatMessages = document.getElementById('chatMessages');
     const chatInput = document.getElementById('chatInput');
@@ -15,7 +16,6 @@
     const homeInput = document.getElementById('homeInput');
     const homeSendBtn = document.getElementById('homeSendBtn');
     const initOverlay = document.getElementById('initOverlay');
-    const sidebar = document.getElementById('sidebar');
     const scrim = document.getElementById('scrim');
     const historyList = document.getElementById('historyList');
     const historySearch = document.getElementById('historySearch');
@@ -476,14 +476,19 @@
             });
         });
 
-        document.getElementById('sidebarToggle').addEventListener('click', openSidebar);
+        window.HommeyWorkspace.configure({
+            open: openSidebar, openSession, startTrip: openQuickTrip,
+            search: setHistorySearchExpanded, refresh: refreshSessionList,
+        });
+        document.getElementById('sidebarToggle').addEventListener('click', event => openSidebar(event.currentTarget));
         document.getElementById('accountButton').addEventListener('click', openSettings);
         document.getElementById('accountRow').addEventListener('click', openSettings);
         document.getElementById('sidebarClose').addEventListener('click', closeSidebar);
         scrim.addEventListener('click', closeSidebar);
         document.getElementById('homeButton').addEventListener('click', showHome);
         document.getElementById('newChatButton').addEventListener('click', createNewSession);
-        document.getElementById('searchToggle').addEventListener('click', toggleHistorySearch);
+        document.getElementById('workspaceNewChat').addEventListener('click', createNewSession);
+        document.getElementById('searchToggle').addEventListener('click', () => window.HommeyWorkspace.showHistory(true));
         document.getElementById('knowledgeButton').addEventListener('click', showKnowledge);
         knowledgeExitButton.addEventListener('click', returnFromKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
@@ -512,7 +517,7 @@
         });
         document.querySelectorAll('.modal-layer').forEach((layer) => {
             layer.addEventListener('click', (event) => {
-                if (event.target === layer) layer.classList.remove('open');
+                if (event.target === layer && layer.id !== 'personalProfileLayer') closeLayer(layer.id);
             });
         });
         document.querySelectorAll('.logout-link').forEach((link) => {
@@ -603,6 +608,7 @@
         document.addEventListener('keydown', handleKnowledgeShortcut);
         document.addEventListener('keydown', (event) => {
             if (event.key === 'Escape') closeRetrievalModeMenus();
+            if (event.key === 'Escape' && quickTripLayer.classList.contains('open')) closeLayer('quickTripLayer');
         });
     }
 
@@ -699,11 +705,16 @@
             // 先定下这一轮浏览用哪个会话，再拉依赖会话的数据：进行中的行程是按会话存的。
             await loadSessions();
             await Promise.all([loadUserSummary(), loadActiveTrip()]);
-            hideInitOverlay();
+            const readyForProfile = hideInitOverlay();
             setInputEnabled(true);
             startPromptRotation();
 
             showHome();
+            window.HommeyPersonalProfile?.initialize({ userId, fetchJson, ready: readyForProfile,
+                onUpdate: profile => { panelName.textContent = profile.basic_info.real_name || userSummaryName; },
+                onSaved: () => { showToast('个人资料已保存'); },
+                onError: message => showToast(message),
+            });
         } catch (err) {
             showInitError(err.message || '无法连接到服务器，请检查网络后刷新页面');
         }
@@ -758,7 +769,7 @@
             preserveComposer: true,
             includeAttachments: false,
             inlineSubmission: true,
-            silentSubmission: event.detail?.source === 'trip_intake',
+            silentSubmission: ['trip_intake', 'information_request'].includes(event.detail?.source),
             requestPayload: {...(event.detail?.requestPayload || {}),
                 ...(event.detail?.interactionId ? {intake_request_id: event.detail.interactionId} : {})},
         }).then((success) => {
@@ -775,12 +786,25 @@
         });
     }
 
-    // 首页只在当前会话真的在跑时才拦——别的会话在跑不该把人锁在首页。
+    // 返回首页只切换视图。保留会话画布、流和草稿，首页使用独立草稿位。
     function showHome() {
-        if (isActiveProcessing()) return;
+        const runtime = activeRuntime();
+        if (runtime && runtime.container.children.length > 0) {
+            runtime.draft.text = chatInput.value;
+            runtime.container.classList.remove(window.HommeySessionRuntime.ACTIVE_CLASS);
+            setActiveSession('');
+            chatInput.value = '';
+            resizeInput(chatInput);
+            syncComposerToActive();
+            restoreRetrievalMode();
+            renderPendingAttachments();
+            loadActiveTrip();
+        }
         setMainView('home');
         closeSidebar();
-        setTimeout(() => homeInput.focus(), 180);
+        setTimeout(() => {
+            if (appShell.dataset.view === 'home' && !document.body.classList.contains('workspace-open')) homeInput.focus();
+        }, 180);
     }
 
     function showKnowledge() {
@@ -807,6 +831,7 @@
     }
 
     function setMainView(view) {
+        if (quickTripLayer.classList.contains('is-inline')) closeLayer('quickTripLayer');
         appShell.dataset.view = view;
         document.getElementById('knowledgeButton').classList.toggle('active', view === 'knowledge');
         if (view !== 'knowledge') {
@@ -1201,8 +1226,22 @@
     }
 
     function hideInitOverlay() {
-        initOverlay.classList.add('hidden');
-        setTimeout(() => { initOverlay.style.display = 'none'; }, 340);
+        return new Promise(resolve => {
+            let fallback;
+            const finish = () => {
+                clearTimeout(fallback);
+                initOverlay.removeEventListener('transitionend', onTransition);
+                initOverlay.style.display = 'none';
+                resolve();
+            };
+            const onTransition = event => {
+                if (event.target === initOverlay && event.propertyName === 'opacity') finish();
+            };
+            initOverlay.addEventListener('transitionend', onTransition);
+            initOverlay.classList.add('hidden');
+            if (document.documentElement.dataset.motion === 'off' || window.matchMedia('(prefers-reduced-motion: reduce)').matches) finish();
+            else fallback = setTimeout(finish, 360);
+        });
     }
 
     function showInitError(message) {
@@ -1223,7 +1262,8 @@
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/summary`);
             applyKnowledgePermissions(data.role === 'admin');
-            panelName.textContent = data.name_display || userId;
+            userSummaryName = data.name_display || userId;
+            panelName.textContent = window.HommeyPersonalProfile?.applyDisplayName(data.name_display || userId) || data.name_display || userId;
             panelLevel.textContent = data.member_level || '个人账户';
             prefList.replaceChildren();
             const preferences = Array.isArray(data.preferences) ? data.preferences : [];
@@ -1260,9 +1300,11 @@
 
     async function loadActiveTrip() {
         const sessionId = activeSessionId();
+        window.HommeyWorkspace.setTripState('正在读取行程…');
         try {
             // 没有选择会话时，不读取任何其他会话的行程。
             if (!activeSessionId()) {
+                window.HommeyWorkspace.setTrip(null, '');
                 activeTrip.replaceChildren();
                 activeTrip.appendChild(createEmptyState('当前没有进行中的出差任务。'));
                 return;
@@ -1270,6 +1312,7 @@
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/trip/active?session_id=${encodeURIComponent(sessionId)}`);
             if (activeSessionId() !== sessionId) return;
             const trip = data.active_trip;
+            window.HommeyWorkspace.setTrip(trip, sessionId);
             activeTrip.replaceChildren();
             if (!trip) {
                 activeTrip.appendChild(createEmptyState('当前没有进行中的出差任务。'));
@@ -1294,6 +1337,7 @@
             });
         } catch (err) {
             if (activeSessionId() !== sessionId) return;
+            window.HommeyWorkspace.setTripState('暂时无法读取行程');
             activeTrip.replaceChildren(createEmptyState('暂时无法读取行程。'));
         }
     }
@@ -1354,6 +1398,7 @@
     }
 
     function showSessionListError() {
+        window.HommeyWorkspace.setSessionsError();
         if (!historyList.querySelector('.session-row')) historyList.replaceChildren();
         let error = historyList.querySelector('.session-list-error');
         if (!error) {
@@ -1389,7 +1434,7 @@
         // 两个输入区共用一份草稿，附件是在"认领时活动的那个会话"下记的（见 handleFilePick）。
         // 换会话时它们必须跟着这条消息走，否则首页上看得见的 chips 会留在旧会话里发不出去。
         runtime.draft.attachments = [
-            ...(previous ? previous.draft.attachments : looseDraft.attachments),
+            ...(previous?.draft.attachments || []),
             ...looseDraft.attachments,
             ...(runtime.draft.attachments || []),
         ];
@@ -1421,6 +1466,7 @@
             .filter((runtime) => runtime.processing && !listed.has(runtime.id))
             .map((runtime) => ({ session_id: runtime.id, title: '新会话', preview: '' }));
         const rows = [...sessions, ...runningOnly];
+        window.HommeyWorkspace.setSessions(rows);
 
         if (!rows.length) {
             historyList.appendChild(createEmptyState('还没有历史会话。发送第一条消息后会自动保存。'));
@@ -1464,15 +1510,15 @@
     // 跑完了就丢掉，下次打开从库里重建。这里不再有"正在生成就不许切"的限制。
     // 换会话才交换草稿：停在同一个会话上重复调用（比如发消息前确保画布挂上）
     // 不能动用户正在输入的草稿。
-    function mountSession(sessionId) {
+    function mountSession(sessionId, { useHomeDraft = false } = {}) {
         const next = window.HommeySessionRuntime.ensure(sessionId);
         const previous = window.HommeySessionRuntime.active();
         if (previous !== next) {
             if (previous) {
                 previous.draft.text = chatInput.value;
                 window.HommeySessionRuntime.release(previous.id);
-            } else {
-                // 从首页进来：首页那份匿名草稿（含待发附件）交给这个会话。
+            } else if (useHomeDraft) {
+                // 只有新会话接收首页附件；打开已有会话时保留首页草稿。
                 next.draft.attachments = [
                     ...looseDraft.attachments,
                     ...(next.draft.attachments || []),
@@ -1481,9 +1527,9 @@
             }
             chatInput.value = next.draft.text || '';
             resizeInput(chatInput);
-            renderPendingAttachments();
         }
         setActiveSession(sessionId);
+        renderPendingAttachments();
         window.HommeySessionRuntime.mount(next);
         syncComposerToActive();
         // 收起时布局为 0，滚动位置只能在重新显示之后落。
@@ -1495,7 +1541,7 @@
     function buildHistory(runtime, messages, plans) {
         messages.forEach((message) => {
             const role = message.role === 'assistant' ? 'ai' : message.role;
-            if (role === 'user' && message.content_type === 'trip_submission') {
+            if (role === 'user' && ['trip_submission', 'form_submission'].includes(message.content_type)) {
                 collapseTripIntakeCards(runtime);
                 return;
             }
@@ -1517,7 +1563,7 @@
         const latest = messages[messages.length - 1];
         setSessionPlaceholder(
             runtime,
-            latest?.presentation_document?.type === 'trip_intake'
+            ['trip_intake', 'information_request'].includes(latest?.presentation_document?.type)
                 ? latest.presentation_document.input_placeholder
                 : ''
         );
@@ -1526,7 +1572,7 @@
     async function createNewSession() {
         try {
             const data = await fetchJson(`/api/${encodeURIComponent(userId)}/sessions`, { method: 'POST' });
-            const runtime = mountSession(data.session_id || '');
+            const runtime = mountSession(data.session_id || '', { useHomeDraft: true });
             runtime.container.replaceChildren();
             runtime.followConversation = true;
             rememberSession(activeSessionId());
@@ -1540,10 +1586,9 @@
     }
 
     async function openSession(sessionId) {
-        // 还在跑的会话，容器和它的流都活着：直接挂回来，不重拉历史，
-        // 已经收到的内容也还在。
+        // 运行中或返回首页后保留的会话直接挂回来，保留回复和未发送草稿。
         const live = window.HommeySessionRuntime.get(sessionId);
-        if (live && live.processing) {
+        if (live && (live.processing || (live !== activeRuntime() && live.container.children.length > 0))) {
             mountSession(sessionId);
             rememberSession(sessionId);
             restoreRetrievalMode();
@@ -1572,10 +1617,6 @@
         } catch (err) {
             showToast(formatDisplayError(err, '无法打开会话'));
         }
-    }
-
-    function toggleHistorySearch() {
-        setHistorySearchExpanded(!historySearchBox.classList.contains('visible'));
     }
 
     function setHistorySearchExpanded(expanded) {
@@ -1613,6 +1654,7 @@
     }
 
     function openRenameDialog() {
+        closeSidebar();
         sessionPopover.hidden = true;
         renameLayer.classList.add('open');
         setTimeout(() => renameInput.select(), 100);
@@ -1680,6 +1722,7 @@
     }
 
     function openConfirm(title, message, callback) {
+        closeSidebar();
         document.getElementById('confirmTitle').textContent = title;
         document.getElementById('confirmMessage').textContent = message;
         confirmCallback = callback;
@@ -1869,6 +1912,7 @@
     // ---- 附件面板：查看 / 下载 / 引用 / 删除 ---------------------------------
 
     async function openAttachmentPanel() {
+        closeSidebar();
         attachmentsLayer.classList.add('open');
         attachmentsList.innerHTML = '<div class="empty-state">正在读取附件…</div>';
         try {
@@ -2036,6 +2080,12 @@
         end.min = today;
         if (!start.value) start.value = today;
         if (!end.value) end.value = localDateValue(2);
+        if (appShell.dataset.view === 'home') {
+            homeComposer.after(quickTripLayer);
+            quickTripLayer.classList.add('is-inline');
+            homeComposer.hidden = true;
+            document.body.classList.add('quick-planning');
+        }
         quickTripLayer.classList.add('open');
         setTimeout(() => document.getElementById('quickTripOrigin').focus(), 120);
     }
@@ -2378,13 +2428,19 @@
             // 那里不该被这条流的结果影响。
             if (options.inlineSubmission) showToast(errorText);
             else addMessage(runtime, 'ai', errorText);
+            if (options.inlineSubmission && err instanceof ApiError && err.code === 'INTAKE_CARD_EXPIRED') {
+                collapseTripIntakeCards(runtime);
+            }
             if (options.inlineSubmission && submissionAccepted && (!(err instanceof ApiError) || err.retryable)) {
                 showSubmissionRetry(runtime, text, options, runtime.requestId);
             }
             // Preserve the body and request ID so an explicit retry remains
             // idempotent. Inline card submissions retain their values in-card
             // and never overwrite an unrelated composer draft.
-            if (!options.preserveComposer && runtime === window.HommeySessionRuntime.active()) chatInput.value = text;
+            if (!options.preserveComposer) {
+                runtime.draft.text = text;
+                if (runtime === window.HommeySessionRuntime.active()) chatInput.value = text;
+            }
             if (includeAttachments) {
                 // 还原到发起这次请求的那个会话，不是用户此刻正看着的那个。
                 const draft = draftSlot(runtime);
@@ -2540,13 +2596,15 @@
     }
 
     function addPresentationMessage(runtime, documentData, timestamp) {
-        if (!documentData || documentData.type !== 'trip_intake' || !window.HommeyTripIntakeCard) {
-            return addMessage(runtime, 'ai', documentData?.plain_text || '请补充行程信息。', timestamp);
+        const renderer = documentData?.type === 'trip_intake' ? window.HommeyTripIntakeCard
+            : documentData?.type === 'information_request' ? window.HommeyInformationCard : null;
+        if (!renderer) {
+            return addMessage(runtime, 'ai', documentData?.plain_text || '请补充信息。', timestamp);
         }
         collapseTripIntakeCards(runtime);
         const row = createMessageShell('ai');
         const stack = row.querySelector('.msg-stack');
-        const card = window.HommeyTripIntakeCard.create(documentData);
+        const card = renderer.create(documentData);
         stack.appendChild(card);
         if (documentData.archived) card.archive?.();
         if (timestamp) stack.appendChild(createTime(timestamp));
@@ -2556,7 +2614,7 @@
     }
 
     function collapseTripIntakeCards(runtime) {
-        runtime.container.querySelectorAll('.trip-intake-card').forEach(card => card.archive?.());
+        runtime.container.querySelectorAll('.trip-intake-card, .information-card').forEach(card => card.archive?.());
     }
 
     function showProcessingIndicator(runtime, agents) {
@@ -2660,10 +2718,10 @@
     }
 
     function renderMessageInto(element, text) {
-        element.classList.toggle(
-            'structured-result',
-            /(?:✈️|🚄|🏨|📋|✅|⚠️)\s*(?:\*\*)?|(?:交通建议|住宿建议|行程规划)/.test(String(text || ''))
-        );
+        if (window.HommeyMarkdown) {
+            window.HommeyMarkdown.render(element, text);
+            return;
+        }
         element.replaceChildren();
         const fragment = document.createDocumentFragment();
         String(text || '').split(/(\*\*[^*]+\*\*|\n|•)/g).forEach((part) => {
@@ -2685,11 +2743,6 @@
         if (runtime === window.HommeySessionRuntime.active() && !runtime.processing) {
             chatInput.placeholder = runtime.draft.placeholder || defaultPlaceholder;
         }
-    }
-
-    function setComposerContext(placeholder) {
-        const runtime = window.HommeySessionRuntime.active();
-        if (runtime) setSessionPlaceholder(runtime, placeholder);
     }
 
     // 切会话之后把共享输入区同步到新会话：占位文案、发送键语义。
@@ -2913,15 +2966,14 @@
         }
     }
 
-    function openSidebar() {
-        sidebar.classList.add('open');
-        scrim.classList.add('visible');
+    function openSidebar(source) {
+        window.HommeyWorkspace.open(source);
         refreshSessionList();
+        loadActiveTrip();
     }
 
     function closeSidebar() {
-        sidebar.classList.remove('open');
-        scrim.classList.remove('visible');
+        window.HommeyWorkspace.close();
         sessionPopover.hidden = true;
     }
 
@@ -2936,6 +2988,13 @@
 
     function closeLayer(id) {
         document.getElementById(id)?.classList.remove('open');
+        if (id === 'quickTripLayer' && quickTripLayer.classList.contains('is-inline')) {
+            quickTripLayer.classList.remove('is-inline');
+            document.body.append(quickTripLayer);
+            homeComposer.hidden = false;
+            document.body.classList.remove('quick-planning');
+            homeInput.focus({ preventScroll: true });
+        }
     }
 
     function applyStoredAppearance() {

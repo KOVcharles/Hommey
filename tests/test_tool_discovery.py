@@ -127,7 +127,7 @@ async def test_unknown_or_indirect_tool_returns_corrective_feedback(bad_name, co
         out = outputs(messages)
         if role_of(messages) is None:
             if not out:
-                assert "get_weather(city: string)" in messages[0]["content"]
+                assert "get_weather(city: string)" not in messages[0]["content"]
                 assert "travel_info" in messages[0]["content"]
                 return reply((bad_name, {"city": "南京"}))
             if len(out) == 1:
@@ -169,10 +169,12 @@ def test_catalog_tracks_registry_and_current_tool_schema_without_mutation(monkey
     request, _ = TOOLS["get_weather"]
     monkeypatch.setitem(TOOLS, "get_weather", (request, "weather-provider-new-description"))
     prompt = capability_prompt(MAIN_TOOLS, None)
-    assert "weather-provider-new-description" in prompt and "city: string" in prompt
+    assert "weather-provider-new-description" not in prompt and "city: string" not in prompt
+    assert "travel_info" in prompt and "query-info" in prompt
     assert MAIN_TOOLS == original
     child = capability_prompt(tool_schemas(["get_weather"]), "travel_info")
-    assert "get_weather" in child and "search_trains" not in child and "delegate(" not in child
+    assert child == ""
+    assert tool_schemas(["get_weather"])[0]["function"]["description"] == "weather-provider-new-description"
 
 
 def test_resource_discovery_lists_only_existing_references(tmp_path):

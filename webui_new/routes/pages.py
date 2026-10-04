@@ -13,9 +13,19 @@ def create_pages_router(render):
     router = APIRouter()
 
     @router.get("/", response_class=HTMLResponse)
-    async def login_page():
-        """登录页（自托管 ALTCHA 人机验证，challenge 由 /auth/altcha-challenge 提供）。"""
+    async def landing_page():
+        """动态背景入口页。"""
         return render("login.html")
+
+    @router.get("/login", response_class=HTMLResponse)
+    async def sign_in_page():
+        """独立的邮箱登录页；POST /login 的旧接口仍由 auth router 处理。"""
+        return render("signin.html")
+
+    @router.get("/signup", response_class=HTMLResponse)
+    async def sign_up_page():
+        """独立的邀请注册页。"""
+        return render("signup.html")
 
     @router.get("/chat/{user_id}", response_class=HTMLResponse)
     async def chat_page(user_id: int):

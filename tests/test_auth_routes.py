@@ -5,6 +5,8 @@
 但 **密码哈希 / JWT 签发校验走真实实现**（passlib bcrypt + PyJWT），从而覆盖真正的
 加密链路。每个对外接口至少覆盖正常路径与主要错误路径。
 """
+from contextlib import contextmanager
+
 import jwt
 import pytest
 from fastapi import FastAPI
@@ -25,6 +27,7 @@ class _FakeStore:
     def __init__(self):
         self.by_email: dict[str, User] = {}
         self._next_id = 1
+        self.invites = {"TEST-INVITE"}
 
     def get_conn(self):
         return self  # with X as conn -> conn = self
@@ -34,6 +37,19 @@ class _FakeStore:
 
     def __exit__(self, *exc):
         return False
+
+    @contextmanager
+    def transaction(self):
+        users_before = self.by_email.copy()
+        invites_before = self.invites.copy()
+        next_id_before = self._next_id
+        try:
+            yield self
+        except Exception:
+            self.by_email = users_before
+            self.invites = invites_before
+            self._next_id = next_id_before
+            raise
 
     def apply_migration(self, conn):
         pass  # 无需建表
@@ -58,6 +74,15 @@ def client(monkeypatch):
     monkeypatch.setattr(auth_routes, "apply_migration", store.apply_migration)
     monkeypatch.setattr(auth_routes, "get_user_by_email", store.get_user_by_email)
     monkeypatch.setattr(auth_routes, "create_user", store.create_user)
+    monkeypatch.setattr(auth_routes, "invite_available", lambda conn, code: code in store.invites)
+
+    def consume_invite(conn, code, user_id):
+        if code not in store.invites:
+            return False
+        store.invites.remove(code)
+        return True
+
+    monkeypatch.setattr(auth_routes, "consume_invite", consume_invite)
 
     async def _fake_verify(email, code):
         return "ok"  # 本套用例只测 register 的落库/查重/错误映射，验证码校验另测
@@ -70,8 +95,8 @@ def client(monkeypatch):
     return TestClient(app), store
 
 
-def _register(c, email="alice@example.com", password="supersecret-123", code="123456"):
-    return c.post("/auth/register", json={"email": email, "password": password, "code": code})
+def _register(c, email="alice@example.com", password="supersecret-123", code="123456", invite_code="TEST-INVITE"):
+    return c.post("/auth/register", json={"email": email, "password": password, "code": code, "invite_code": invite_code})
 
 
 # ---------------------------------------------------------------------------
@@ -100,14 +125,14 @@ def test_register_duplicate_email_is_409(client):
 
 def test_register_accepts_nonstandard_email_for_testing(client):
     c, _ = client
-    r = c.post("/auth/register", json={"email": "test-user", "password": "supersecret-123", "code": "123456"})
+    r = _register(c, email="test-user")
     assert r.status_code == 201
     assert r.json()["email"] == "test-user"
 
 
 def test_register_accepts_short_password_for_testing(client):
     c, _ = client
-    r = c.post("/auth/register", json={"email": "x", "password": "1", "code": "123456"})
+    r = _register(c, email="x", password="1")
     assert r.status_code == 201
 
 
@@ -117,6 +142,32 @@ def test_register_still_rejects_empty_credentials(client, email, password):
     r = c.post("/auth/register", json={"email": email, "password": password})
     assert r.status_code == 400
     assert r.json()["error"]["code"] == "BAD_REQUEST"
+
+
+def test_register_requires_invite(client):
+    c, _ = client
+    r = _register(c, invite_code="")
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "INVITE_REQUIRED"
+
+
+def test_register_rejects_invalid_or_used_invite(client):
+    c, store = client
+    assert _register(c, invite_code="UNKNOWN").json()["error"]["code"] == "INVALID_INVITE_CODE"
+    assert _register(c).status_code == 201
+    r = _register(c, email="second@example.com")
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "INVALID_INVITE_CODE"
+    assert "second@example.com" not in store.by_email
+
+
+def test_register_rolls_back_user_when_invite_claim_loses_race(client, monkeypatch):
+    c, store = client
+    monkeypatch.setattr(auth_routes, "consume_invite", lambda conn, code, user_id: False)
+    r = _register(c)
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "INVALID_INVITE_CODE"
+    assert "alice@example.com" not in store.by_email
 
 
 # ---------------------------------------------------------------------------

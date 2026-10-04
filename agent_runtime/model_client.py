@@ -21,11 +21,15 @@ def _blocks(response: Any) -> list[dict]:
     return [block for block in (content or []) if isinstance(block, dict)]
 
 
-async def call_model(model, messages: list[dict], tools: list[dict]) -> ModelReply:
+async def call_model(model, messages: list[dict], tools: list[dict], *, allow_text=False, context_capture=None) -> ModelReply:
     # AgentScope accepts a tool name and formats the provider's forced function
     # choice. This matters for the final extraction round: "required" alone
     # was sometimes answered as prose by the configured compatible endpoint.
-    choice = tools[0]["function"]["name"] if len(tools) == 1 else "required"
+    choice = "auto" if allow_text else "required"
+    if not allow_text and len(tools) == 1:
+        choice = tools[0]["function"]["name"]
+    if context_capture:
+        context_capture(messages, tools, choice)
     response = await model(messages, tools=tools, tool_choice=choice)
     # AgentScope streaming ChatResponse contains cumulative tool blocks. Consume
     # the complete final snapshot before validating or running any operation.
@@ -79,12 +83,15 @@ def create_tool_model(config, generate_kwargs, timeout=60):
         generate_kwargs=generate_kwargs)
 
 
-def assistant_message(calls: list[dict]) -> dict:
-    return {"role": "assistant", "content": None, "tool_calls": [
-        {"id": call["id"], "type": "function", "function": {
-            "name": call["name"], "arguments": json.dumps(call["arguments"], ensure_ascii=False),
-        }} for call in calls
-    ]}
+def assistant_message(calls: list[dict], text: str = "") -> dict:
+    message = {"role": "assistant", "content": text or None}
+    if calls:
+        message["tool_calls"] = [
+            {"id": call["id"], "type": "function", "function": {
+                "name": call["name"], "arguments": json.dumps(call["arguments"], ensure_ascii=False),
+            }} for call in calls
+        ]
+    return message
 
 
 def tool_message(call: dict, output: Any) -> dict:

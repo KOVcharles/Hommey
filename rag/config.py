@@ -30,8 +30,6 @@ class RAGPipelineConfig:
     # Relative document-directory prefixes; empty means the whole collection.
     search_scopes: Tuple[str, ...] = ()
     postgres_dsn: str = ""
-    chunk_size: int = 600
-    chunk_overlap: int = 100
     # Phase-1 token-based chunk sizing (audit §7 P7): min/max/overlap in tokens.
     chunk_min_tokens: int = 150
     chunk_max_tokens: int = 400
@@ -72,8 +70,6 @@ class RAGPipelineConfig:
             "collection_name": RAG_CONFIG.get("collection_name", cls.collection_name),
             "search_scopes": RAG_CONFIG.get("search_scopes", ()),
             "postgres_dsn": RAG_CONFIG.get("postgres_dsn", cls.postgres_dsn),
-            "chunk_size": RAG_CONFIG.get("chunk_size", cls.chunk_size),
-            "chunk_overlap": RAG_CONFIG.get("chunk_overlap", cls.chunk_overlap),
             "chunk_min_tokens": RAG_CONFIG.get("chunk_min_tokens", cls.chunk_min_tokens),
             "chunk_max_tokens": RAG_CONFIG.get("chunk_max_tokens", cls.chunk_max_tokens),
             "chunk_overlap_tokens": RAG_CONFIG.get("chunk_overlap_tokens", cls.chunk_overlap_tokens),

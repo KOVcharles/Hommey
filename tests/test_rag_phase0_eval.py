@@ -14,7 +14,6 @@ import pytest
 
 from rag import schemas
 from rag.eval import (
-    GOLDEN_QUERIES_RELATIVE,
     _is_no_evidence,
     load_golden_queries,
     run_baseline_eval,
@@ -61,10 +60,29 @@ def test_baseline_eval_reports_all_phase0_metrics():
 
 def test_baseline_covers_supported_pdf_sources():
     report = run_baseline_eval()
-    available_pdfs = {path.name for path in Path("data/documents").glob("*.pdf")}
+    root = Path("data/documents")
+    available_pdfs = {path.relative_to(root).as_posix() for path in root.rglob("*.pdf")}
 
     assert available_pdfs <= set(report.corpus_files)
     assert not (available_pdfs & set(report.skipped_files))
+
+
+def test_golden_facts_are_grounded_in_the_cqu_pdf():
+    from pypdf import PdfReader
+
+    root = Path("data/documents")
+    queries = load_golden_queries()
+    source = root / "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+    pages = ["".join((page.extract_text() or "").split()) for page in PdfReader(source).pages]
+    for query in queries:
+        if query["type"] == "no_answer":
+            continue
+        assert query["expected_files"] == [source.relative_to(root).as_posix()]
+        assert query.get("expected_pages"), query["id"]
+        evidence = "".join(pages[number - 1] for number in query["expected_pages"])
+        assert query.get("facts"), query["id"]
+        for fact in query["facts"]:
+            assert "".join(fact.split()) in evidence, (query["id"], fact)
 
 
 def test_baseline_recall_floor_is_sane():

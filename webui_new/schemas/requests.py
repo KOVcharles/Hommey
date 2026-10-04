@@ -114,23 +114,25 @@ class OnboardingPreferenceRequest(BaseModel):
 class RegisterRequest(BaseModel):
     """注册 / JWT 登录入参。
 
-    - 注册：`{email, password, code}`，`code` 为邮箱验证码（两步流程第二步提交）。
-    - 登录：复用同一形状，仅用 `email/password`，`code` 留空即可。
+    - 注册：`{email, password, code, invite_code}`，`code` 为邮箱验证码。
+    - 登录：复用同一形状，仅用 `email/password`，其余字段留空即可。
     """
 
     email: str
     password: str
     code: str = ""
+    invite_code: str = ""
 
 
 class SendVerificationCodeRequest(BaseModel):
-    """发送注册邮箱验证码入参：{email, altcha}。
+    """发送注册邮箱验证码入参：{email, invite_code, altcha}。
 
     altcha 为自托管 ALTCHA 组件的 base64 payload（浏览器 PoW 求解结果），
     服务端离线校验通过且限流通过后才发邮件；是否为空由路由统一检查并返回友好提示。
     """
 
     email: str
+    invite_code: str = ""
     altcha: str = ""
 
 

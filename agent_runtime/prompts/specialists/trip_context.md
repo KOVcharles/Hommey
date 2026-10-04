@@ -1,0 +1,1 @@
+只整理当前任务的行程事实。data 使用 trip（origin/destination/start_date/end_date/duration_days/trip_purpose/work_location/work_schedule 的变更）与 field_sources（每个变更字段到本轮用户原文引用）。字符串保持用户原文，不改写；duration_days 是整数。日期使用 YYYY-MM-DD；用户没说不能默认今天。缺项列入 missing_info。明确开始新行程时 trip_action=new，明确取消本次出差时 trip_action=cancel，否则 update；new/cancel 必须附 action_source 用户原文。新行程不可继承旧字段。临时约束放 constraints 列表。不查询历史，不保存偏好。

@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>注册 · Hommey</title>
+    <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260907-editorial">
+    <link rel="stylesheet" href="/static/signin.css?v=20260928-fade-transition">
+    <link rel="stylesheet" href="/static/signup.css?v=20260928-invite-demo">
+</head>
+<body class="signin-page signup-page">
+    <main class="signin-main signup-main">
+        <div class="signin-content signup-content">
+            <span class="mini-logo signin-logo" aria-hidden="true">
+                <svg viewBox="0 -4 120 64"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
+            </span>
+            <h1>创建 Hommey 账户</h1>
+            <form id="signupForm" class="signup-form" autocomplete="on" novalidate>
+                <div id="emailField" class="signup-field">
+                    <label for="email">邮箱地址</label>
+                    <input id="email" name="email" type="email" placeholder="name@example.com" aria-describedby="emailError" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required>
+                    <p id="emailError" class="signup-field-error" aria-live="polite"></p>
+                </div>
+                <div id="passwordField" class="signup-field">
+                    <label for="password">密码 <span class="signup-hint">至少 8 个字符</span></label>
+                    <div class="signup-password-wrap">
+                        <input id="password" name="password" type="password" placeholder="设置密码" aria-describedby="passwordError capsLockHint" autocomplete="new-password" required>
+                        <button id="passwordToggle" class="signup-password-toggle" type="button" aria-label="显示密码" aria-pressed="false" aria-controls="password">
+                            <svg viewBox="0 0 24 24" fill="none" aria-hidden="true"><path d="M2 12s3.5-6 10-6 10 6 10 6-3.5 6-10 6S2 12 2 12Z"/><circle cx="12" cy="12" r="2.5"/><path class="signup-eye-slash" d="m4 4 16 16"/></svg>
+                        </button>
+                    </div>
+                    <p id="capsLockHint" class="signup-hint" role="status" hidden>大写锁定已开启</p>
+                    <p id="passwordError" class="signup-field-error" aria-live="polite"></p>
+                </div>
+                <div id="inviteField" class="signup-field">
+                    <label for="inviteCode">邀请码 <span class="signup-required">必填</span></label>
+                    <input id="inviteCode" name="invite_code" type="text" placeholder="输入你收到的邀请码" aria-describedby="inviteError" autocomplete="off" spellcheck="false" required>
+                    <p id="inviteError" class="signup-field-error" aria-live="polite"></p>
+                </div>
+                <div id="codeField" class="signup-field">
+                    <label for="code">邮箱验证码</label>
+                    <div class="signup-code-row">
+                        <input id="code" name="code" type="text" inputmode="numeric" maxlength="6" placeholder="6 位验证码" aria-describedby="codeError" autocomplete="one-time-code" required>
+                        <button id="sendCodeBtn" class="signup-code-button" type="button">获取验证码</button>
+                    </div>
+                    <p id="codeError" class="signup-field-error" aria-live="polite"></p>
+                </div>
+                <div id="altchaField" class="signup-altcha">
+                    <altcha-widget challenge="/auth/altcha-challenge" name="altcha" id="altchaWidget"></altcha-widget>
+                    <p id="altchaError" class="signup-field-error" aria-live="polite"></p>
+                </div>
+                <button id="submitBtn" class="signin-submit signup-submit" type="submit" aria-busy="false"><span id="submitLabel">创建账户</span><span class="signin-submit-spinner" aria-hidden="true"></span></button>
+                <p id="errorMsg" class="signin-error" role="alert"></p>
+            </form>
+            <p class="signin-switch">已有账号？<a href="/login" data-auth-transition>登录</a></p>
+        </div>
+    </main>
+    <script src="/static/signup.js?v=20260928-invite-demo" defer></script>
+    <script src="/static/vendor/altcha.min.js" type="module" defer></script>
+    <script src="/static/auth-transition.js?v=20260928-fade-transition" defer></script>
+</body>
+</html>

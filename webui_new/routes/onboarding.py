@@ -10,7 +10,7 @@ from fastapi import APIRouter, Depends, Request
 
 from utils.logging_safety import sanitize_for_log
 from webui_new.auth import User, require_path_user
-from webui_new.core.errors import BusinessError, StorageError, ValidationError, request_id
+from webui_new.core.errors import StorageError, ValidationError, request_id
 from webui_new.schemas.requests import OnboardingPreferenceRequest
 
 logger = logging.getLogger(__name__)

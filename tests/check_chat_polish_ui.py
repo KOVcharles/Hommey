@@ -60,6 +60,12 @@ def route_request(route):
     route.fulfill(json=data)
 
 
+def open_history(page):
+    view = page.locator('#appShell').get_attribute('data-view')
+    page.locator('#sidebarToggle' if view == 'home' else '#workspaceChatEntry').click()
+    page.locator('#workspaceHistoryButton').click()
+
+
 with sync_playwright() as p:
     browser = p.chromium.launch(channel='msedge', headless=True, args=['--disable-gpu'])
     context = browser.new_context(viewport={'width': 1180, 'height': 950})
@@ -69,7 +75,7 @@ with sync_playwright() as p:
     errors = []
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.goto('http://hommey.test/chat/qa')
-    page.locator('#sidebarToggle').click()
+    open_history(page)
     page.get_by_role('button', name='重庆出差', exact=True).click()
     expect(page.locator('.trip-intake-submit')).to_be_disabled()
     page.get_by_role('button', name='客户拜访', exact=True).click()
@@ -96,13 +102,13 @@ with sync_playwright() as p:
         page.screenshot(path=str(OUT / f'mobile-{theme}.png'), full_page=True, animations='disabled')
     # Restore a hidden submission: no raw text bubble, no reactivated old form.
     history.append({'role': 'user', 'content': requests[-1]['message'], 'content_type': 'trip_submission'})
-    page.locator('#sidebarToggle').click()
+    open_history(page)
     page.get_by_role('button', name='重庆出差', exact=True).click()
     expect(page.locator('.message-row.user')).to_have_count(1)
     expect(page.locator('.trip-intake-card')).to_have_attribute('data-archived', 'true')
     # A normal new message also archives the current card, before the next answer.
     history.pop()
-    page.locator('#sidebarToggle').click()
+    open_history(page)
     page.get_by_role('button', name='重庆出差', exact=True).click()
     expect(page.locator('.trip-intake-submit')).to_be_visible()
     # A durable submission can fail after acceptance. Retry its exact body/id,
@@ -120,7 +126,7 @@ with sync_playwright() as p:
     assert requests[-1] == failed
     expect(page.locator('.trip-intake-card button, .trip-intake-card input')).to_have_count(0)
     # Start a fresh current card to verify ordinary messages expire it too.
-    page.locator('#sidebarToggle').click()
+    open_history(page)
     page.get_by_role('button', name='重庆出差', exact=True).click()
     page.locator('#chatInput').fill('先帮我查天气')
     page.locator('#sendBtn').click()
@@ -137,19 +143,19 @@ with sync_playwright() as p:
     }""")
     page.locator('#chatInput').fill('继续安排行程')
     page.locator('#sendBtn').click()
-    expect(page.locator('#processingIndicator .msg-avatar')).to_be_visible()
+    expect(page.locator('.processing-indicator .msg-avatar')).to_be_visible()
     page.wait_for_function('window.qaStream')
     page.evaluate("emitQA({type:'execution_plan',run_id:'stream-qa',revision:1,status:'running',steps:[]})")
-    expect(page.locator('#processingIndicator')).to_have_count(0)
+    expect(page.locator('.processing-indicator')).to_have_count(0)
     expect(page.locator('.execution-plan').last.locator('.hommey-card-logo')).to_be_visible()
     page.screenshot(path=str(OUT / 'waiting-mobile.png'), full_page=True, animations='disabled')
     page.evaluate("emitQA({type:'chunk',text:'行程安排与会议准备。\\n'.repeat(150)})")
     expect(page.locator('.msg-bubble.ai').last).to_contain_text('会议准备')
-    page.locator('#chatMessages').evaluate("el => el.scrollTo({top:0,behavior:'instant'})")
+    page.locator('.session-view.is-active').evaluate("el => el.scrollTo({top:0,behavior:'instant'})")
     page.wait_for_timeout(80)
     page.evaluate("emitQA({type:'chunk',text:'继续准备交通。'})")
     page.wait_for_timeout(80)
-    assert page.locator('#chatMessages').evaluate('el => el.scrollTop') < 96
+    assert page.locator('.session-view.is-active').evaluate('el => el.scrollTop') < 96
     page.evaluate("emitQA({type:'done'}); qaStream.close()")
     assert not errors, errors
     browser.close()

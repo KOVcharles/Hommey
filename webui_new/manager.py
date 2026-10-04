@@ -20,8 +20,8 @@ from settings import CONCURRENCY_CONFIG, RESILIENCE_CONFIG, SUPERVISOR_CONFIG
 from context.memory_manager import MemoryManager
 from context.async_memory import AsyncMemoryFacade
 from runtime import create_agent_runtime, create_circuit_breaker
-from utils.circuit_breaker import CircuitBreaker
 from utils.redis_coordination import (
+    RedisCircuitBreaker,
     create_distributed_lock,
     create_redis_semaphore,
     create_session_activity_lock,
@@ -56,7 +56,7 @@ class HommeyWebInstance:
         self.supervisor = None
         self.attachment_service = None  # 多模态附件服务（runtime 注入；详见方案 §4.5）
         self.model = None
-        self.circuit_breaker: Optional[CircuitBreaker] = None
+        self.circuit_breaker: Optional[RedisCircuitBreaker] = None
         self.onboarding = InitialPreferenceOnboarding()
         self.initialized = False
         self.init_error: Optional[str] = None
@@ -169,10 +169,13 @@ class HommeyWebInstance:
         # Derive archival from the durable conversation order, including hidden submissions.
         for index, row in enumerate(rows):
             document = row.get("presentation_document")
-            if row.get("role") == "assistant" and document and document.get("type") == "trip_intake":
+            if row.get("role") == "assistant" and document and document.get("type") in {"trip_intake", "information_request"}:
                 row["presentation_document"] = {**document,
                     "interaction_id": document.get("interaction_id") or row.get("request_id"),
                     "archived": index != len(rows) - 1 or not (document.get("interaction_id") or row.get("request_id"))}
+                following = rows[index + 1:index + 2]
+                if document.get("type") == "information_request" and following and following[0].get("role") == "user" and following[0].get("content_type") == "form_submission":
+                    row["presentation_document"]["submitted_text"] = following[0].get("content", "")
 
         titles = self.memory_manager.long_term.get_chat_session_titles()
         return {
@@ -187,17 +190,19 @@ class HommeyWebInstance:
         rows = self._recover_legacy_presentation_documents(rows)
         source_index = next((i for i, row in enumerate(rows)
             if row.get("role") == "assistant"
-            and (row.get("presentation_document") or {}).get("type") == "trip_intake"
+            and (row.get("presentation_document") or {}).get("type") in {"trip_intake", "information_request"}
+            and ((row.get("presentation_document") or {}).get("interaction_id") or row.get("request_id"))
             and str((row.get("presentation_document") or {}).get("interaction_id") or row.get("request_id")) == source_id), None)
         if source_index is None:
-            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张信息卡片已归档，请在当前对话中继续补充。")
         following = rows[source_index + 1:]
         # Retry only this exact durable submission; a newer turn always expires the card.
         retry = bool(following) and all(str(row.get("request_id")) == request_id for row in following)
-        retry = retry and any(row.get("role") == "user" and row.get("content_type") == "trip_submission"
+        retry = retry and any(row.get("role") == "user" and row.get("content_type") in {"trip_submission", "form_submission"}
                               and row.get("content") == redact_sensitive_text(message) for row in following)
         if following and not retry:
-            raise BusinessError("INTAKE_CARD_EXPIRED", "这张行程卡片已归档，请在当前对话中继续补充。")
+            raise BusinessError("INTAKE_CARD_EXPIRED", "这张信息卡片已归档，请在当前对话中继续补充。")
+        return rows[source_index]["presentation_document"]["type"]
 
     def _recover_legacy_presentation_documents(self, rows: list[dict]) -> list[dict]:
         """Repair typed intake cards that older canonical rows stored as text."""
@@ -466,8 +471,9 @@ class HommeyWebInstance:
         request_id = request_id or uuid.uuid4().hex
         # Respect the explicitly selected session; do not rotate it on idle.
         scope = Scope(user_id=self.user_id, session_id=session_id, request_id=request_id)
+        intake_type = None
         if intake_request_id:
-            await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message, session_id)
+            intake_type = await run_blocking(self._validate_intake_submission, intake_request_id, request_id, message, session_id)
         normalized = await run_blocking(self._normalize_input, message, attachment_ids)
         user_text = message
         agent_text = normalized.agent_query
@@ -476,7 +482,7 @@ class HommeyWebInstance:
             user_text += "\n用户填写的行程表单：" + structured
             agent_text += "\n用户填写的行程表单：" + structured
         metadata = {"request_id": request_id, "engine": "supervisor", "attachment_ids": normalized.attachment_ids,
-            "content_type": "trip_submission" if intake_request_id or structured_trip_input else ("attachment" if normalized.attachment_ids else "text"),
+            "content_type": "form_submission" if intake_type == "information_request" else "trip_submission" if intake_request_id or structured_trip_input else ("attachment" if normalized.attachment_ids else "text"),
             "retrieval_mode": retrieval_mode, "input_source": "quick_trip_form" if structured_trip_input else "chat"}
         memory = AsyncMemoryFacade(request_memory)
         # User persistence is already idempotent on (user, request, role).
@@ -507,7 +513,7 @@ class HommeyWebInstance:
                     requested_mode="enhanced", effective_mode="standard", status="fallback",
                     fallback_reason="当前主 Agent 引擎使用标准制度检索",
                 ).model_dump(mode="json")
-            if (output.get("presentation_document") or {}).get("type") == "trip_intake":
+            if (output.get("presentation_document") or {}).get("type") in {"trip_intake", "information_request"}:
                 output["presentation_document"]["interaction_id"] = request_id
             assistant_metadata = {**metadata, "content_type": "text", "answer_document": output.get("answer_document"),
                 "presentation_document": output.get("presentation_document")}

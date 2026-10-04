@@ -1,323 +1,442 @@
 {
   "schema_version": "rag.v2.golden.1",
   "corpus": "data/documents",
-  "created": "2026-08-12",
-  "intent": "Phase 0 基线黄金查询集：覆盖精确问法、口语同义、否定、城市范围、多事实与无答案六类；随真实失败案例扩展到 100+。",
-  "categories": ["exact", "colloquial", "negation", "city_scope", "multi_fact", "no_answer"],
+  "created": "2026-10-04",
+  "source_document": "cqu/finance/重庆大学财务报销指南-2025年版.pdf",
+  "page_numbering": "PDF 物理页（从 1 开始），不是印刷页码。",
+  "intent": "CQU 2025 财务报销指南评测题，覆盖精确、口语、否定、地域、经费条件与无答案场景。事实和物理页依据当前原文，文件召回指标不等于条款或答案准确率。",
+  "categories": [
+    "exact",
+    "colloquial",
+    "negation",
+    "city_scope",
+    "multi_fact",
+    "no_answer"
+  ],
   "queries": [
     {
       "id": "exact-001",
       "type": "exact",
-      "query": "一线城市住宿标准",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准"],
-      "facts": ["不超过500元/晚", "北京、上海、广州、深圳"],
-      "note": "精确用词命中住宿标准"
+      "query": "报销票据有效期是多久？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        6
+      ],
+      "facts": [
+        "开票日起一年内"
+      ]
     },
     {
       "id": "exact-002",
       "type": "exact",
-      "query": "高铁二等座标准",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["二、交通标准"],
-      "facts": ["二等座及以下"],
-      "note": "精确用词命中高铁标准"
+      "query": "电子票据认证查重有什么要求？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        6
+      ],
+      "facts": [
+        "电子票据：全部进行认证/查重"
+      ]
     },
     {
       "id": "exact-003",
       "type": "exact",
-      "query": "国际长途航线舱位标准",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["二、交通标准"],
-      "facts": ["高端经济舱"],
-      "note": "精确用词命中飞机标准"
+      "query": "酬金申报每月的提交时间要求？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        7
+      ],
+      "facts": [
+        "每月25日前提交报销单"
+      ]
     },
     {
       "id": "exact-004",
       "type": "exact",
-      "query": "特殊地区住宿标准上浮比例",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准"],
-      "facts": ["上浮20%", "西藏、新疆、青海"],
-      "note": "精确用词命中特殊地区标准"
+      "query": "专家咨询费报销需要哪些材料？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        8
+      ],
+      "facts": [
+        "审批完善的报销单",
+        "咨询时间",
+        "邀请函"
+      ]
     },
     {
       "id": "exact-005",
       "type": "exact",
-      "query": "业务招待费超500元审批",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["四、餐饮标准"],
-      "facts": ["超过500元需要部门主管审批"],
-      "note": "精确用词命中业务招待"
+      "query": "科研经费其余人员的住宿费标准上限？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        10,
+        11
+      ],
+      "facts": [
+        "使用科研经费报销国内差旅费",
+        "550元/人·天"
+      ]
     },
     {
       "id": "exact-006",
       "type": "exact",
-      "query": "超标30%以上审批权限",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["七、特殊情况处理"],
-      "facts": ["超标30%以上需总监审批"],
-      "note": "精确用词命中超标准情况"
+      "query": "非科研经费市内交通费包干标准？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        12
+      ],
+      "facts": [
+        "使用科研经费以外其他经费报销",
+        "80元/人·天"
+      ]
     },
     {
       "id": "exact-007",
       "type": "exact",
-      "query": "报销申请提交时限",
-      "expected_files": ["02_reimbursement_policy.txt"],
-      "expected_sections": ["一、报销时间要求"],
-      "facts": ["超期不予受理"],
-      "note": "精确用词命中报销时间"
+      "query": "国际差旅费报销需要哪些材料？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        13
+      ],
+      "facts": [
+        "护照复印件",
+        "邀请函及出访行程单",
+        "出差前一日汇率表"
+      ]
     },
     {
       "id": "exact-008",
       "type": "exact",
-      "query": "电子发票查验要求",
-      "expected_files": ["02_reimbursement_policy.txt"],
-      "expected_sections": ["七、发票管理"],
-      "facts": ["发票号码验证", "不得重复报销"],
-      "note": "精确用词命中发票管理"
-    },
-    {
-      "id": "exact-009",
-      "type": "exact",
-      "query": "机票预订提前时间",
-      "expected_files": ["03_booking_guide.txt"],
-      "expected_sections": ["一、机票预订"],
-      "facts": [],
-      "note": "精确用词命中机票预订"
-    },
-    {
-      "id": "exact-010",
-      "type": "exact",
-      "query": "出差申请提前提交要求",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["一、差旅申请流程"],
-      "facts": ["出发前至少3个工作日"],
-      "note": "精确用词命中申请流程"
+      "query": "科研项目版面费报销有什么注意事项？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        22
+      ],
+      "facts": [
+        "学术论文登记表",
+        "相关性审核意见"
+      ]
     },
     {
       "id": "colloquial-001",
       "type": "colloquial",
-      "query": "出差住酒店一晚上最多能报多少钱",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准"],
-      "facts": ["500元", "400元", "300元"],
-      "note": "口语同义：住酒店=住宿标准"
+      "query": "发票不小心弄丢了怎么报？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        19
+      ],
+      "facts": [
+        "票据存根",
+        "不重复报销",
+        "计财处分管副处长"
+      ]
     },
     {
       "id": "colloquial-002",
       "type": "colloquial",
-      "query": "坐高铁能订什么座位",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["二、交通标准"],
-      "facts": ["二等座"],
-      "note": "口语同义：坐高铁=高铁标准"
+      "query": "报销发票超过一年了还能怎么办？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        19
+      ],
+      "facts": [
+        "未在规定时间内报销",
+        "相关说明",
+        "签字审批"
+      ]
     },
     {
       "id": "colloquial-003",
       "type": "colloquial",
-      "query": "打车报销有什么规定",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["二、交通标准"],
-      "facts": ["机场接送", "业务拜访"],
-      "note": "口语同义：打车=出租车网约车"
+      "query": "办公用品买了三万多，要带什么材料报销？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        9,
+        10
+      ],
+      "facts": [
+        "办公用品",
+        "合同（3万元及以上）",
+        "支付记录"
+      ]
     },
     {
       "id": "colloquial-004",
       "type": "colloquial",
-      "query": "请客户吃饭怎么报销",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["四、餐饮标准"],
-      "facts": ["业务招待", "实报实销"],
-      "note": "口语同义：请客户吃饭=业务招待"
+      "query": "报销封面要哪些人签字盖章？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        6
+      ],
+      "facts": [
+        "经办人",
+        "项目负责人",
+        "加盖二级单位公章"
+      ]
     },
     {
       "id": "colloquial-005",
       "type": "colloquial",
-      "query": "订机票要注意什么事项",
-      "expected_files": ["03_booking_guide.txt"],
-      "expected_sections": ["一、机票预订"],
-      "facts": [],
-      "note": "口语同义：订机票=机票预订"
+      "query": "自驾车去偏远地区调研，油费怎么报？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        20
+      ],
+      "facts": [
+        "无公共交通服务",
+        "每公里1元",
+        "不再发放市内交通费"
+      ]
     },
     {
       "id": "colloquial-006",
       "type": "colloquial",
-      "query": "出差期间加班有没有补贴",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["六、差旅补贴"],
-      "facts": ["调休"],
-      "note": "口语同义：加班补贴=差旅补贴"
-    },
-    {
-      "id": "colloquial-007",
-      "type": "colloquial",
-      "query": "航班延误了怎么办",
-      "expected_files": ["05_emergency_procedures.txt"],
-      "expected_sections": ["一、航班相关紧急情况"],
-      "facts": ["改签", "退票"],
-      "note": "口语同义：航班延误=紧急情况"
-    },
-    {
-      "id": "colloquial-008",
-      "type": "colloquial",
-      "query": "出国出差报销流程",
-      "expected_files": ["04_faq.txt", "02_reimbursement_policy.txt"],
-      "expected_sections": ["六、国际出差相关"],
-      "facts": [],
-      "note": "口语同义：出国=国际出差"
+      "query": "科研经费买书，什么时候需要建固定资产？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        21
+      ],
+      "facts": [
+        "单价在1000元",
+        "批量总价在10000元"
+      ]
     },
     {
       "id": "negation-001",
       "type": "negation",
-      "query": "机场停车费可以报销吗",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["五、其他费用标准"],
-      "facts": ["机场停车费：不予报销"],
-      "note": "否定问法：应命中'不予报销'规则而非跳过"
+      "query": "电子发票可以拍照截图上传吗？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        6
+      ],
+      "facts": [
+        "上传电子发票原PDF文件",
+        "勿拍照或截图上传"
+      ]
     },
     {
       "id": "negation-002",
       "type": "negation",
-      "query": "个人购物消费能报销吗",
-      "expected_files": ["02_reimbursement_policy.txt"],
-      "expected_sections": ["四、不予报销的情况"],
-      "facts": ["个人消费不予报销"],
-      "note": "否定问法：命中不予报销清单"
+      "query": "国家社会科学基金项目资金能支付论文版面费吗？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        22
+      ],
+      "facts": [
+        "国家社会科学基金项目",
+        "不得支出论文发表版面费"
+      ]
     },
     {
       "id": "negation-003",
       "type": "negation",
-      "query": "出差期间的酒水可以报销吗",
-      "expected_files": ["04_faq.txt", "01_travel_standards.txt"],
-      "expected_sections": ["四、费用报销相关"],
-      "facts": ["非业务招待不予报销"],
-      "note": "否定问法：命中酒水例外规则"
+      "query": "出国机票款能用现金支付吗？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        13
+      ],
+      "facts": [
+        "国际旅费",
+        "不得以现金支付"
+      ]
     },
     {
       "id": "negation-004",
       "type": "negation",
-      "query": "交通违章罚款能报销吗",
-      "expected_files": ["04_faq.txt"],
-      "expected_sections": ["七、其他常见问题"],
-      "facts": ["不予报销"],
-      "note": "否定问法：命中违章罚款规则"
+      "query": "会议费可以把同一会议拆成多个报销单吗？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        14
+      ],
+      "facts": [
+        "以“会议”为单位",
+        "不得拆分"
+      ]
     },
     {
-      "id": "negation-005",
-      "type": "negation",
-      "query": "自行升舱的差额公司报销吗",
-      "expected_files": ["04_faq.txt"],
-      "expected_sections": ["二、交通出行相关"],
-      "facts": ["未经批准自行升舱差额不予报销"],
-      "note": "否定问法：命中升舱差额规则"
-    },
-    {
-      "id": "city-001",
+      "id": "city_scope-001",
       "type": "city_scope",
-      "query": "成都出差住宿一晚多少钱",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准"],
-      "facts": ["二线城市", "400元"],
-      "note": "城市范围：成都是二线城市"
+      "query": "科研经费到新疆、青海、西藏出差伙食补助标准？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        11
+      ],
+      "facts": [
+        "新疆、青海、西藏200元/人·天"
+      ]
     },
     {
-      "id": "city-002",
+      "id": "city_scope-002",
       "type": "city_scope",
-      "query": "深圳出差住宿标准",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准"],
-      "facts": ["一线城市", "500元"],
-      "note": "城市范围：深圳是一线城市"
+      "query": "非科研经费到新疆、青海、西藏出差伙食补助标准？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        12
+      ],
+      "facts": [
+        "新疆、青海、西藏120元/人·天"
+      ]
     },
     {
-      "id": "city-003",
+      "id": "city_scope-003",
       "type": "city_scope",
-      "query": "杭州出行有什么城市建议",
-      "expected_files": ["07_city_specific_tips.txt"],
-      "expected_sections": ["五、杭州"],
-      "facts": [],
-      "note": "城市范围：杭州城市指南"
+      "query": "重庆主城区公务网约车小额车票怎么报销？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        19
+      ],
+      "facts": [
+        "重庆主城区范围内",
+        "网约车单张票据200元及以上须附行程单"
+      ]
     },
     {
-      "id": "city-004",
-      "type": "city_scope",
-      "query": "北京出差交通建议",
-      "expected_files": ["07_city_specific_tips.txt"],
-      "expected_sections": ["一、北京"],
-      "facts": [],
-      "note": "城市范围：北京城市指南"
-    },
-    {
-      "id": "city-005",
-      "type": "city_scope",
-      "query": "广州出行的注意事项",
-      "expected_files": ["07_city_specific_tips.txt"],
-      "expected_sections": ["三、广州"],
-      "facts": [],
-      "note": "城市范围：广州城市指南"
-    },
-    {
-      "id": "multi-001",
+      "id": "multi_fact-001",
       "type": "multi_fact",
-      "query": "上海出差住宿和餐补标准",
-      "expected_files": ["01_travel_standards.txt"],
-      "expected_sections": ["三、住宿标准", "四、餐饮标准"],
-      "facts": ["500元", "100元"],
-      "note": "多事实：住宿+餐饮两类证据"
+      "query": "科研经费出差，住宿费、伙食补助和市内交通费有哪些规定？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        11
+      ],
+      "facts": [
+        "550元/人·天",
+        "120元/人·天包干使用",
+        "其余地区150元/人·天"
+      ]
     },
     {
-      "id": "multi-002",
+      "id": "multi_fact-002",
       "type": "multi_fact",
-      "query": "报销需要提交哪些材料",
-      "expected_files": ["02_reimbursement_policy.txt"],
-      "expected_sections": ["二、报销材料要求"],
-      "facts": ["发票", "行程单"],
-      "note": "多事实：报销材料清单"
+      "query": "非科研经费出差，住宿费、伙食补助和市内交通费有哪些规定？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        12
+      ],
+      "facts": [
+        "财政部",
+        "80元/人·天包干使用",
+        "其余地区100元/人·天"
+      ]
     },
     {
-      "id": "multi-003",
+      "id": "multi_fact-003",
       "type": "multi_fact",
-      "query": "国际出差需要办理哪些手续",
-      "expected_files": ["04_faq.txt", "01_travel_standards.txt"],
-      "expected_sections": ["六、国际出差相关", "二、交通标准"],
-      "facts": ["签证", "护照"],
-      "note": "多事实：国际出差手续"
+      "query": "境外票据报销需要翻译和汇率材料吗？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        19
+      ],
+      "facts": [
+        "主要内容翻译为中文",
+        "银行支付记录或兑换凭据",
+        "付款日中国银行"
+      ]
     },
     {
-      "id": "noanswer-001",
-      "type": "no_answer",
-      "query": "差旅中可以报销宠物寄养费用吗",
-      "expected_files": [],
-      "note": "语料无宠物寄养政策，应无强相关证据"
+      "id": "multi_fact-004",
+      "type": "multi_fact",
+      "query": "国家科技计划项目单篇论文版面费超过两万元，需要哪些审核材料？",
+      "expected_files": [
+        "cqu/finance/重庆大学财务报销指南-2025年版.pdf"
+      ],
+      "expected_pages": [
+        22
+      ],
+      "facts": [
+        "学术论文登记表",
+        "相关性审核意见",
+        "学院学术委员会",
+        "必要性审核意见"
+      ]
     },
     {
-      "id": "noanswer-002",
+      "id": "no_answer-001",
       "type": "no_answer",
-      "query": "公司有团建旅游补贴政策吗",
+      "query": "宠物寄养费能报销吗？",
       "expected_files": [],
-      "note": "语料无团建旅游政策"
+      "expected_pages": [],
+      "facts": []
     },
     {
-      "id": "noanswer-003",
+      "id": "no_answer-002",
       "type": "no_answer",
-      "query": "出差时酒店泳池使用费能报销吗",
+      "query": "健身房会员费能报销吗？",
       "expected_files": [],
-      "note": "语料无泳池使用费政策"
+      "expected_pages": [],
+      "facts": []
     },
     {
-      "id": "noanswer-004",
+      "id": "no_answer-003",
       "type": "no_answer",
-      "query": "员工家属随行差旅费用如何报销",
+      "query": "泳池使用费能报销吗？",
       "expected_files": [],
-      "note": "语料无家属随行政策"
+      "expected_pages": [],
+      "facts": []
     },
     {
-      "id": "noanswer-005",
+      "id": "no_answer-004",
       "type": "no_answer",
-      "query": "出差期间的健身房会员费可以报销吗",
+      "query": "游戏充值费能报销吗？",
       "expected_files": [],
-      "note": "语料无健身房会员费政策"
+      "expected_pages": [],
+      "facts": []
+    },
+    {
+      "id": "no_answer-005",
+      "type": "no_answer",
+      "query": "美容美甲费用能报销吗？",
+      "expected_files": [],
+      "expected_pages": [],
+      "facts": []
     }
   ]
 }

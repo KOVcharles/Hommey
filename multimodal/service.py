@@ -11,7 +11,7 @@ import logging
 import uuid
 from datetime import datetime, timedelta, timezone
 
-from settings import ATTACHMENT_CONFIG, MEMORY_CONFIG, VISION_CONFIG
+from settings import ATTACHMENT_CONFIG, VISION_CONFIG
 from webui_new.core.errors import BusinessError
 
 from . import context_builder, validation

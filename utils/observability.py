@@ -13,7 +13,6 @@ logger = logging.getLogger(__name__)
 
 
 COMPONENT_LLM = "llm"
-COMPONENT_MCP = "mcp"
 COMPONENT_REDIS = "redis"
 COMPONENT_POSTGRES = "postgres"
 COMPONENT_RAG = "rag"

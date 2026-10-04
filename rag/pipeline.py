@@ -8,7 +8,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Dict, List, Optional
 
-from .chunker import BlockChunker, TextChunker
+from .chunker import BlockChunker
 from .config import RAGPipelineConfig
 from .loader import DocumentLoader, FileSystemDocumentLoader
 from .normalizer import DocumentNormalizer, TextNormalizer
@@ -49,8 +49,6 @@ class RAGPipeline:
             enabled=self.config.ocr_enabled,
             confidence_threshold=self.config.ocr_confidence_threshold,
         )
-        # Phase-1 default is the structured block chunker; legacy callers may
-        # still inject the character-window TextChunker.
         self.chunker = chunker or BlockChunker(
             min_tokens=self.config.chunk_min_tokens,
             max_tokens=self.config.chunk_max_tokens,

@@ -213,7 +213,25 @@ class SpecialistResult(Report):
     def brief(self) -> dict[str, Any]:
         # Retrieval reports already enforce a 4k data budget. Return their
         # extracted facts with the summary, never raw source documents/logs.
-        return self.model_dump(exclude={"sources"} if self.role in {"policy_rag", "memory", "travel_info"} else {"data", "sources"})
+        value = self.model_dump(include={"result_id", "role", "status", "summary", "evidence_refs", "missing_info", "data"})
+        if self.role not in {"policy_rag", "memory", "travel_info"}:
+            value.pop("data", None)
+        for key in ("data", "missing_info", "evidence_refs"):
+            if not value.get(key):
+                value.pop(key, None)
+        citations = []
+        for source in self.sources:
+            if source["id"] not in self.evidence_refs:
+                continue
+            metadata = source.get("data", {}).get("metadata", {}) if isinstance(source.get("data"), dict) else {}
+            citation = {"source_id": source["id"], **{k: metadata[k] for k in
+                ("title", "section", "page", "document_version", "effective_date") if metadata.get(k) is not None}}
+            if source["kind"] != "policy" and source.get("retrieved_at"):
+                citation["retrieved_at"] = source["retrieved_at"]
+            citations.append(citation)
+        if citations:
+            value["citations"] = citations
+        return value
 
 
 class Query(StrictModel):
@@ -245,6 +263,7 @@ class TrainRequest(StrictModel):
 class PlaceRequest(StrictModel):
     city: str = Field(min_length=1, max_length=80)
     keyword: str = Field(min_length=1, max_length=160)
+    use_trip_location: bool = Field(default=False, description="查询当前已确认工作地点附近酒店时设为 true；由宿主使用已验证地点，避免重新搜索地点")
 
 
 class CommuteRequest(StrictModel):

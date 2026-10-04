@@ -613,14 +613,6 @@
         return panel;
     }
 
-    function renderPlainText(text) {
-        return renderDisclosure(
-            'trip-intake-text-details',
-            '查看文字版',
-            element('pre', 'trip-intake-plain-text', text),
-        );
-    }
-
     function renderPrompt(field, index, state) {
         const row = element('div', `trip-intake-field${field.error ? ' is-invalid' : ''}`);
         row.dataset.fieldKey = field.key;

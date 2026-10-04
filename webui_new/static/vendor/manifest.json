@@ -1,0 +1,16 @@
+[
+  {
+    "package": "marked",
+    "version": "18.0.14",
+    "source": "https://registry.npmjs.org/marked/-/marked-18.0.14.tgz",
+    "integrity": "sha512-mBHK6FBHuBAlhgRe88w9F0O1AbwwXJUcQibUbC/QcdTbVGAD7aWza+xt3N6oT/jCZx3/OMeS+8rnuiHZcQ9s7A==",
+    "bundle_sha256": "21568877a938d2c4e7d74e27f18e60da96bb73a68809610ca39216e1efebae62"
+  },
+  {
+    "package": "dompurify",
+    "version": "3.4.16",
+    "source": "https://registry.npmjs.org/dompurify/-/dompurify-3.4.16.tgz",
+    "integrity": "sha512-sqo+pNp3qRhCIpbgRi1y8Tgk27Bo2Ry7w0dC1NBeNTdZChWjz9Xb/KOoZbRP/R6pQZ80Qw8YhXw13hWWBbMRnQ==",
+    "bundle_sha256": "2c90a9b46d6463f26038a29b686e82bc91de01fdac9d5229e7cfe3b360134ea2"
+  }
+]

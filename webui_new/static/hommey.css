@@ -348,53 +348,42 @@ button:focus-visible, textarea:focus-visible, input:focus-visible, summary:focus
 .composer {
     position: relative;
     width: 100%;
-    padding: 11px 11px 9px;
+    padding: 0;
     border: 1px solid var(--line);
     border-radius: 28px;
     background: var(--panel);
-    box-shadow: var(--shadow-2);
+    box-shadow: 0 14px 44px rgba(25, 25, 22, .07);
     transition: border-color .2s ease, box-shadow .25s ease, transform .25s var(--ease);
 }
 .welcome-composer { margin-top: 30px; }
 .composer:focus-within {
     border-color: var(--line-2);
-    box-shadow: 0 26px 90px rgba(25, 25, 22, .15);
-    transform: translateY(-1px);
+    box-shadow: 0 16px 48px rgba(25, 25, 22, .09);
 }
 .composer textarea {
+    display: block;
     width: 100%;
-    min-height: 52px;
+    min-height: 64px;
     max-height: 160px;
-    padding: 10px 10px 8px;
+    padding: 20px 20px 10px;
     resize: none;
     border: 0;
     outline: 0;
     color: var(--ink);
     background: transparent;
-    font-size: 15px;
-    line-height: 1.55;
+    font-size: 14px;
+    line-height: 1.7;
 }
 .composer textarea::placeholder { color: var(--ink-3); }
 .composer-tools {
-    min-height: 40px;
-    padding: 0 1px;
+    min-height: 50px;
+    padding: 4px 12px 10px;
     display: flex;
     align-items: center;
-    gap: 6px;
+    gap: 8px;
 }
-.quick-trip-trigger {
-    min-height: 30px;
-    padding: 0 10px;
-    border: 1px solid var(--line);
-    border-radius: 999px;
-    color: var(--ink-2);
-    background: transparent;
-    font-size: 11px;
-    font-weight: 560;
-    white-space: nowrap;
-    transition: color .18s ease, background .18s ease, border-color .18s ease;
-}
-.quick-trip-trigger:hover { color: var(--ink); background: var(--soft); border-color: var(--line-2); }
+.composer-tools .icon-button { width: 34px; height: 34px; flex: 0 0 34px; border-radius: 9px; }
+.composer-tools .send-button { flex: 0 0 34px; }
 .retrieval-mode-control { position: relative; }
 .retrieval-mode-trigger {
     height: 34px;
@@ -718,8 +707,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     word-break: normal;
     overflow-wrap: anywhere;
 }
-.msg-bubble.ai { padding-top: 1px; }
-.msg-bubble.ai.structured-result {
+.msg-bubble.ai {
     padding: 17px 18px;
     border: 1px solid var(--line);
     border-radius: 18px;
@@ -787,11 +775,7 @@ html[data-theme="dark"] .msg-avatar.ai {
     padding: 0 0 15px;
 }
 .chat-composer-shell .composer {
-    box-shadow: 0 18px 55px rgba(25, 25, 22, .11);
-}
-.chat-composer-shell .composer textarea {
-    min-height: 38px;
-    padding-top: 5px;
+    box-shadow: 0 14px 44px rgba(25, 25, 22, .07);
 }
 .disclaimer {
     margin: 7px 0 0;
@@ -1407,7 +1391,9 @@ html[data-motion="off"] *::after {
     .welcome-title { font-size: 28px; }
     .composer { border-radius: 24px; }
     .retrieval-mode-trigger { padding-right: 7px; padding-left: 7px; }
-    .retrieval-mode-trigger > svg:first-child { display: none; }
+    .composer textarea { padding: 18px 16px 10px; font-size: 16px; }
+    .composer-tools { gap: 2px; }
+    .composer-tools .icon-button { width: 30px; height: 34px; flex-basis: 30px; }
     .welcome-composer { margin-top: 26px; }
     .prompt-rotator { width: calc(100% - 12px); padding-right: 9px; padding-left: 9px; }
     .conversation-view { padding-top: 58px; }
@@ -1418,7 +1404,6 @@ html[data-motion="off"] *::after {
     .sidebar { top: 6px; bottom: 6px; left: 6px; width: min(286px, calc(100vw - 12px)); }
     .modal-layer { padding: 10px; }
     .quick-trip-grid { grid-template-columns: 1fr; gap: 0; }
-    .quick-trip-trigger { padding: 0 8px; font-size: 10px; }
     .quick-trip-actions { align-items: flex-end; }
     .settings-body { padding: 13px; }
 
@@ -1429,7 +1414,7 @@ html[data-motion="off"] *::after {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
-    padding: 4px 2px 6px;
+    padding: 4px 20px 6px;
 }
 .pending-chip {
     display: inline-flex;

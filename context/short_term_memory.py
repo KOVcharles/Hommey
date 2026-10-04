@@ -123,26 +123,6 @@ class ShortTermMemory:
         n_messages = n_turns * 2
         return self._get_messages(limit=n_messages)
 
-    def get_context_string(self, n_turns: int = 5) -> str:
-        """
-        获取最近对话的字符串表示
-
-        Args:
-            n_turns: 获取轮数
-
-        Returns:
-            格式化的对话字符串
-        """
-        messages = self.get_recent_context(n_turns)
-        if not messages:
-            return "无历史对话"
-
-        lines = []
-        for msg in messages:
-            role_name = "用户" if msg["role"] == "user" else "助手"
-            lines.append(f"{role_name}: {msg['content']}")
-
-        return "\n".join(lines)
 
     def clear(self):
         """清空短期记忆"""

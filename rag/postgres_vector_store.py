@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import json
 import math
+import threading
 import uuid
 from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional
@@ -11,8 +12,12 @@ from context.postgres_pool import get_postgres_pool
 
 from .embedder import TextEmbedder, create_text_embedder
 from .hybrid import hybrid_search
+from .sparse import SparseIndex, create_sparse_index
 from .schemas import DocumentChunk, RetrievalResult
 from .vector_store import VectorStore
+
+_SPARSE_LOCK = threading.Lock()
+_SPARSE_CACHE: Dict[tuple[Any, ...], tuple[tuple[Any, ...], SparseIndex]] = {}
 
 
 def _utc_now_iso() -> str:
@@ -373,6 +378,10 @@ class PostgresVectorStore(VectorStore):
                 """,
                 (total, self.collection_name, version),
             )
+            cursor.execute(
+                "UPDATE rag_collections SET updated_at=NOW() WHERE collection_name=%s",
+                (self.collection_name,),
+            )
         return {"status": "success", "added_count": max(0, total - before), "total_count": total}
 
     def vector_search(self, query: str, top_k: Optional[int] = None) -> List[Dict[str, Any]]:
@@ -408,24 +417,45 @@ class PostgresVectorStore(VectorStore):
             for rank, row in enumerate(rows, start=1)
         ]
 
-    def fetch_all_documents(self) -> List[Dict[str, Any]]:
+    def fetch_all_documents(self, version: str | None = None) -> List[Dict[str, Any]]:
         with self.pool.connection() as connection, connection.cursor() as cursor:
             cursor.execute(
                 """
                 SELECT c.chunk_id AS id, c.content, c.metadata
                 FROM rag_chunks c
                 JOIN rag_collections r
-                  ON r.collection_name=c.collection_name AND r.active_version=c.index_version
+                  ON r.collection_name=c.collection_name
                 WHERE c.collection_name=%s
+                  AND c.index_version=COALESCE(%s, r.active_version)
                   AND (%s::text[] = '{}'::text[] OR EXISTS (
                       SELECT 1 FROM unnest(%s::text[]) AS scope(prefix)
                       WHERE starts_with(c.document_id, scope.prefix || '/')
                   ))
                 ORDER BY c.chunk_id
                 """,
-                (self.collection_name, list(self.search_scopes), list(self.search_scopes)),
+                (self.collection_name, version, list(self.search_scopes), list(self.search_scopes)),
             )
             return [dict(row) for row in cursor.fetchall()]
+
+    def sparse_search(self, query: str, top_k: int) -> List[Dict[str, Any]]:
+        """Reuse BM25 until the active collection or scoped corpus changes."""
+        with self.pool.connection() as connection, connection.cursor() as cursor:
+            cursor.execute(
+                "SELECT active_version, updated_at FROM rag_collections WHERE collection_name=%s",
+                (self.collection_name,),
+            )
+            state = cursor.fetchone()
+        if not state or not state["active_version"]:
+            return []
+        key = (self.pool, self.collection_name, tuple(self.search_scopes), self.sparse_backend)
+        revision = (state["active_version"], state["updated_at"])
+        with _SPARSE_LOCK:
+            cached = _SPARSE_CACHE.get(key)
+            if cached is None or cached[0] != revision:
+                documents = self.fetch_all_documents(version=str(state["active_version"]))
+                cached = (revision, create_sparse_index(self.sparse_backend, docs=documents))
+                _SPARSE_CACHE[key] = cached
+        return cached[1].search(query, top_k)
 
     def search(self, query: str, top_k: Optional[int] = None) -> List[RetrievalResult]:
         return [_result(item) for item in hybrid_search(self, query, top_k)]

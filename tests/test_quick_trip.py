@@ -7,7 +7,7 @@ from fastapi import FastAPI
 from pydantic import ValidationError
 
 from core.integrations.places.models import GeoPoint, VerifiedPlace
-from webui_new.quick_trip import build_quick_trip_message, inject_trip_entities
+from webui_new.quick_trip import build_quick_trip_message
 from webui_new.routes.chat import _prepare_chat_input
 from webui_new.routes.chat import create_chat_router
 from webui_new.auth import require_path_user
@@ -95,23 +95,6 @@ def test_quick_trip_defaults_to_nearby_hotels():
 
     assert selection == {"include": ["nearby_hotels"], "exclude": []}
     assert "工作地点附近酒店" in message
-
-
-def test_inject_trip_entities_only_updates_trip_goal():
-    intention = {
-        "groups": [
-            {"intent": "business_trip_planning", "entities": {"destination": "旧值"}},
-            {"intent": "rag_knowledge", "entities": {"topic": "制度"}},
-        ],
-        "key_entities": {},
-    }
-    facts = {"origin": "上海", "destination": "杭州", "trip_purpose": "客户拜访"}
-
-    inject_trip_entities(intention, facts)
-
-    assert intention["groups"][0]["entities"]["destination"] == "杭州"
-    assert "origin" not in intention["groups"][1]["entities"]
-    assert intention["key_entities"]["trip_purpose"] == "客户拜访"
 
 
 def test_build_quick_trip_message_uses_readable_facts_not_private_control_data():

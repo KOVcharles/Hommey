@@ -26,6 +26,9 @@ class HybridSearchBackend(Protocol):
 def bm25_search(
     backend: HybridSearchBackend, query: str, top_k: int | None = None,
 ) -> List[Dict[str, Any]]:
+    cached_search = getattr(backend, "sparse_search", None)
+    if callable(cached_search):
+        return cached_search(query, top_k or backend.bm25_top_k)
     documents = backend.fetch_all_documents()
     if not documents:
         return []

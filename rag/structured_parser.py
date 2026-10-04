@@ -418,6 +418,6 @@ def _render_blocks_text(blocks: List[Block]) -> str:
 
 
 def _infer_category(path: Path) -> str:
-    from .document_loader import infer_category
+    from .categories import infer_category
 
     return infer_category(path)

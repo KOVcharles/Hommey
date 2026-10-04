@@ -55,3 +55,9 @@ benchmark.py
 # 系统文件
 Thumbs.db
 *.log
+
+# Local diagnostics and dependency caches
+tmp/
+.repro/
+.codex-resume-work/
+node_modules/
