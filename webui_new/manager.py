@@ -16,7 +16,7 @@ from typing import Callable, Optional, TypeVar
 project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 sys.path.insert(0, project_root)
 
-from settings import CONCURRENCY_CONFIG, RESILIENCE_CONFIG, SUPERVISOR_CONFIG
+from settings import CONCURRENCY_CONFIG, LLM_CONFIG, RESILIENCE_CONFIG, SUPERVISOR_CONFIG
 from context.memory_manager import MemoryManager
 from context.async_memory import AsyncMemoryFacade
 from runtime import create_agent_runtime, create_circuit_breaker
@@ -31,7 +31,7 @@ from utils.memory_safety import redact_sensitive_text
 from utils.logging_safety import sanitize_for_log
 from utils.io_executor import IoExecutorSaturated, run_blocking
 from utils.observability import COMPONENT_LLM
-from webui_new.core.errors import AppError, BusinessError, InternalError, UpstreamError
+from webui_new.core.errors import AppError, BusinessError, ConfigError, InternalError, UpstreamError
 from core.onboarding import InitialPreferenceOnboarding
 from core.execution_budget import ExecutionBudget, ExecutionLimitExceeded, execution_budget_scope
 from core.presentation import RetrievalPresentation
@@ -64,6 +64,8 @@ class HommeyWebInstance:
     async def initialize(self):
         """Initialize the shared Hommey runtime for this web user."""
         try:
+            if not str(LLM_CONFIG.get("api_key") or "").strip():
+                raise ConfigError("LLM_NOT_CONFIGURED", "AI 服务配置不完整，请联系管理员")
             runtime = create_agent_runtime(
                 user_id=self.user_id,
             )

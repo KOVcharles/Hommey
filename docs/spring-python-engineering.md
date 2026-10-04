@@ -62,7 +62,17 @@ docker compose --env-file .env.engineering -f docker/docker-compose.engineering.
 
 `prepare_engineering.py` 生成随机的独立数据库密码、验证码签名密钥和 RSA 密钥对，保留已有配置；`.env.engineering` 与 `.secrets` 不提交，也不复制进镜像。镜像只在运行时挂载密钥。不要删除或重新生成现有私钥来修复普通启动错误，那会使已签发的登录凭证失效。
 
-模型与 embedding API key 没有自动复制。缺少时业务服务仍可启动，AI `/readyz` 会报告依赖未就绪，聊天/知识检索需填写后再验证。注册邮件需 `HOMMEY_RESEND_API_KEY`、可用的发件地址和邀请码。邀请码可在隔离开发库中使用现有脚本生成：
+模型与 embedding API key 没有自动复制。缺少时业务服务仍可启动，AI `/readyz` 会报告依赖未就绪，聊天/知识检索需填写后再验证。
+
+首次启用 AI 时，将原环境使用的模型 key、模型名称和 base URL 一起配置到 `.env.engineering`，embedding key、模型和维度也需匹配。不要只填写 key 却保留不同服务商或模型的默认地址。重新创建 AI 服务后，给新数据库建立制度索引，再检查 readiness；`/healthz` 只确认进程存活：
+
+```powershell
+docker compose --env-file .env.engineering -f docker/docker-compose.engineering.yml up -d --no-deps agent rag-worker
+docker compose --env-file .env.engineering -f docker/docker-compose.engineering.yml exec -T agent python scripts/enqueue_rag_refresh.py
+docker compose --env-file .env.engineering -f docker/docker-compose.engineering.yml exec -T agent curl -fsS http://127.0.0.1:8000/readyz
+```
+
+注册邮件需 `HOMMEY_RESEND_API_KEY`、可用的发件地址和邀请码。邀请码可在隔离开发库中使用现有脚本生成：
 
 ```powershell
 # 仅指向新开发库；不要沿用旧环境的 DSN
