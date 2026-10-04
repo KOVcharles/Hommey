@@ -1,4 +1,16 @@
-# Hommey
+<p align="center">
+  <img src="webui_new/static/brand/hommey-mark.svg" width="76" alt="Hommey 标志">
+</p>
+
+<h1 align="center">Hommey</h1>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white" alt="Python 3.10">
+  <img src="https://img.shields.io/badge/FastAPI-0.115.6-009688?logo=fastapi&logoColor=white" alt="FastAPI 0.115.6">
+  <img src="https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white" alt="PostgreSQL 16">
+  <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7">
+  <img src="https://img.shields.io/badge/Docker-Compose-2496ED?logo=docker&logoColor=white" alt="Docker Compose">
+</p>
 
 Hommey 是面向组内报销的专用 Agent，帮助组内成员查询报销制度、整理所需材料，并根据人员身份和经费项目确认适用条件。当前知识库以《重庆大学财务报销指南（2025 年版）》为依据，回答保留制度来源与页码。
 
