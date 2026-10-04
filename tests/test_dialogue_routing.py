@@ -88,9 +88,9 @@ async def test_short_answer_reaches_extractor_with_actual_question(field, value,
     async def model(messages, **kwargs):
         payload = model_payload(messages)
         if role_of(messages) == "trip_context":
-            assert payload["conversation"][-1]["content"] == value
+            assert payload["user_request"] == value
             assert "request" not in payload
-            assert question in payload["conversation"][-2]["content"]
+            assert question in payload["previous_question"]
             assert "resolved_input" not in payload
             return reply(("report", {"summary": "已整理用户提供的字段", "data": {
                 "trip": {field: stored_value}, "field_sources": {field: value}}}))

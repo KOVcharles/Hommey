@@ -8,12 +8,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Awaitable, Callable
 
-from settings import LLM_CONFIG, MCP_CONFIG, MEMORY_CONFIG, OCR_CONFIG, RAG_CONFIG, RESILIENCE_CONFIG
+from settings import LLM_CONFIG, MEMORY_CONFIG, OCR_CONFIG, RAG_CONFIG, RESILIENCE_CONFIG
 from utils.llm_resilience import run_health_check
 from utils.io_executor import run_blocking
 from utils.observability import (
     COMPONENT_LLM,
-    COMPONENT_MCP,
     COMPONENT_POSTGRES,
     COMPONENT_RAG,
     COMPONENT_REDIS,
@@ -38,7 +37,6 @@ async def run_preflight(include_network: bool = False) -> dict:
         check_rag_embedding_config,
         check_ocr_config,
         check_runtime_topology,
-        check_mcp_config,
     ]
     vector_backend = str(RAG_CONFIG.get("vector_backend") or "postgres").lower()
 
@@ -343,24 +341,6 @@ async def check_runtime_topology() -> CheckResult:
             "source_storage": source_storage,
         },
     )
-
-
-async def check_mcp_config() -> CheckResult:
-    start = time.perf_counter()
-    enabled_servers = []
-    invalid_servers = []
-    for name, server in MCP_CONFIG.get("servers", {}).items():
-        if not server.get("enabled"):
-            continue
-        enabled_servers.append(name)
-        if server.get("transport") == "stdio" and not server.get("command"):
-            invalid_servers.append(name)
-        if server.get("transport") == "http" and not server.get("url"):
-            invalid_servers.append(name)
-
-    ok = not invalid_servers
-    message = "mcp config ok" if ok else "mcp server config invalid"
-    return _result("mcp_config", COMPONENT_MCP, ok, message, start, {"enabled": enabled_servers, "invalid": invalid_servers})
 
 
 def run_preflight_sync(include_network: bool = False) -> dict:

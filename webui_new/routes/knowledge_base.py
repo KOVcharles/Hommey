@@ -7,7 +7,8 @@ from pathlib import Path
 from fastapi import APIRouter, Depends, File, UploadFile
 from starlette.concurrency import run_in_threadpool
 
-from rag.document_loader import infer_category
+from rag.categories import infer_category
+from rag.loader import is_source_filename
 from webui_new.auth import User, get_current_user, require_admin
 from webui_new.core.errors import BusinessError, InternalError
 from webui_new.knowledge_base_service import (
@@ -48,7 +49,7 @@ class KnowledgeBaseLibrary:
 
         documents = []
         for path in sorted(self.root.rglob("*")):
-            if not path.is_file() or path.name.startswith("."):
+            if not path.is_file() or not is_source_filename(path.name):
                 continue
             try:
                 path.resolve().relative_to(self.root)
@@ -82,7 +83,11 @@ class KnowledgeBaseLibrary:
             raise BusinessError("KNOWLEDGE_DOCUMENT_NOT_FOUND", "文档不存在", status_code=404) from exc
 
         file_type = candidate.suffix.lower().lstrip(".")
-        if not candidate.is_file() or file_type not in SUPPORTED_DOCUMENT_TYPES:
+        if (
+            not candidate.is_file()
+            or not is_source_filename(candidate.name)
+            or file_type not in SUPPORTED_DOCUMENT_TYPES
+        ):
             raise BusinessError("KNOWLEDGE_DOCUMENT_NOT_FOUND", "文档不存在", status_code=404)
         return candidate
 

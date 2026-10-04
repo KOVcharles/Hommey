@@ -17,7 +17,7 @@ async def main():
     travel=TravelInformationService()
     app=FastAPI(); app.dependency_overrides[require_path_user]=lambda: SimpleNamespace(id='read-only-probe')
     app.include_router(create_places_router(travel.places))
-    root=Path('webui_new/static/design-demos/journey-flow-assets');root.mkdir(exist_ok=True)
+    root=Path('tmp/journey-map-live');root.mkdir(parents=True, exist_ok=True)
     data={'choices':[], 'maps':{}, 'places':[]}
     service=SimpleNamespace(travel=travel,trains=create_train_query_backend(),memory=SimpleNamespace(long_term=SimpleNamespace(get_preference=lambda:{'hotel_brands':['汉庭']})))
     start=date.today()+timedelta(days=1)

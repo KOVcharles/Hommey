@@ -13,6 +13,7 @@ from typing import Callable
 
 from rag.config import RAGPipelineConfig
 from rag.encodings import decode_text_bytes, detect_encoding
+from rag.loader import is_source_filename
 from rag.pipeline import RAGPipeline
 from webui_new.core.errors import BusinessError
 
@@ -81,6 +82,12 @@ class KnowledgeBaseManagementService:
                         status_code=409,
                     )
         safe_name = self._safe_filename(filename)
+        if not is_source_filename(safe_name):
+            raise BusinessError(
+                "KNOWLEDGE_FILENAME_RESERVED",
+                "README 用于目录说明，请使用制度文件名上传",
+                status_code=400,
+            )
         file_type = Path(safe_name).suffix.lower().lstrip(".")
         if file_type not in SUPPORTED_UPLOAD_TYPES:
             raise BusinessError(
@@ -242,7 +249,7 @@ class KnowledgeBaseManagementService:
         if not self.documents_dir.exists():
             return snapshot
         for path in sorted(self.documents_dir.rglob("*")):
-            if not path.is_file() or path.name.startswith("."):
+            if not path.is_file() or not is_source_filename(path.name):
                 continue
             if path.suffix.lower().lstrip(".") not in SUPPORTED_UPLOAD_TYPES:
                 continue
@@ -361,7 +368,11 @@ class KnowledgeBaseManagementService:
                 documents[document_id] = entry
         elif self.documents_dir.exists():
             for path in self.documents_dir.rglob("*"):
-                if not path.is_file() or path.suffix.lower().lstrip(".") not in SUPPORTED_UPLOAD_TYPES:
+                if (
+                    not path.is_file()
+                    or not is_source_filename(path.name)
+                    or path.suffix.lower().lstrip(".") not in SUPPORTED_UPLOAD_TYPES
+                ):
                     continue
                 resolved = path.resolve()
                 if resolved in failed_sources:

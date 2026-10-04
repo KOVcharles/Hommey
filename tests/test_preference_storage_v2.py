@@ -1,5 +1,5 @@
-from context.long_term_memory import LegacyAutocommitPostgresLongTermMemory
 from context.memory_repository import PostgresCompatibilityStore
+from psycopg.types.json import Jsonb
 
 
 class RecordingCursor:
@@ -13,6 +13,8 @@ class RecordingCursor:
         return False
 
     def execute(self, sql, params=None):
+        if params is not None:
+            params = tuple(value.obj if isinstance(value, Jsonb) else value for value in params)
         self.connection.calls.append((sql, params))
 
     def fetchone(self):
@@ -63,11 +65,7 @@ class RepositoryStub:
 
 
 def _memory(connection=None):
-    memory = object.__new__(LegacyAutocommitPostgresLongTermMemory)
-    memory.user_id = "7"
-    memory.conn = connection or RecordingConnection()
-    memory._jsonb = lambda value: value
-    return memory
+    return PostgresCompatibilityStore("7", RepositoryStub(connection or RecordingConnection()))
 
 
 def test_migration_builds_one_row_per_user_without_jsonb_max():
@@ -88,9 +86,9 @@ def test_save_scalar_preference_writes_wide_table_and_legacy_mirror():
 
     memory.save_preference("home_location", "北京")
 
-    assert len(memory.conn.calls) == 2
-    wide_sql, wide_params = memory.conn.calls[0]
-    legacy_sql, legacy_params = memory.conn.calls[1]
+    assert len(memory.pool._connection.calls) == 2
+    wide_sql, wide_params = memory.pool._connection.calls[0]
+    legacy_sql, legacy_params = memory.pool._connection.calls[1]
     assert "INSERT INTO user_travel_preferences" in wide_sql
     assert "home_location" in wide_sql
     assert wide_params == ("7", "北京", "home_location")
@@ -103,10 +101,10 @@ def test_save_list_preference_normalizes_and_deduplicates_values():
 
     memory.save_preference("hotel_brands", ["全季", "亚朵", "全季", ""])
 
-    wide_sql, wide_params = memory.conn.calls[0]
+    wide_sql, wide_params = memory.pool._connection.calls[0]
     assert "hotel_brands" in wide_sql
     assert wide_params == ("7", ["全季", "亚朵"], "hotel_brands")
-    assert memory.conn.calls[1][1] == ("7", "hotel_brands", ["全季", "亚朵"])
+    assert memory.pool._connection.calls[1][1] == ("7", "hotel_brands", ["全季", "亚朵"])
 
 
 def test_save_unknown_preference_uses_jsonb_extension_and_legacy_mirror():
@@ -114,10 +112,10 @@ def test_save_unknown_preference_uses_jsonb_extension_and_legacy_mirror():
 
     memory.save_preference("food", "不吃辣")
 
-    wide_sql, wide_params = memory.conn.calls[0]
+    wide_sql, wide_params = memory.pool._connection.calls[0]
     assert "extra_preferences" in wide_sql
     assert wide_params == ("7", "food", "不吃辣", "food")
-    assert memory.conn.calls[1][1] == ("7", "food", "不吃辣")
+    assert memory.pool._connection.calls[1][1] == ("7", "food", "不吃辣")
 
 
 def test_get_preferences_merges_typed_columns_and_extensions():

@@ -15,6 +15,7 @@ from .contracts import (
     CommuteRequest, MemorySearch, PlaceRequest, Query, SourceRequest,
     ToolRejected, TrainRequest, WeatherRequest, schema,
 )
+from .context_window import history_from_rows
 
 
 TOOLS = {
@@ -47,6 +48,13 @@ class BusinessServices:
         self.retriever = retriever
         self.travel = travel
         self.trains = trains
+
+    def read_personal_profile(self, scope):
+        from context.user_profile_repository import UserProfileRepository
+        if str(self.memory.user_id) != str(scope.user_id):
+            raise ToolRejected("身份不匹配")
+        record = UserProfileRepository(self.pool).get(scope.user_id)
+        return record["profile"] if record["onboarding_status"] == "completed" else {"basic_info": {"institution": None}}
 
     async def prepare_trip_options(self, trip, *, selection=None, user_text=""):
         from .trip_options import collect_options
@@ -92,16 +100,38 @@ class BusinessServices:
         """Small same-session context; historical search belongs to the memory specialist."""
         def read():
             with self.pool.connection() as conn, conn.cursor() as cur:
-                cur.execute("""SELECT role, content, sequence_no FROM conversation_messages
-                    WHERE user_id=%s AND session_id=%s AND deleted_at IS NULL AND retention_until>NOW()
-                    ORDER BY sequence_no DESC LIMIT 100""", (scope.user_id, stable_uuid(scope.session_id, namespace="session")))
-                recent = [{"role": r["role"], "content": r["content"]} for r in reversed(cur.fetchall())]
+                session_id = stable_uuid(scope.session_id, namespace="session")
+                request_id = stable_uuid(scope.request_id, namespace=f"request:{scope.user_id}")
+                cur.execute("""SELECT m.role, m.content, m.sequence_no, m.answer_document, m.request_id,
+                    NOT EXISTS (SELECT 1 FROM conversation_messages hidden
+                        WHERE hidden.user_id=m.user_id AND hidden.session_id=m.session_id
+                        AND hidden.request_id=m.request_id
+                        AND (hidden.deleted_at IS NOT NULL OR hidden.retention_until<=NOW())) AS native_allowed
+                    FROM conversation_messages m JOIN conversation_sessions s ON s.session_id=m.session_id
+                    WHERE m.user_id=%s AND m.session_id=%s AND m.request_id<>%s
+                    AND m.deleted_at IS NULL AND m.retention_until>NOW()
+                    AND s.user_id=m.user_id AND s.close_reason IS DISTINCT FROM 'deleted'
+                    AND s.close_reason IS DISTINCT FROM 'cleared'
+                    ORDER BY m.sequence_no DESC LIMIT 100""", (scope.user_id, session_id, request_id))
+                rows = list(reversed(cur.fetchall()))
+                cur.execute("""SELECT request_id, checkpoint->'main' AS main FROM supervisor_runs
+                    WHERE user_id=%s AND session_id=%s AND request_id<>%s AND retention_until>NOW()
+                    ORDER BY created_at DESC LIMIT 100""", (scope.user_id, session_id, scope.request_id))
+                native = {str(stable_uuid(r["request_id"], namespace=f"request:{scope.user_id}")): r["main"]
+                          for r in cur.fetchall()}
+                visible_users = {str(r["request_id"]) for r in rows if r["role"] == "user"}
+                for row in rows:
+                    key = str(row["request_id"])
+                    if row["native_allowed"] and key in visible_users:
+                        row["native_main"] = native.get(key)
+                recent = history_from_rows(rows)
             return {"recent": recent,
+                    "current_excluded": True,
                     "trip": self.memory.get_active_trip(session_id=scope.session_id) or {},
                     "today": beijing_today()}
         return await run_blocking(read)
 
-    async def execute(self, scope, name, request):
+    async def execute(self, scope, name, request, *, trip=None):
         if scope.user_id != self.memory.user_id:
             raise ToolRejected("身份不匹配")
         if name == "search_policy":
@@ -124,7 +154,15 @@ class BusinessServices:
                 raise ToolRejected("未查到该城市天气")
             return "weather", plain(value)
         if name == "find_hotels":
-            anchor, candidates = await self.travel.resolve_anchor(request.keyword, city=request.city)
+            if request.use_trip_location:
+                from core.integrations.places.service import validated_trip_anchor, place_matches_city
+                anchor = validated_trip_anchor(trip or {})
+                if anchor is None or not place_matches_city(anchor, request.city):
+                    raise ToolRejected("当前行程没有与查询城市一致的已确认工作地点，请先确认地点或使用关键词查询其他地点。",
+                                       code="UNCONFIRMED_WORK_LOCATION", next_action="report")
+                candidates = []
+            else:
+                anchor, candidates = await self.travel.resolve_anchor(request.keyword, city=request.city)
             if anchor is None:
                 return "place_candidates", {"needs_input": True, "candidates": plain(candidates)}
             return "hotel", {"anchor": plain(anchor), "hotels": plain(await self.travel.places.nearby_hotels(anchor))}
@@ -158,9 +196,21 @@ class SourceScope:
             metadata = data.get("metadata") or {}
             # Retrieval diagnostics and duplicate display/retrieval text are
             # archived with the raw source, but never repeated in model input.
-            redundant = {"retrieval_text", "display_text", "embedding", "vector", "retrieval_trace"}
-            data = {"content": data.get("content", ""), "chunk_id": data.get("chunk_id") or metadata.get("chunk_id"),
-                    "metadata": {k: v for k, v in metadata.items() if k not in redundant}}
+            meaningful = {"title", "section", "heading_path", "document_version", "effective_date",
+                          "effective_from", "effective_to", "valid_from", "valid_to", "published_at",
+                          "special_exception", "jurisdiction", "institution", "funding_type",
+                          "quality_warning", "table_headers", "footnotes"}
+            projected = {k: v for k, v in metadata.items() if k in meaningful and v not in (None, "", [])}
+            page = metadata.get("page", metadata.get("page_start", metadata.get("page_number")))
+            if page is not None:
+                projected["page"] = page
+            if metadata.get("page_end") not in (None, page):
+                projected["page_end"] = metadata["page_end"]
+            if "title" not in projected:
+                title = metadata.get("filename") or metadata.get("file_name") or metadata.get("parent_doc")
+                if title:
+                    projected["title"] = title
+            data = {"content": data.get("content", ""), "metadata": projected}
         return {**source, "data": data}
 
     def add(self, kind, data):

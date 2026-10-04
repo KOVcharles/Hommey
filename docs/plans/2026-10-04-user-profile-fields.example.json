@@ -1,0 +1,41 @@
+{
+  "schema_version": 1,
+  "basic_info": {
+    "real_name": null,
+    "institution": "重庆大学",
+    "department": null,
+    "personnel_category": null,
+    "employee_number": null,
+    "student_number": null,
+    "gender": null,
+    "birth_date": null,
+    "nationality": null
+  },
+  "policy_identity": {
+    "professional_title_level": null,
+    "professional_position_grade": null,
+    "staff_grade": null,
+    "administrative_rank": null,
+    "academician_status": null,
+    "nationally_recognized_expert": null
+  },
+  "funding": {
+    "default_project_id": null,
+    "projects": [
+      {
+        "id": "example-project",
+        "name": null,
+        "financial_project_code": null,
+        "funding_category": null,
+        "research_type": null,
+        "program_type": null,
+        "funding_source": null,
+        "is_military_project": null,
+        "user_project_role": null
+      }
+    ]
+  },
+  "settlement": {
+    "has_official_card": null
+  }
+}

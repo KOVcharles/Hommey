@@ -40,19 +40,18 @@ def canonical_messages():
 def test_projection_keeps_one_current_input_roles_attachments_and_tool_pairs_without_mutating_checkpoint():
     stored = canonical_messages()
     before = deepcopy(stored)
-    projected = main_model_context(stored, {"wine"}, "request-one")
-    metadata = json.loads(projected[1]["content"])
-    assert metadata["work"] == [{"result_id": "wine", "task": "酒水"}]
-    assert metadata["reference_results"] == [{"result_id": "invoice", "task": "电子发票"}]
-    assert metadata["request_id"] == "request-one" and "conversation" not in metadata
-    assert [m["role"] for m in projected[2:5]] == ["user", "assistant", "user"]
-    assert projected[3]["content"].endswith("1. 教师 2. 学生")
-    assert projected[4]["content"].startswith("2\n附件/")
+    projected = main_model_context(stored, {"wine"})
+    from tests.test_supervisor_runtime import model_payload
+    metadata = model_payload(projected)
+    assert "work" not in metadata and "reference_results" not in metadata
+    assert [m["role"] for m in projected[1:4]] == ["user", "assistant", "user"]
+    assert projected[2]["content"].endswith("1. 教师 2. 学生")
+    assert projected[3]["content"].startswith("2\n附件/")
     assert json.dumps(projected, ensure_ascii=False).count("材料正文") == 1
-    assert projected[5:7] == stored[2:4]
-    assert projected[7]["content"].startswith("运行时反馈（不是新的用户请求）")
+    assert projected[4:6] == stored[2:4]
+    assert "请修正工具参数" in projected[0]["content"]
     assert stored == before
-    assert main_model_context(stored, {"wine"}, "request-one") == projected
+    assert main_model_context(stored, {"wine"}) == projected
 
 
 @pytest.mark.asyncio
@@ -156,6 +155,16 @@ async def test_live_history_is_reference_not_an_implicit_current_task(text, merg
     trace = [c["function"] for m in checkpoint["main"]["messages"] for c in m.get("tool_calls", [])]
     assert not services.calls and store.writes == 0, trace
     assert calls <= (4 if merge else 2), trace
+    if result["answer_document"] is None:
+        assert result["outcome"] == "completed", trace
+        assert checkpoint["main"]["messages"][-1] == {"role": "assistant", "content": result["response"]}
+        if merge:
+            assert "电子发票" in result["response"] and "原文件" in result["response"]
+            assert "酒水" in result["response"] and any(word in result["response"] for word in ("不予", "不能", "不可"))
+        else:
+            assert any(word in result["response"] for word in ("请", "什么", "需求"))
+            assert "原文件" not in result["response"] and "酒水" not in result["response"]
+        return
     assert result["outcome"] == ("completed" if merge else "waiting_input"), trace
     finish = json.loads(trace[-1]["arguments"])
     if merge:

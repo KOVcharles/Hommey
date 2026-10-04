@@ -1,4 +1,6 @@
 """Compose the complete trip without dropping evidence or specialist sections."""
+from datetime import date, datetime, time, timedelta, timezone
+
 from core.presentation.answer_document import AnswerDocument, AnswerSection, render_plain_text
 from .contracts import Finish
 from .render import render
@@ -38,10 +40,29 @@ def complete_output(output, results):
     return {**output, "answer_document": document.model_dump(mode="json"), "response": document.plain_text}
 
 
+def planning_train(row):
+    """Make overnight dates explicit instead of asking the model to infer them."""
+    value = row.model_dump(mode="json")
+    try:
+        departure_date = date.fromisoformat(row.travel_date)
+        if row.arrival_day_offset < 0:
+            raise ValueError("negative arrival offset")
+        arrival_date = departure_date + timedelta(days=row.arrival_day_offset)
+        tz = timezone(timedelta(hours=8))
+        departure = datetime.combine(departure_date, time.fromisoformat(row.depart_time), tzinfo=tz)
+        arrival = datetime.combine(arrival_date, time.fromisoformat(row.arrive_time), tzinfo=tz)
+        if arrival < departure:
+            raise ValueError("arrival before departure")
+        value.update(departure_at=departure.isoformat(timespec="minutes"), arrival_at=arrival.isoformat(timespec="minutes"))
+    except (ValueError, OverflowError):
+        value["date_status"] = "invalid"
+    return value
+
+
 def planning_facts(board):
     """Bounded factual input; leaves do not need access to provider payloads."""
     return {"anchor": board.anchor.model_dump(mode="json") if board.anchor else None,
-            "trains": [row.model_dump(mode="json") for row in board.trains[:4]],
+            "trains": [planning_train(row) for row in board.trains[:4]],
             "hotels": [row.model_dump(mode="json") for row in board.hotels],
             "weather": board.weather.model_dump(mode="json") if hasattr(board.weather, "model_dump") else board.weather,
             "commute": board.commute.model_dump(mode="json") if board.commute else None,

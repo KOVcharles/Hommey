@@ -1,5 +1,5 @@
-"""First-run preference onboarding shared by CLI and WebUI."""
-from typing import Any, Dict, List, Optional
+"""First-run travel preference onboarding for the WebUI."""
+from typing import Any, Dict, List
 
 from utils.memory_safety import is_safe_preference_value
 
@@ -24,12 +24,6 @@ class InitialPreferenceOnboarding:
     LIST_KEYS = {"hotel_brands"}
     EMPTY_VALUES = {"", "不指定", "暂不指定", "无", "没有"}
 
-    DEFAULT_OPTIONS = {
-        "home_location": ["杭州", "上海", "北京", "广州", "深圳", "成都", "南京"],
-        "transportation_preference": ["高铁", "飞机", "自驾", "出租车"],
-        "hotel_brands": ["汉庭", "如家", "全季", "亚朵", "锦江之星"],
-        "seat_preference": ["靠窗", "靠过道", "不指定"],
-    }
 
     def get_state(self, memory_manager) -> Dict[str, Any]:
         """Return onboarding progress based on current long-term preferences."""
@@ -44,13 +38,6 @@ class InitialPreferenceOnboarding:
             "preferences": prefs,
         }
 
-    def get_options(self, key: str, preferred: Optional[str] = None) -> List[str]:
-        """Return selectable onboarding options, with an optional preferred first."""
-        options = list(self.DEFAULT_OPTIONS.get(key, []))
-        clean_preferred = self._clean_value(preferred or "")
-        if clean_preferred:
-            options = [clean_preferred] + [item for item in options if item != clean_preferred]
-        return options
 
     def needs_onboarding(self, memory_manager) -> bool:
         """Whether the user still needs the first-run preference flow."""
@@ -121,25 +108,3 @@ class InitialPreferenceOnboarding:
         if value not in values:
             values.append(value)
         memory_manager.long_term.save_preference(key, values)
-
-
-def detect_city_from_ip(timeout_sec: float = 1.5) -> Optional[str]:
-    """Best-effort public IP city lookup.
-
-    This makes an outbound HTTPS request and should only be called after the
-    user agrees to network-based location detection.
-    """
-    try:
-        import json
-        import urllib.request
-
-        req = urllib.request.Request(
-            "https://ipapi.co/json/",
-            headers={"User-Agent": "HommeyCLI/1.0"},
-        )
-        with urllib.request.urlopen(req, timeout=timeout_sec) as resp:
-            payload = json.loads(resp.read().decode("utf-8"))
-        city = str(payload.get("city") or "").strip()
-        return city or None
-    except Exception:
-        return None

@@ -218,10 +218,15 @@ async def test_warning_allows_model_to_finish_normally_and_new_turn_starts_fresh
     result = await Supervisor(model, services, store, CONFIG).run(SCOPE, "上海天气")
     assert result["outcome"] == "completed" and "stop_reason" not in result
     assert store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]["main"]["round"] == 4
+    previous = store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]["main"]["messages"]
+    async def history_context(scope):
+        return {"trip": services.trip, "recent": deepcopy(previous), "current_excluded": True}
+    services.context = history_context
     async def followup(messages, **kwargs):
-        out = outputs(messages)
+        current = max(i for i, m in enumerate(messages) if m["role"] == "user")
+        out = outputs(messages[current:])
         if not out:
-            work = json.loads(messages[1]["content"])["reference_results"]
+            work = [r for r in outputs(messages[:current]) if "result_id" in r]
             return reply(("read_result", {"result_id": work[0]["result_id"]}))
         assert not out[-1].get("repeated_observation")
         return reply(("finish", {"result_ids": [out[-1]["result_id"]],

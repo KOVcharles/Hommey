@@ -70,15 +70,25 @@ _USERS_DDL = (
     ")"
 )
 
+_INVITES_DDL = (
+    "CREATE TABLE IF NOT EXISTS invite_codes ("
+    " code_hash CHAR(64) PRIMARY KEY,"
+    " created_at TIMESTAMPTZ NOT NULL DEFAULT now(),"
+    " used_at TIMESTAMPTZ,"
+    " used_by_user_id BIGINT REFERENCES users(id)"
+    ")"
+)
+
 # 含 password_hash：登录需读出哈希做常量时间校验（design.md §3.8），
 # 故 email/id 两条查询路径都带回它；明文密码从不落库，自然不会出现在列里。
 _USER_COLUMNS = "id, email, password_hash, created_at, role"
 
 
 def apply_migration(conn) -> None:
-    """幂等建表（`CREATE TABLE IF NOT EXISTS`），与项目既有 `CREATE TABLE IF NOT EXISTS` 惯法一致。"""
+    """幂等创建用户与邀请码表。"""
     with conn.cursor() as cur:
         cur.execute(_USERS_DDL)
+        cur.execute(_INVITES_DDL)
 
 
 def _row_to_user(row: dict | None) -> User | None:

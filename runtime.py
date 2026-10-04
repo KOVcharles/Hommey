@@ -5,7 +5,7 @@ from typing import Optional
 from settings import LLM_CONFIG, SYSTEM_CONFIG, SUPERVISOR_CONFIG
 from config_agentscope import init_agentscope
 from context.memory_manager import MemoryManager
-from utils.circuit_breaker import CircuitBreaker
+from utils.redis_coordination import RedisCircuitBreaker, create_redis_circuit_breaker
 from core.execution_budget import BudgetedModel
 from agent_runtime.engine import Supervisor
 from agent_runtime.services import BusinessServices
@@ -88,14 +88,6 @@ def create_agent_runtime(
     )
 
 
-def create_circuit_breaker() -> CircuitBreaker:
-    """Create the process-shared Redis-backed circuit breaker.
-
-    Returns the async-native ``utils.redis_coordination.RedisCircuitBreaker``
-    (duck-typed against the legacy sync ``CircuitBreaker`` interface); callers
-    must ``await`` the async methods. The legacy synchronous class is kept for
-    remaining sync call paths.
-    """
-    from utils.redis_coordination import create_redis_circuit_breaker
-
+def create_circuit_breaker() -> RedisCircuitBreaker:
+    """Create the process-shared, async Redis-backed circuit breaker."""
     return create_redis_circuit_breaker()

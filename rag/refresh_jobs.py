@@ -3,7 +3,7 @@ from __future__ import annotations
 
 import json
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime
 from typing import Any, Callable, TypeVar
 
 from context.postgres_pool import get_postgres_pool

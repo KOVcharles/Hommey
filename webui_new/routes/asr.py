@@ -4,14 +4,14 @@
 """
 import logging
 
-from fastapi import APIRouter, Depends, Request, UploadFile
+from fastapi import APIRouter, Depends, UploadFile
 from fastapi.params import File
 
 from settings import ASR_CONFIG
 from multimodal.audio_processor import AudioTranscriptionError, create_transcriber
 from multimodal.quota import DailyQuota, redis_config_from_settings
 from webui_new.auth import User, require_path_user
-from webui_new.core.errors import AppError, BusinessError, InternalError, request_id
+from webui_new.core.errors import BusinessError, InternalError
 
 logger = logging.getLogger(__name__)
 

@@ -40,6 +40,7 @@ wheels/
 # AgentScope
 .agentscope/
 .claude/*.local.json
+.claude/settings.json
 .claude/claudian-settings.json
 
 # Local configuration and secrets
@@ -54,7 +55,6 @@ wheels/
 data/documents/*
 !data/documents/.gitkeep
 !data/documents/README.md
-!data/documents/example_*.txt
 !data/documents/cqu/
 data/documents/cqu/*
 !data/documents/cqu/finance/
@@ -102,3 +102,9 @@ Thumbs.db
 
 # Docker
 *.tar
+
+# Local diagnostics and dependency caches
+tmp/
+.repro/
+.codex-resume-work/
+node_modules/

@@ -1,0 +1,40 @@
+<!doctype html>
+<html lang="zh-CN" data-theme="light">
+<head>
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+    <meta name="color-scheme" content="light">
+    <title>登录 · Hommey</title>
+    <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
+    <link rel="stylesheet" href="/static/hommey.css?v=20260907-editorial">
+    <link rel="stylesheet" href="/static/signin.css?v=20260928-fade-transition">
+</head>
+<body class="signin-page">
+    <main class="signin-main">
+        <div class="signin-content">
+            <span class="mini-logo signin-logo" aria-hidden="true">
+                <svg viewBox="0 -4 120 64"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
+            </span>
+            <h1>登录 Hommey</h1>
+            <form id="loginForm" class="signin-form" autocomplete="on" novalidate>
+                <div id="emailField" class="signin-field">
+                    <label class="sr-only" for="email">邮箱地址</label>
+                    <input id="email" name="email" type="email" placeholder="邮箱地址" aria-describedby="emailError" autocomplete="username" autocapitalize="none" spellcheck="false" autofocus required>
+                    <p id="emailError" class="signin-field-error" aria-live="polite"></p>
+                </div>
+                <div id="passwordField" class="signin-field">
+                    <label class="sr-only" for="password">密码</label>
+                    <input id="password" name="password" type="password" placeholder="密码" aria-describedby="passwordError" autocomplete="current-password" required>
+                    <p id="passwordError" class="signin-field-error" aria-live="polite"></p>
+                </div>
+                <button id="submitBtn" class="signin-submit" type="submit" aria-busy="false"><span id="submitLabel">登录</span><span class="signin-submit-spinner" aria-hidden="true"></span></button>
+                <p id="errorMsg" class="signin-error" role="alert"></p>
+            </form>
+            <p class="signin-switch">还没有账号？<a href="/signup" data-auth-transition>注册</a></p>
+            <a class="signin-back" href="/" data-auth-transition>返回首页</a>
+        </div>
+    </main>
+    <script src="/static/auth.js?v=20260928-standalone" defer></script>
+    <script src="/static/auth-transition.js?v=20260928-fade-transition" defer></script>
+</body>
+</html>

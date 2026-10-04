@@ -304,7 +304,7 @@ def test_sparse_index_refresh_changes_corpus():
     assert first
     index.index([{"content": "国际航班舱位标准", "metadata": {}}])
     assert index.search("酒店") == []
-    assert index.search("航班")
+    assert index.search("国际航班")
 
 
 # ---- config wiring ----------------------------------------------------------

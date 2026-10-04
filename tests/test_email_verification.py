@@ -14,6 +14,7 @@ PoW 前缀从 `00000` 缩短为 `00`（测试内求解瞬时完成），从而�
 """
 import json
 import time
+from contextlib import contextmanager
 
 import pytest
 from altcha import Challenge, Payload, create_challenge, solve_challenge
@@ -37,6 +38,7 @@ class _FakeStore:
     def __init__(self):
         self.by_email: dict[str, User] = {}
         self._next_id = 1
+        self.invites = {"TEST-INVITE"}
 
     def get_conn(self):
         return self
@@ -46,6 +48,19 @@ class _FakeStore:
 
     def __exit__(self, *exc):
         return False
+
+    @contextmanager
+    def transaction(self):
+        users_before = self.by_email.copy()
+        invites_before = self.invites.copy()
+        next_id_before = self._next_id
+        try:
+            yield self
+        except Exception:
+            self.by_email = users_before
+            self.invites = invites_before
+            self._next_id = next_id_before
+            raise
 
     def apply_migration(self, conn):
         pass
@@ -127,6 +142,15 @@ def client(monkeypatch):
     monkeypatch.setattr(auth_routes, "apply_migration", store.apply_migration)
     monkeypatch.setattr(auth_routes, "get_user_by_email", store.get_user_by_email)
     monkeypatch.setattr(auth_routes, "create_user", store.create_user)
+    monkeypatch.setattr(auth_routes, "invite_available", lambda conn, code: code in store.invites)
+
+    def consume_invite(conn, code, user_id):
+        if code not in store.invites:
+            return False
+        store.invites.remove(code)
+        return True
+
+    monkeypatch.setattr(auth_routes, "consume_invite", consume_invite)
     monkeypatch.setattr(auth_routes, "send_verification_email", mailer.send)
     monkeypatch.setattr(verification, "get_redis_coordination_client", lambda: redis)
     # 测试用 HMAC key + 缩短 PoW 前缀，走真实 ALTCHA 校验链路但瞬时求解。
@@ -166,12 +190,12 @@ def _send_code(c, email, payload=None):
         payload = _make_payload()
     return c.post(
         "/auth/send-verification-code",
-        json={"email": email, "altcha": payload},
+        json={"email": email, "invite_code": "TEST-INVITE", "altcha": payload},
     )
 
 
 def _register(c, email, password, code):
-    return c.post("/auth/register", json={"email": email, "password": password, "code": code})
+    return c.post("/auth/register", json={"email": email, "password": password, "code": code, "invite_code": "TEST-INVITE"})
 
 
 # ---------------------------------------------------------------------------
@@ -207,6 +231,16 @@ def test_send_code_returns_200_and_emails_six_digit_code(client):
     assert email == "alice@example.com"
     assert len(code) == 6 and code.isdigit()
     assert redis.store[verification._code_key("alice@example.com")] == code
+
+
+def test_send_code_invalid_invite_sends_no_email(client):
+    c, _, _, mailer = client
+    r = c.post("/auth/send-verification-code", json={
+        "email": "alice@example.com", "invite_code": "INVALID", "altcha": _make_payload(),
+    })
+    assert r.status_code == 400
+    assert r.json()["error"]["code"] == "INVALID_INVITE_CODE"
+    assert mailer.sent == []
 
 
 def test_send_code_already_registered_returns_200_without_sending(client):

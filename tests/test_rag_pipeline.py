@@ -3,59 +3,18 @@ from types import SimpleNamespace
 
 import pytest
 
-from rag.chunker import split_text
-from rag.document_loader import load_text_documents
 from rag.embedder import SiliconFlowEmbedder
 from rag.ranking import _tokenize, fuse_results, rerank_results
 from rag.retriever import expand_query
 from rag.vector_store import InMemoryVectorStore, create_vector_store
 
 
-def test_load_text_documents_reads_txt_files(tmp_path: Path):
-    doc = tmp_path / "01_travel_standards.txt"
-    doc.write_text("Travel Standards\n\n北京住宿标准。", encoding="utf-8")
+def test_tokenize_uses_domain_words_synonyms_and_stopwords():
+    tokens = _tokenize("请问帮我查一下酒店房费、饭补和高铁票相关报销")
 
-    documents = load_text_documents(str(tmp_path))
-
-    assert len(documents) == 1
-    assert documents[0].title == "Travel Standards"
-    assert documents[0].category == "travel_policy"
-    # Citation identity comes from the filename/canonical fields; the legacy
-    # `parent_doc` metadata key is gone (audit §4.12).
-    assert documents[0].filename == "01_travel_standards.txt"
-    assert documents[0].metadata["document_version"]
-
-
-def test_tokenize_keeps_exact_chinese_concepts_as_ngrams():
-    tokens = _tokenize("宠物寄养费，能报销吗？")
-
-    assert "宠物寄养" in tokens
-    assert "寄养费" in tokens
-    assert "费能" not in tokens
-
-
-def test_split_text_keeps_small_paragraphs_together():
-    text = "第一段\n\n第二段\n\n第三段"
-
-    chunks = split_text(text, max_chars=20, overlap=5)
-
-    assert chunks == ["第一段\n\n第二段\n\n第三段"]
-
-
-def test_split_text_keeps_faq_questions_as_separate_topics():
-    text = "\n\n".join(
-        [
-            "Q9: 酒店价格超过标准怎么办？\nA9: 按标准报销。",
-            "Q10: 到店后发现房间有问题怎么办？\nA10: 联系酒店处理。",
-            "Q12: 出差期间的所有餐费都能报销吗？\nA12: 午餐和晚餐每餐不超过100元。",
-        ]
-    )
-
-    chunks = split_text(text, max_chars=600, overlap=100)
-
-    assert len(chunks) == 3
-    assert chunks[-1].startswith("Q12")
-    assert "Q9" not in chunks[-1]
+    assert {"住宿", "住宿费", "餐补", "火车票", "报销"} <= set(tokens)
+    assert not {"请问", "帮我", "查一下", "相关", "酒店", "房费", "饭补", "高铁票"} & set(tokens)
+    assert _tokenize("住宿标准与发票") == ["住宿标准", "发票"]
 
 
 def test_vector_store_factory_has_one_production_backend_and_memory_for_tests():

@@ -47,17 +47,3 @@ def build_quick_trip_message(
     if excluded:
         lines.append("不需要查询：" + "、".join(excluded) + "。")
     return "\n".join(lines)
-
-
-def inject_trip_entities(intention_data: dict[str, Any], trip_input: dict[str, Any]) -> None:
-    """Give the authorized trip Goal the validated form facts at highest precedence."""
-    facts = {
-        key: value for key, value in dict(trip_input or {}).items()
-        if key not in {"work_location_place_id", "work_location_note"} and value not in (None, "")
-    }
-    if not facts:
-        return
-    for group in intention_data.get("groups") or []:
-        if group.get("intent") == "business_trip_planning":
-            group.setdefault("entities", {}).update(facts)
-    intention_data.setdefault("key_entities", {}).update(facts)

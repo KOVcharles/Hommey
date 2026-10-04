@@ -5,11 +5,20 @@ import math
 import re
 from typing import Any, Dict, List
 
+import jieba
+
 _DOMAIN_TERMS = (
-    "差旅申请", "住宿标准", "住宿费", "交通费", "打车费", "机票", "火车票",
-    "餐补", "餐费", "餐饮", "早餐", "午餐", "晚餐", "业务招待", "个人零食",
-    "饮料", "酒水", "报销", "不予报销", "发票", "补贴", "国际出差", "国内出差",
+    "住宿标准", "住宿费", "交通费", "火车票", "机票", "餐补", "餐费",
+    "差旅申请", "报销", "发票",
 )
+_SYNONYMS = {
+    "酒店": "住宿", "房费": "住宿费", "饭补": "餐补",
+    "吃饭": "餐费", "高铁票": "火车票",
+}
+_STOPWORDS = {"帮我", "查一下", "相关", "请问", "一下", "怎么", "什么"}
+_JIEBA = jieba.Tokenizer()
+for _word in (*_DOMAIN_TERMS, *_SYNONYMS, *_STOPWORDS):
+    _JIEBA.add_word(_word)
 
 
 def fuse_results(
@@ -133,14 +142,12 @@ def _focus_terms(text: str) -> List[str]:
 
 
 def _tokenize(text: str) -> List[str]:
-    text = (text or "").lower()
-    word_tokens = re.findall(r"[a-z0-9_]+", text)
-    phrase_tokens = [term.lower() for term in _DOMAIN_TERMS if term.lower() in text]
-    zh_runs = re.findall(r"[\u4e00-\u9fff]+", text)
-    zh_tokens = [char for run in zh_runs for char in run]
-    zh_ngrams = [
-        run[start : start + width]
-        for run in zh_runs for width in (2, 3, 4)
-        for start in range(0, len(run) - width + 1)
+    """Use the same small domain vocabulary for BM25 documents and queries."""
+    normalized = (text or "").lower()
+    for variant, canonical in _SYNONYMS.items():
+        normalized = normalized.replace(variant, canonical)
+    return [
+        token for token in _JIEBA.cut(normalized)
+        if token not in _STOPWORDS
+        and re.fullmatch(r"[a-z0-9_]+|[\u4e00-\u9fff]{2,}", token)
     ]
-    return word_tokens + phrase_tokens + zh_tokens + zh_ngrams

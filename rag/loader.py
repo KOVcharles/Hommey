@@ -15,6 +15,11 @@ from typing import Iterable, List
 from .schemas import RawDocument, _document_version_from_bytes
 
 
+def is_source_filename(filename: str) -> bool:
+    """Keep directory instructions and temporary files out of policy evidence."""
+    return not filename.startswith(".") and Path(filename).stem.casefold() != "readme"
+
+
 class DocumentLoader(ABC):
     @abstractmethod
     def load(self, path: str | Path) -> List[RawDocument]:
@@ -31,10 +36,12 @@ class FileSystemDocumentLoader(DocumentLoader):
             raise FileNotFoundError(f"Document path does not exist: {root}")
 
         if root.is_file():
-            return [self._load_file(root, root)]
+            return [self._load_file(root, root)] if is_source_filename(root.name) else []
 
         documents: List[RawDocument] = []
         for file_path in sorted(item for item in root.rglob("*") if item.is_file()):
+            if not is_source_filename(file_path.name):
+                continue
             file_type = file_path.suffix.lower().lstrip(".")
             if file_type not in self.supported_file_types:
                 continue

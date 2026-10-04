@@ -66,17 +66,6 @@ class SkillLoader:
             self.load_definitions()
         return self.definitions.get(skill_name)
 
-    def get_skill_prompt(self, skill_mapping: Optional[Dict[str, str]] = None) -> str:
-        if not self.skills:
-            self.load_skills()
-
-        prompt_lines = []
-        for index, (name, info) in enumerate(sorted(self.skills.items()), start=1):
-            display_name = skill_mapping.get(name, name) if skill_mapping else name
-            desc = info.get("description", "").replace("\n", " ")
-            prompt_lines.append(f"{index}. {display_name} - {desc}")
-
-        return "\n\n".join(prompt_lines)
 
     def get_skill_content(self, skill_name: str) -> Optional[str]:
         if not self.skills:

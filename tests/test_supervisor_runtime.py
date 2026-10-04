@@ -30,11 +30,13 @@ def outputs(messages):
 
 
 def model_payload(messages):
-    """Inspect main native dialogue or the unchanged specialist input envelope."""
-    payload = json.loads(messages[1]["content"])
-    if payload.get("context_kind") == "runtime_reference":
-        payload["conversation"] = messages[2:2 + payload["dialogue_message_count"]]
-    return payload
+    """Inspect the provider request, without relying on a fixed user envelope."""
+    system = messages[0]["content"]
+    if "<runtime_context>" in system:
+        payload = json.loads(system.split("<runtime_context>\n", 1)[1].split("\n</runtime_context>", 1)[0])
+        payload["conversation"] = [m for m in messages[1:] if m["role"] in {"user", "assistant"} and not m.get("tool_calls")]
+        return payload
+    return json.loads(messages[1]["content"])
 
 
 class FakeServices:
@@ -121,7 +123,7 @@ class JourneyModel:
 
     async def __call__(self, messages, tools, tool_choice):
         names = {t["function"]["name"] for t in tools}
-        assert tool_choice == (next(iter(names)) if len(names) == 1 else "required")
+        assert tool_choice == ("auto" if "delegate" in names else next(iter(names)) if len(names) == 1 else "required")
         out = outputs(messages)
         if "delegate" in names:
             self.main_round += 1
@@ -170,7 +172,10 @@ class JourneyModel:
 
 
 @pytest.mark.asyncio
-async def test_six_role_journey_parallel_isolation_cards_and_idempotency():
+async def test_six_role_journey_parallel_isolation_cards_and_idempotency(monkeypatch):
+    # This fixture uses generic enterprise evidence, independent of deployment scopes.
+    from settings import RAG_CONFIG
+    monkeypatch.setitem(RAG_CONFIG, "search_scopes", ())
     services, model = FakeServices(), JourneyModel()
     store = FakeStore(services)
     runtime = Supervisor(model, services, store, CONFIG)

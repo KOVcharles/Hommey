@@ -120,14 +120,6 @@ class InternalError(AppError):
         super().__init__(code, message, status_code=500, details=details, retryable=True, log_level=logging.ERROR, component=COMPONENT_HTTP)
 
 
-class ApiError(AppError):
-    """Compatibility wrapper for the Phase 1 error class signature."""
-
-    def __init__(self, status_code: int, code: str, message: str):
-        log_level = logging.WARNING if status_code < 500 else logging.ERROR
-        super().__init__(code, message, status_code=status_code, details={}, retryable=status_code >= 500, log_level=log_level)
-
-
 def request_id(request: Request) -> str:
     """从 request.state 读取当前请求 ID；未经过 middleware 时返回空字符串。"""
     return getattr(request.state, "request_id", "")
@@ -261,6 +253,10 @@ async def app_error_handler(request: Request, exc: AppError):
 
 async def validation_exception_handler(request: Request, exc: RequestValidationError):
     """隐藏 Pydantic 原始校验细节，避免直接暴露内部字段结构。"""
+    errors = exc.errors()
+    if request.url.path.startswith("/api/") and "/profile" in request.url.path:
+        # Profile validation errors contain the original identity/funding payload.
+        errors = [{"loc": error["loc"], "type": error["type"]} for error in errors]
     record_app_error(COMPONENT_HTTP, "VALIDATION_ERROR", 422)
     logger.warning(
         "validation_error",
@@ -270,7 +266,7 @@ async def validation_exception_handler(request: Request, exc: RequestValidationE
             error_code="VALIDATION_ERROR",
             component=COMPONENT_HTTP,
             duration_ms=_duration_ms(request),
-            debug_message=str(exc.errors()),
+            debug_message=str(errors),
         ),
     )
     return error_response(request, 422, "VALIDATION_ERROR", "请求参数格式不正确，请检查后重试")

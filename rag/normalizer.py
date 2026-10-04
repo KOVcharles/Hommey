@@ -10,19 +10,9 @@ from __future__ import annotations
 
 import re
 from abc import ABC, abstractmethod
-from typing import Callable, Dict, List
+from typing import List
 
-from .schemas import (
-    ATOMIC_BLOCK_TYPES,
-    BLOCK_TYPE_CODE,
-    BLOCK_TYPE_FAQ,
-    BLOCK_TYPE_HEADING,
-    BLOCK_TYPE_LIST,
-    BLOCK_TYPE_PARAGRAPH,
-    BLOCK_TYPE_TABLE,
-    Block,
-    ParsedDocument,
-)
+from .schemas import ATOMIC_BLOCK_TYPES, BLOCK_TYPE_CODE, BLOCK_TYPE_TABLE, Block, ParsedDocument
 
 # Block types whose whitespace is significant.  Everything else is prose and
 # gets line-level whitespace folding.

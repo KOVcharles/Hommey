@@ -198,9 +198,13 @@ async def test_continue_restores_only_completed_results_and_does_not_requery_or_
     store = PreviousStore(services)
     await Supervisor(JourneyModel(), services, store, CONFIG).run(SCOPE, TEXT)
     count = len(services.calls)
+    previous = store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]["main"]["messages"]
+    async def history_context(scope):
+        return {"trip": services.trip, "recent": deepcopy(previous), "current_excluded": True}
+    services.context = history_context
     async def resume_model(messages, **kwargs):
         assert role_of(messages) is None
-        resumed = json.loads(messages[1]["content"])["reference_results"]
+        resumed = [r for r in outputs(messages) if "role" in r and "result_id" in r]
         assert {r["role"] for r in resumed} == set(REPORT_MODELS)
         ids = [r["result_id"] for r in resumed if r["role"] == "travel_info"]
         return reply(("finish", {"result_ids": ids, "reuse_reasons": {key: "用户要求继续查看出行结果" for key in ids}}))

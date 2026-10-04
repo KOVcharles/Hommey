@@ -53,7 +53,7 @@ async def test_help_exits_without_reports_queries_or_writes_and_replays(repair_e
         payload = model_payload(messages)
         assert payload["conversation"][-1]["content"] == text
         assert len(payload["conversation"]) >= 30
-        assert len(payload["reference_results"]) == 6 and not payload["work"]
+        assert "reference_results" not in payload and "work" not in payload
         if repair_empty_answer and calls == 1:
             return reply(("finish", {"kind": "answer"}))
         if repair_empty_answer:
@@ -156,6 +156,22 @@ async def test_live_service_help_in_long_contaminated_history(text, kind, select
     trace = json.dumps(trace, ensure_ascii=False)
     assert not services.calls and store.writes == 0, trace
     assert calls <= (4 if selected else 2), trace
+    if result["answer_document"] is None:
+        assert result["outcome"] == "completed", trace
+        assert checkpoint["main"]["messages"][-1] == {"role": "assistant", "content": result["response"]}
+        facts = {"invoice": ("原文件",), "wine": ("不予报销", "不能报销", "不可报销"),
+                 "intern": ("100",), "process": ("负责人",), "rocket": ("未查", "未找到", "没有查"),
+                 "expert": ("清册",)}
+        for report in reports:
+            if report.result_id in selected:
+                assert any(word in result["response"] for word in facts[report.result_id]), result
+            else:
+                assert report.summary not in result["response"], result
+        if introduction:
+            assert "报销" in result["response"] and "差旅" in result["response"], result
+        if kind == "clarify":
+            assert any(word in result["response"] for word in ("请", "什么", "需求")), result
+        return
     assert result["outcome"] == ("waiting_input" if kind == "clarify" else "completed"), trace
     finish_call = next(c for m in reversed(checkpoint["main"]["messages"])
         for c in m.get("tool_calls", []) if c["function"]["name"] == "finish")

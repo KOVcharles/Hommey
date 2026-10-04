@@ -13,6 +13,7 @@ requests==2.32.3
 httpx==0.28.1
 
 # RAG 与向量库（PostgreSQL + pgvector；embedding 默认走 SiliconFlow 云端）
+jieba>=0.42.1,<1.0
 pypdf==6.4.1
 # 聊天附件 DOCX 解析（import 名 docx）
 python-docx>=1.1.0
@@ -34,9 +35,6 @@ jinja2==3.1.5
 python-multipart>=0.0.9
 # MCP 1.x（agentscope 1.0.16 的依赖）要求 pydantic>=2.11.0，故放宽下限
 pydantic>=2.11.0,<3.0.0
-
-# 网络搜索（DDGS）
-ddgs==9.10.0
 
 # 短期记忆 Redis 存储
 #redis==6.4.0

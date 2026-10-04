@@ -13,8 +13,6 @@ from rag.vector_store import InMemoryVectorStore
 def _pipeline(store=None):
     return RAGPipeline(
         config=RAGPipelineConfig(
-            chunk_size=80,
-            chunk_overlap=10,
             collection_name="test_collection",
             knowledge_base_path=":memory:",
         ),

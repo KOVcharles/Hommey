@@ -34,6 +34,7 @@ from webui_new.routes.auth import create_auth_router
 from webui_new.routes.attachments import create_attachments_router
 from webui_new.routes.chat import create_chat_router
 from webui_new.routes.onboarding import create_onboarding_router
+from webui_new.routes.personal_profile import create_personal_profile_router
 from webui_new.routes.pages import create_pages_router
 from webui_new.routes.users import create_users_router
 from webui_new.auth.migrations import apply_all_migrations
@@ -100,6 +101,7 @@ app.include_router(create_pages_router(_render))
 app.include_router(create_auth_router())
 app.include_router(create_users_router(manager))
 app.include_router(create_onboarding_router(manager))
+app.include_router(create_personal_profile_router())
 app.include_router(create_chat_router(manager, place_service))
 app.include_router(create_places_router(place_service))
 app.include_router(create_attachments_router(attachment_service))

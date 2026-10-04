@@ -114,6 +114,12 @@ async def send_in_composer(page, text):
     await composer.press("Enter")
 
 
+async def open_history(page):
+    view = await page.locator("#appShell").get_attribute("data-view")
+    await page.locator("#sidebarToggle" if view == "home" else "#workspaceChatEntry").click()
+    await page.locator("#workspaceHistoryButton").click()
+
+
 async def run_two_tabs(context, backend, errors):
     backend.mark()
     a, b = await context.new_page(), await context.new_page()
@@ -123,9 +129,9 @@ async def run_two_tabs(context, backend, errors):
     await send_in_composer(a, "窗口 A 的任务")
     await backend.wait_streams(1)
     await b.goto(BASE + "/chat/qa")
-    await b.locator("#sidebarToggle").click()
+    await open_history(b)
     await expect(b.get_by_role("button", name="已有会话", exact=True)).to_be_visible()
-    await b.locator("#newChatButton").click()
+    await b.locator("#workspaceNewChat").click()
     await b.wait_for_function("sessionStorage.getItem('hommey.session.qa') === 'session-2'")
     await expect(b.locator("#activeTrip")).to_contain_text("session-2")
     await send_in_composer(b, "窗口 B 的任务")
@@ -138,7 +144,7 @@ async def run_two_tabs(context, backend, errors):
     # A failed list must show a retryable load state, not empty history.
     backend.fail_list = True
     await b.reload()
-    await b.locator("#sidebarToggle").click()
+    await open_history(b)
     await expect(b.locator(".session-list-error")).to_contain_text("暂时无法加载历史会话")
     await expect(b.locator("#historyList")).not_to_contain_text("还没有历史会话")
     assert await b.evaluate("sessionStorage.getItem('hommey.session.qa')") == "session-2"
@@ -168,8 +174,8 @@ async def run_one_page_parallel(context, backend, errors):
     assert await page.evaluate("window.__aView.dataset.sessionId") == "session-3"
 
     # 2. A 还在跑的时候新建会话 B。旧行为会在这里被 isProcessing 挡掉。
-    await page.locator("#sidebarToggle").click()
-    await page.locator("#newChatButton").click()
+    await open_history(page)
+    await page.locator("#workspaceNewChat").click()
     await page.wait_for_function("sessionStorage.getItem('hommey.session.qa') === 'session-4'")
     await send_in_composer(page, "并行 B 的任务")
     await backend.wait_streams(2)
@@ -183,7 +189,7 @@ async def run_one_page_parallel(context, backend, errors):
     print("PASS: a second conversation starts while the first is still streaming")
 
     # 4. 切回 A：画布是原来那一个，处理指示还在，也没有重拉历史。
-    await page.locator("#sidebarToggle").click()
+    await open_history(page)
     await page.get_by_role("button", name="session-3", exact=True).click()
     await page.wait_for_function("document.querySelector('.session-view')?.dataset.sessionId === 'session-3'")
     assert await page.evaluate("window.__aView === document.querySelector('.session-view')")
@@ -192,16 +198,16 @@ async def run_one_page_parallel(context, backend, errors):
     print("PASS: switching back shows the live canvas again without replaying history")
 
     # 5. 三个并发，第三次新建仍然可用。
-    await page.locator("#sidebarToggle").click()
-    await page.locator("#newChatButton").click()
+    await open_history(page)
+    await page.locator("#workspaceNewChat").click()
     await page.wait_for_function("sessionStorage.getItem('hommey.session.qa') === 'session-5'")
     await send_in_composer(page, "并行 C 的任务")
     await backend.wait_streams(3)
     assert backend.in_flight() == ["session-3", "session-4", "session-5"]
 
     # 6. 第四个：立即提示，不发请求。
-    await page.locator("#sidebarToggle").click()
-    await page.locator("#newChatButton").click()
+    await open_history(page)
+    await page.locator("#workspaceNewChat").click()
     await page.wait_for_function("sessionStorage.getItem('hommey.session.qa') === 'session-6'")
     await send_in_composer(page, "并行 D 的任务")
     await expect(page.locator("#toast")).to_contain_text("最多同时跑 3 个会话")
@@ -210,7 +216,7 @@ async def run_one_page_parallel(context, backend, errors):
 
     # 7. A 跑完：它的运行指示消失，B、C 不受影响。
     backend.release(0)
-    await page.locator("#sidebarToggle").click()
+    await open_history(page)
     s3 = page.locator('.session-row[data-session-id="session-3"]')
     await expect(s3).not_to_have_class(RUNNING)
     await expect(page.locator('.session-row[data-session-id="session-4"]')).to_have_class(RUNNING)

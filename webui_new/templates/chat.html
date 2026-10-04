@@ -6,13 +6,17 @@
     <meta name="color-scheme" content="light dark">
     <title>Hommey</title>
     <link rel="icon" href="/static/brand/hommey-favicon.svg" type="image/svg+xml">
-    <link rel="stylesheet" href="/static/hommey.css?v=20260914-chat-polish">
+    <link rel="stylesheet" href="/static/hommey.css?v=20261004-composer">
+    <link rel="stylesheet" href="/static/personal-profile.css?v=20261004-funding-1">
     <link rel="stylesheet" href="/static/answer-card.css?v=20260827-train-scroll-v2">
     <link rel="stylesheet" href="/static/trip-choices.css?v=20260914-train-expand">
     <link rel="stylesheet" href="/static/policy-card.css?v=20260913-v1">
     <link rel="stylesheet" href="/static/trip-intake-card.css?v=20260914-chat-polish">
     <link rel="stylesheet" href="/static/journey-map.css?v=20260914-train-expand">
     <link rel="stylesheet" href="/static/execution-plan.css?v=20260914-plan-disclosure">
+    <link rel="stylesheet" href="/static/markdown.css?v=20261003-output">
+    <link rel="stylesheet" href="/static/information-card.css?v=20261003-output">
+    <link rel="stylesheet" href="/static/ambient-workspace.css?v=20261004-navigation">
 </head>
 <body class="chat-page" data-user-id="{{ user_id }}">
     <div id="initOverlay" class="init-overlay">
@@ -25,25 +29,25 @@
         </div>
     </div>
 
+    <div class="ambient-field" aria-hidden="true"><div class="ambient-grain"></div></div>
     <div id="appShell" class="app-shell" data-view="home">
         <header class="topbar">
             <div class="topbar-group">
-                <button id="sidebarToggle" class="icon-button" type="button" aria-label="打开侧栏">
-                    <svg width="19" height="19" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
-                </button>
                 <div class="brand-stack">
-                    <button id="homeButton" class="product-home" type="button">
+                    <button id="homeButton" class="product-home" type="button" aria-label="返回首页" title="返回首页，对话会继续生成">
                         <span class="mini-logo" aria-hidden="true">
                             <svg viewBox="0 -4 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
                         </span>
                         <span>Hommey</span>
                     </button>
-                    <a class="github-icon-link" href="https://github.com/KOVcharles/Hommey" target="_blank" rel="noopener noreferrer" aria-label="在 GitHub 打开 Hommey 项目" title="GitHub">
-                        <svg viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M12 .6A11.4 11.4 0 0 0 8.4 22.8c.57.1.78-.25.78-.55v-2.15c-3.17.69-3.84-1.35-3.84-1.35-.52-1.31-1.27-1.66-1.27-1.66-1.04-.71.08-.7.08-.7 1.15.08 1.76 1.18 1.76 1.18 1.02 1.75 2.68 1.24 3.34.95.1-.74.4-1.24.73-1.52-2.53-.29-5.19-1.27-5.19-5.65 0-1.25.45-2.27 1.18-3.07-.12-.29-.51-1.45.11-3.02 0 0 .96-.31 3.14 1.17A10.9 10.9 0 0 1 12 5.08c.97 0 1.94.13 2.85.39 2.18-1.48 3.14-1.17 3.14-1.17.62 1.57.23 2.73.11 3.02.73.8 1.18 1.82 1.18 3.07 0 4.39-2.67 5.35-5.21 5.63.41.35.78 1.04.78 2.1v3.12c0 .3.21.66.79.55A11.4 11.4 0 0 0 12 .6Z"/></svg>
-                    </a>
                 </div>
             </div>
             <div class="topbar-group">
+                <button id="workspaceChatEntry" class="workspace-chat-entry" type="button" aria-label="打开信息中心" aria-haspopup="dialog" aria-controls="sidebar" aria-expanded="false">
+                    <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="3" width="18" height="18" rx="5"/><path d="M9 3v18M9 9h12"/></svg>
+                    <span>信息中心</span>
+                </button>
+                <button id="newChatButton" class="icon-button workspace-new-chat" type="button" aria-label="新对话"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg></button>
                 <button id="accountButton" class="avatar-button" type="button" aria-label="打开账户设置">
                     {{ user_id[0:1].upper() if user_id else 'U' }}
                 </button>
@@ -68,12 +72,13 @@
                     <circle class="traveller" cx="20" cy="59" r="3"/>
                     <path class="route-hit-area" d="M20 59 C105 59, 150 13, 250 43 S395 27, 480 27"/>
                 </svg>
-                <h1 class="welcome-title">报销和出差，问问 Hommey。<br><span>制度、材料和行程，一次理清。</span></h1>
+                <h1 class="hero-title">出发前，问问 Hommey。</h1>
+                <p class="hero-subtitle">路线、标准和细节，一次理清。</p>
 
                 <form id="homeComposer" class="composer welcome-composer">
-                    <textarea id="homeInput" rows="1" placeholder="例如：版面费报销需要什么材料？" aria-label="输入报销问题或差旅需求" disabled></textarea>
+                    <textarea id="homeInput" class="question-input" rows="1" placeholder="例如：版面费报销需要什么材料？" aria-label="输入报销问题或差旅需求" disabled></textarea>
                     <div class="pending-attachments" style="display:none" aria-live="polite"></div>
-                    <div class="composer-tools">
+                    <div class="composer-tools composer-toolbar">
                         <div class="retrieval-mode-control" data-retrieval-mode-control>
                             <button class="retrieval-mode-trigger" type="button" data-retrieval-mode-trigger aria-haspopup="menu" aria-expanded="false">
                                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 6h14M8 12h8M10 18h4"/><circle cx="19" cy="6" r="2"/><circle cx="6" cy="12" r="2"/><circle cx="15" cy="18" r="2"/></svg>
@@ -101,7 +106,6 @@
                         <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
                         </button>
-                        <button class="quick-trip-trigger" type="button" data-quick-trip-open aria-label="快速差旅" title="快速填写差旅信息">快速差旅</button>
                         <span class="composer-spacer"></span>
                         <button id="homeSendBtn" class="send-button" type="submit" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -114,7 +118,6 @@
                     <span class="prompt-window"><span id="rotatingQuestion" class="rotating-question">下周一去上海两天，帮我安排一下</span></span>
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m9 18 6-6-6-6"/></svg>
                 </button>
-                <p class="privacy-note">重要的动态信息请以官方来源为准。</p>
             </div>
             <footer class="icp-footer">
                 <a href="https://beian.miit.gov.cn/" target="_blank" rel="noopener noreferrer">赣ICP备2026020278号</a>
@@ -155,7 +158,6 @@
                         <button class="icon-button composer-tool-btn" type="button" data-attachment-panel aria-label="我的附件" title="我的附件">
                             <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linejoin="round"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
                         </button>
-                        <button class="quick-trip-trigger" type="button" data-quick-trip-open aria-label="快速差旅" title="快速填写差旅信息">快速差旅</button>
                         <span class="composer-spacer"></span>
                         <button id="sendBtn" class="send-button" type="button" aria-label="发送" disabled>
                             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 19V5"/><path d="m6 11 6-6 6 6"/></svg>
@@ -270,59 +272,86 @@
         </main>
     </div>
 
-    <button id="scrim" class="scrim" type="button" aria-label="关闭侧栏"></button>
+<div class="proximity-zone" id="proximityZone" aria-hidden="false">
+        <div class="bottom-glow"></div>
+        <div class="particles" id="particles" aria-hidden="true"></div>
+        <div class="signal-line" aria-hidden="true"></div>
+        <button class="workspace-entry" id="sidebarToggle" type="button" aria-haspopup="dialog" aria-controls="sidebar" aria-expanded="false">
+            <span>信息中心</span>
+            <svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round"><path d="M12 19V5M7 10l5-5 5 5"/></svg>
+        </button>
+        <button class="mobile-handle" id="mobileHandle" type="button" aria-haspopup="dialog" aria-controls="sidebar" aria-expanded="false">信息中心</button>
+    </div>
 
-    <aside id="sidebar" class="sidebar" aria-label="会话侧栏">
-        <div class="sidebar-head">
-            <div class="sidebar-brand-row">
-                <div class="sidebar-brand">
-                    <span class="mini-logo" aria-hidden="true">
-                        <svg viewBox="0 -4 120 64" aria-hidden="true"><path d="M22 46C34 47 40 46 46 41C53 35 53 26 61 19C69 13 78 12 90 12"/><circle cx="14" cy="46" r="8"/><circle class="brand-route-node" cx="101" cy="12" r="11"/></svg>
-                    </span>
-                    <span>Hommey</span>
+    <button tabindex="-1" class="workspace-backdrop" id="scrim" type="button" aria-label="关闭信息中心"></button>
+
+    <section class="workspace" id="sidebar" role="dialog" aria-modal="true" aria-labelledby="workspaceTitle" aria-hidden="true" inert>
+        <div class="drag-handle-zone" id="dragHandle" aria-label="向下拖动关闭">
+            <span class="drag-handle"></span>
+        </div>
+        <button class="close-workspace" id="sidebarClose" type="button" aria-label="关闭信息中心">
+            <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"><path d="m6 6 12 12M18 6 6 18"/></svg>
+        </button>
+
+        <div class="workspace-shell">
+            <header class="workspace-header">
+                <div>
+                    <p class="workspace-kicker">Your Hommey</p>
+                    <h2 id="workspaceTitle">信息中心</h2>
                 </div>
-                <button id="sidebarClose" class="icon-button" type="button" aria-label="关闭侧栏">
-                    <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="16" rx="3"/><path d="M9 4v16"/></svg>
+                <p>你的行程、制度资料和最近使用记录，都安静地收在这里。</p>
+            </header>
+
+            <div class="workspace-grid" id="workspaceOverview">
+                <button class="workspace-cell upcoming" id="workspaceTrip" type="button" aria-label="开始规划行程">
+                    <div class="cell-eyebrow"><span id="workspaceTripEyebrow">Your next trip</span><span class="cell-arrow" aria-hidden="true">↗</span></div>
+                    <div id="workspaceTripEmpty" class="workspace-trip-empty"><strong>下一程，从这里开始。</strong><p>告诉 Hommey 地点和日期，慢慢补齐出发前的细节。</p><span>开始规划 <span aria-hidden="true">↗</span></span></div>
+                    <div id="workspaceTripDetails" hidden>
+                        <div class="trip-route"><div class="place"><strong id="workspaceTripOrigin"></strong><small>出发地</small></div><div class="route-rail" aria-hidden="true"></div><div class="place"><strong id="workspaceTripDestination"></strong><small>目的地</small></div></div>
+                        <div class="trip-meta"><div class="meta-item"><small>日期</small><span id="workspaceTripDates"></span></div><div class="meta-item"><small>目的</small><span id="workspaceTripPurpose"></span></div><div class="meta-item"><small>状态</small><span>继续完善行程</span></div></div>
+                    </div>
                 </button>
-            </div>
-            <div class="sidebar-actions">
-                <button id="newChatButton" class="sidebar-action" type="button">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 20h9"/><path d="M16.5 3.5a2.1 2.1 0 0 1 3 3L8 18l-4 1 1-4Z"/></svg>
-                    <span>新对话</span>
-                </button>
-                <div class="sidebar-search-group">
-                    <button id="searchToggle" class="sidebar-action" type="button" aria-expanded="false" aria-controls="historySearchBox">
-                        <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-                        <span>搜索会话</span>
+                <section class="workspace-cell recent" aria-labelledby="recentTitle"><div class="cell-eyebrow"><span id="recentTitle">最近记录</span><span id="workspaceRecentCount">00</span></div><div class="recent-list" id="workspaceRecent"><div class="empty-state">正在读取最近记录。</div></div></section>
+                <nav class="utility-grid" aria-label="信息中心功能">
+                    <button class="utility-item accent" type="button" data-quick-trip-open>
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"><circle cx="5" cy="16" r="2"/><circle cx="19" cy="7" r="2"/><path d="M7 15.5c4 0 4-6.5 8-6.5h2"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>新建行程</strong><small>开始规划下一次出差</small>
                     </button>
-                    <label id="historySearchBox" class="history-search" aria-hidden="true">
-                        <svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
-                        <input id="historySearch" type="search" placeholder="输入会话名称" tabindex="-1">
-                    </label>
-                </div>
-                <button id="knowledgeButton" class="sidebar-action knowledge-entry" type="button">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20"/><path d="M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h7"/></svg>
-                    <span>知识库</span>
-                    <span class="sidebar-action-note">在线查阅</span>
-                </button>
+                    <button class="utility-item" type="button" id="knowledgeButton">
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"><path d="M4 19.5A2.5 2.5 0 0 1 6.5 17H20M6.5 2H20v20H6.5A2.5 2.5 0 0 1 4 19.5v-15A2.5 2.5 0 0 1 6.5 2Z"/><path d="M9 7h7"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>制度知识库</strong><small>报销指南与差旅制度</small>
+                    </button>
+                    <button class="utility-item" type="button" id="searchToggle" aria-expanded="false" aria-controls="historySearchBox">
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m20 20-4-4"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>搜索记录</strong><small>天气、车次与差旅问答</small>
+                    </button>
+                    <button class="utility-item" type="button" data-attachment-panel>
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>我的附件</strong><small>上传的文件与参考资料</small>
+                    </button>
+                    <button class="utility-item" type="button" id="workspaceHistoryButton">
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"><path d="M3 12a9 9 0 1 0 3-6.7L3 8"/><path d="M3 3v5h5M12 7v5l3 2"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>历史记录</strong><small>过去的对话与差旅任务</small>
+                    </button>
+                    <button class="utility-item" type="button" id="settingsButton">
+                        <svg class="utility-icon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.45" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .4 1.9l.1.1a2 2 0 1 1-2.9 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.6v.1a2 2 0 1 1-4 0V21a1.7 1.7 0 0 0-1-1.6 1.7 1.7 0 0 0-1.9.3l-.1.1A2 2 0 1 1 4.2 17l.1-.1a1.7 1.7 0 0 0 .3-1.9A1.7 1.7 0 0 0 3 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9L4.2 7A2 2 0 1 1 7 4.2l.1.1a1.7 1.7 0 0 0 1.9.3 1.7 1.7 0 0 0 1-1.6V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1A2 2 0 1 1 19.8 7l-.1.1a1.7 1.7 0 0 0-.3 1.9 1.7 1.7 0 0 0 1.6 1h.1a2 2 0 1 1 0 4H21a1.7 1.7 0 0 0-1.6 1Z"/></svg>
+                        <svg class="cell-arrow" width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6" style="position:absolute;top:16px;right:16px"><path d="M5 12h14M14 7l5 5-5 5"/></svg>
+                        <strong>偏好设置</strong><small>出发地、交通与住宿偏好</small>
+                    </button>
+                </nav>
             </div>
+            <section class="workspace-history" id="workspaceHistory" hidden aria-label="历史记录">
+                <div class="workspace-history-head"><button id="workspaceBack" type="button">← 返回信息中心</button><button id="workspaceNewChat" type="button">新对话 ＋</button></div>
+                <label id="historySearchBox" class="history-search" aria-hidden="true"><input id="historySearch" type="search" placeholder="输入会话名称" aria-label="搜索会话" tabindex="-1"></label>
+                <div id="historyList" class="history-list"><div class="empty-state">正在读取历史记录。</div></div>
+            </section>
         </div>
-        <div id="historyList" class="history-list">
-            <p class="history-label">最近</p>
-            <div class="history-empty">还没有历史会话。</div>
-        </div>
-        <div class="sidebar-foot">
-            <button id="settingsButton" class="sidebar-action" type="button">
-                <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .34 1.88l.06.06a2 2 0 1 1-2.83 2.83l-.06-.06A1.7 1.7 0 0 0 15 19.4a1.7 1.7 0 0 0-1 .6 1.7 1.7 0 0 0-.4 1.1V21a2 2 0 1 1-4 0v-.09A1.7 1.7 0 0 0 8.6 19.4a1.7 1.7 0 0 0-1.88.34l-.06.06a2 2 0 1 1-2.83-2.83l.06-.06A1.7 1.7 0 0 0 4.2 15a1.7 1.7 0 0 0-.6-1 1.7 1.7 0 0 0-1.1-.4H2.4a2 2 0 1 1 0-4h.09A1.7 1.7 0 0 0 4.2 8.6a1.7 1.7 0 0 0-.34-1.88l-.06-.06a2 2 0 1 1 2.83-2.83l.06.06A1.7 1.7 0 0 0 8.6 4.2a1.7 1.7 0 0 0 1-.6 1.7 1.7 0 0 0 .4-1.1V2.4a2 2 0 1 1 4 0v.09a1.7 1.7 0 0 0 1 1.71 1.7 1.7 0 0 0 1.88-.34l.06-.06a2 2 0 1 1 2.83 2.83l-.06.06A1.7 1.7 0 0 0 19.4 8.6c.14.4.36.75.6 1 .3.3.7.4 1.1.4h.1a2 2 0 1 1 0 4h-.09a1.7 1.7 0 0 0-1.71 1Z"/></svg>
-                <span>设置</span>
-            </button>
-            <button id="accountRow" class="account-row" type="button">
-                <span class="account-avatar">{{ user_id[0:1].upper() if user_id else 'U' }}</span>
-                <span class="account-copy"><strong id="panelName">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span>
-                <span>›</span>
-            </button>
-        </div>
-    </aside>
+    </section>
 
     <div id="sessionPopover" class="session-popover" hidden>
         <button id="renameSessionButton" type="button">重命名</button>
@@ -338,6 +367,7 @@
                 </button>
             </header>
             <div class="settings-body">
+                <button id="accountRow" class="account-row" type="button"><span class="account-avatar">{{ user_id[0:1].upper() if user_id else 'U' }}</span><span class="account-copy"><strong id="panelName">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span></button>
                 <section class="settings-section">
                     <p class="settings-label">外观</p>
                     <div class="settings-card">
@@ -359,6 +389,9 @@
                 <section class="settings-section">
                     <p class="settings-label">个人信息</p>
                     <div class="settings-card">
+                        <button class="settings-action" type="button" data-profile-step="basic"><span>基本资料</span><span class="profile-entry-copy"><span id="profileBasicSummary">待补充</span><span>›</span></span></button>
+                        <button id="profileIdentityEntry" class="settings-action" type="button" data-profile-step="identity"><span>报销身份</span><span class="profile-entry-copy"><span id="profileIdentitySummary">待补充</span><span>›</span></span></button>
+                        <button class="settings-action" type="button" data-profile-step="funding"><span>常用经费</span><span class="profile-entry-copy"><span id="profileFundingSummary">待补充</span><span>›</span></span></button>
                         <details class="settings-details">
                             <summary><span>差旅偏好</span><span>›</span></summary>
                             <div id="prefList" class="pref-list"><div class="empty-state">正在读取偏好。</div></div>
@@ -380,6 +413,26 @@
                 </section>
             </div>
         </div>
+    </section>
+
+    <section id="personalProfileLayer" class="modal-layer" aria-hidden="true">
+        <form id="personalProfileForm" class="personal-profile-modal" role="dialog" aria-modal="true" aria-labelledby="personalProfileTitle" aria-describedby="personalProfileSubtitle">
+            <header class="modal-head">
+                <div><h2 id="personalProfileTitle">个人信息</h2><p id="personalProfileSubtitle"></p></div>
+                <button id="personalProfileClose" class="icon-button" type="button" aria-label="关闭个人信息"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg></button>
+            </header>
+            <nav id="personalProfileTabs" class="profile-steps" aria-label="资料设置步骤"></nav>
+            <div id="personalProfileContent" class="profile-content"></div>
+            <p id="personalProfileError" class="profile-error" role="alert" hidden></p>
+            <footer class="profile-footer">
+                <span class="profile-footer-note">可随时在设置 · 个人信息中修改</span>
+                <div class="profile-footer-buttons">
+                    <button id="personalProfileSkip" class="profile-text-button" type="button">稍后填写</button>
+                    <button id="personalProfileBack" class="secondary-button" type="button" hidden>上一步</button>
+                    <button id="personalProfileSave" class="primary-button" type="submit">保存资料</button>
+                </div>
+            </footer>
+        </form>
     </section>
 
     <section id="renameLayer" class="modal-layer" aria-label="重命名会话">
@@ -423,8 +476,8 @@
         <form id="quickTripForm" class="quick-trip-modal">
             <header class="modal-head">
                 <div>
-                    <h2>快速差旅</h2>
-                    <p>填写明确事实，仍由完整差旅流程规划与核验。</p>
+                    <h2>Hommey · 行程规划</h2>
+                    <p>补充几个信息，我来整理完整差旅方案。</p>
                 </div>
                 <button class="icon-button" type="button" data-close-layer="quickTripLayer" aria-label="关闭">
                     <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
@@ -467,12 +520,18 @@
 
     <div id="toast" class="toast" role="status" aria-live="polite"></div>
     <script src="/static/journey-map.js?v=20260913-map-v3"></script>
-    <script src="/static/policy-card.js?v=20260920-reimbursement"></script>
+    <script src="/static/vendor/marked-18.0.14.js"></script>
+    <script src="/static/vendor/dompurify-3.4.16.js"></script>
+    <script src="/static/markdown.js?v=20261003-output"></script>
+    <script src="/static/policy-card.js?v=20261003-output"></script>
     <script src="/static/trip-choices.js?v=20260914-train-expand"></script>
-    <script src="/static/answer-card.js?v=20260920-reimbursement"></script>
+    <script src="/static/answer-card.js?v=20261003-output"></script>
     <script src="/static/trip-intake-card.js?v=20260914-city-suggest"></script>
+    <script src="/static/information-card.js?v=20261003-output"></script>
     <script src="/static/execution-plan.js?v=20260914-plan-disclosure"></script>
     <script src="/static/session-runtime.js?v=20260919-in-page-parallel"></script>
-    <script src="/static/app.js?v=20260920-reimbursement"></script>
+    <script src="/static/ambient-workspace.js?v=20261003-ambient"></script>
+    <script src="/static/personal-profile.js?v=20261004-funding-1"></script>
+    <script src="/static/app.js?v=20261004-motion-2"></script>
 </body>
 </html>

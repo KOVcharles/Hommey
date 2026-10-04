@@ -139,8 +139,7 @@ async def test_live_complete_trip_uses_real_policy_and_planner():
         assert name=='search_policy'
         return 'policy',await run_blocking(policy._policy,request.query)
     service.execute=execute
-    snapshot=json.loads(Path('webui_new/static/design-demos/journey-flow-assets/data.json').read_text(encoding='utf-8'))
-    anchor=await service.travel.places.verify(snapshot['places'][0]['place_id'])
+    anchor=await service.travel.places.verify('B00170B41U')
     fields=trip(False)
     fields.update(work_location=anchor.name,work_location_verified=anchor.model_dump(mode='json'))
     scope=Scope(user_id='complete-trip-readonly-probe',session_id='complete-trip-probe',request_id='complete-trip-probe')

@@ -54,7 +54,7 @@ async def test_expired_stale_result_and_sources_readable_but_not_deliverable(dis
     if discarded:
         turn.state["discarded_results"] = ["history"]
     read = await turn.invoke_main({}, {"name": "read_result", "arguments": {"result_id": "history"}})
-    assert read["stale"] and read["expired"] and read["discarded"] == discarded
+    assert read["stale"] and read["expired"] and read.get("discarded", False) == discarded
     assert read["status"] == turn.work_index()[0]["status"] == "success"
     source_read = await turn.invoke_main({}, {"name": "read_source", "arguments": {"source_id": source["id"]}})
     assert source_read["stale"] and source_read["expired"] and source_read["data"]["city"] == "上海"
@@ -76,13 +76,15 @@ async def test_ordinary_followup_reads_previous_work_without_replaying_children_
     services = ConversationServices()
     store = ConversationStore(services)
     seen = []
+    services.history = [{"role": "user", "content": "之前的天气"},
+        {"role": "assistant", "content": "历史天气", "result_ids": ["history"]}]
     async def model(messages, **kwargs):
         assert role_of(messages) is None
-        payload = json.loads(messages[1]["content"])
+        payload = model_payload(messages)
         seen.append(deepcopy(payload))
         if not outputs(messages):
-            assert not payload["work"]
-            assert payload["reference_results"][0]["result_id"] == "history" and payload["reference_results"][0]["stale"]
+            assert "work" not in payload
+            assert payload["result_status"][0]["result_id"] == "history" and payload["result_status"][0]["stale"]
             return reply(("read_result", {"result_id": "history"}))
         assert outputs(messages)[0]["summary"] == "历史天气"
         return reply(("finish", {"kind": "ask", "question": "历史资料已过期，需要查询哪天？"}))
@@ -113,10 +115,10 @@ async def test_form_payload_full_fields_and_repeated_form_are_idempotent_across_
         output = await runtime.run(scope(number), text, trip_input=fields)
         services.history.append({"role": "assistant", "content": output["response"]})
     assert store.writes == 1 and len(payloads) == 2
-    assert all(set(p) == {"context_kind", "request_id", "dialogue_message_count", "facts", "work", "reference_results", "conversation", "today"} for p in payloads)
+    assert all("work" not in p and "reference_results" not in p for p in payloads)
     assert all(p["conversation"][-1]["content"] == text for p in payloads)
     assert payloads[-1]["facts"] == fields
-    assert len(payloads[-1]["work"]) == 1 and len(payloads[-1]["reference_results"]) == 1
+    assert payloads[-1]["committed_result"]
     assert "status" not in payloads[-1]["facts"]
 
 
@@ -126,7 +128,8 @@ async def test_attachment_text_is_available_to_parent_and_extractor():
     async def model(messages, **kwargs):
         payload = model_payload(messages)
         seen.append(payload)
-        assert "附件中的会议安排" in payload["conversation"][-1]["content"]
+        material = payload.get("input_material") or payload["conversation"][-1]["content"]
+        assert "附件中的会议安排" in material
         if role_of(messages) == "trip_context":
             return reply(("report", {"status": "needs_input", "summary": "请确认附件中的行程信息", "data": {"trip": {}, "field_sources": {}}}))
         if not outputs(messages):
@@ -149,15 +152,16 @@ async def test_apply_updates_visible_facts_and_staleness_before_next_model_call(
         if role_of(messages) == "trip_context":
             return reply(("report", {"summary": "目的地改为南京", "data": {
                 "trip": {"destination": "南京"}, "field_sources": {"destination": "南京"}}}))
-        payload = json.loads(messages[1]["content"])
-        observed.append(deepcopy(payload))
+        observed.append(deepcopy(messages))
         if not outputs(messages):
             return reply(("delegate", {"role": "trip_context", "task": "修改目的地"}))
         return reply(("finish", {"kind": "ask", "question": "何时出发？"}))
     await Supervisor(model, services, store, CONFIG).run(scope(1), "目的地改为南京")
     assert len(observed) == 2
-    assert observed[0]["reference_results"][0]["stale"] is False
-    assert observed[1]["reference_results"][0]["stale"] is True and observed[1]["facts"]["destination"] == "南京"
+    assert observed[0][0] == observed[1][0]  # snapshot stays fixed within the turn
+    receipt = outputs(observed[1])[-1]
+    assert receipt["committed"] and receipt["facts"]["destination"] == "南京"
+    assert old.result_id in receipt["stale_results"]
 
 
 def test_facts_exclude_internal_provider_and_storage_data():
@@ -218,7 +222,9 @@ async def test_legacy_checkpoint_resume_keeps_operation_identity_and_pending_que
     saved = store.rows[(SCOPE.user_id, SCOPE.request_id)]["checkpoint"]
     assert saved["applied_results"] == [stored.result_id]
     assert "pending_input" not in saved and "work_context" not in saved
-    assert set(json.loads(saved["main"]["messages"][1]["content"])) == {"facts", "work", "conversation", "today"}
+    assert saved["main"]["context_version"] == 2
+    assert saved["main"]["messages"][0] == {"role": "user", "content": text}
+    assert "conversation" not in saved["main"]["snapshot"]
 
 
 @pytest.mark.asyncio
@@ -288,9 +294,16 @@ async def test_business_context_reads_whole_messages_without_summary_pipeline():
             statements.append((sql, params))
 
         def fetchall(self):
-            return [{"role": "user", "content": "北京"}, {"role": "assistant", "content": content}]
+            if "supervisor_runs" in statements[-1][0]:
+                return []
+            return [{"role": "user", "content": "北京", "request_id": "new", "native_allowed": True},
+                {"role": "assistant", "content": content, "request_id": "old", "native_allowed": True,
+                "answer_document": {"sections": [{"goal_id": "result_report"}, {"goal_id": "result_report"}, {"title": "追问"}]}}]
     memory = SimpleNamespace(long_term=SimpleNamespace(pool=Database()), get_active_trip=lambda **kwargs: {})
     context = await BusinessServices(memory).context(SCOPE)
     assert context["recent"][0]["content"] == content and len(content) > 1400
-    assert len(statements) == 1 and "session_summaries" not in statements[0][0]
+    assert context["recent"][0]["result_ids"] == ["result_report"]
+    assert "result_ids" not in context["recent"][1]
+    assert len(statements) == 2 and "session_summaries" not in statements[0][0]
+    assert "m.request_id<>%s" in statements[0][0] and context["current_excluded"]
     assert statements[0][1][0] == SCOPE.user_id

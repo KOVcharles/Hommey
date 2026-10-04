@@ -22,7 +22,8 @@ async def main():
         "work_location_verified": anchor.model_dump(mode="json")}
     board = await collect_options(service, trip)
     output = options_output(board)
-    target = Path("webui_new/static/design-demos/trip-choices-live.json")
+    target = Path("tmp/trip-choices-live.json")
+    target.parent.mkdir(parents=True, exist_ok=True)
     target.write_text(json.dumps(output["answer_document"], ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps({"city": anchor.city, "anchor": anchor.name, "train": board.train_state.model_dump(),
         "hotel": board.hotel_state.model_dump(), "train_count": len(board.trains),

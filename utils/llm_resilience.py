@@ -3,10 +3,9 @@ LLM 连接与可用性：重试退避、可重试错误判断、健康检查
 """
 import asyncio
 import logging
-import time
 from typing import TypeVar, Callable, Awaitable, Tuple
 
-from .circuit_breaker import CircuitBreaker, CircuitOpenError
+from .circuit_breaker import CircuitOpenError
 
 logger = logging.getLogger(__name__)
 

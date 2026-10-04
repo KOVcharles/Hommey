@@ -287,8 +287,7 @@ return state or 'closed'
 class RedisCircuitBreaker:
     """Async-native, Redis-backed circuit breaker shared across workers.
 
-    全部方法为 async；调用方须 await。与旧的同步 `utils.circuit_breaker.CircuitBreaker`
-    不互通，旧类保留给遗留同步调用。
+    全部方法为 async；调用方须 await。状态迁移通过 Redis 原子操作协调。
     """
 
     def __init__(
