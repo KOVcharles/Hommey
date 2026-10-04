@@ -17,6 +17,7 @@
     <link rel="stylesheet" href="/static/markdown.css?v=20261003-output">
     <link rel="stylesheet" href="/static/information-card.css?v=20261003-output">
     <link rel="stylesheet" href="/static/ambient-workspace.css?v=20261004-navigation">
+    <link rel="stylesheet" href="/static/settings.css?v=20261004-sidebar">
 </head>
 <body class="chat-page" data-user-id="{{ user_id }}" th:attr="data-user-id=${userId}">
     <div id="initOverlay" class="init-overlay">
@@ -358,59 +359,75 @@
         <button id="deleteSessionButton" class="danger" type="button">删除</button>
     </div>
 
-    <section id="settingsLayer" class="modal-layer" aria-label="设置">
-        <div class="settings-modal">
-            <header class="modal-head">
-                <h2>设置</h2>
-                <button id="settingsClose" class="icon-button" type="button" aria-label="关闭">
-                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="m6 6 12 12M18 6 6 18"/></svg>
+    <section id="settingsLayer" class="modal-layer" aria-hidden="true">
+        <div class="settings-modal" role="dialog" aria-modal="true" aria-labelledby="settingsTitle" data-section="appearance">
+            <aside class="settings-sidebar">
+                <h2 id="settingsTitle">设置</h2>
+                <nav class="settings-nav" role="tablist" aria-label="设置分类" aria-orientation="vertical">
+                    <p class="settings-nav-label">偏好设置</p>
+                    <button id="settingsAppearanceTab" class="settings-nav-button active" type="button" role="tab" data-settings-section="appearance" aria-controls="settingsAppearancePanel" aria-selected="true">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M4 7h7m4 0h5M4 17h11m4 0h1"/><circle cx="13" cy="7" r="2"/><circle cx="17" cy="17" r="2"/></svg><span>外观</span>
+                    </button>
+                    <p class="settings-nav-label">个人信息</p>
+                    <button id="settingsBasicTab" class="settings-nav-button" type="button" role="tab" data-settings-section="basic" aria-controls="settingsBasicPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><circle cx="12" cy="8" r="4"/><path d="M5 21v-2a7 7 0 0 1 14 0v2"/></svg><span>基本资料</span>
+                    </button>
+                    <button id="profileIdentityEntry" class="settings-nav-button" type="button" role="tab" data-settings-section="identity" aria-controls="settingsIdentityPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="5" width="18" height="15" rx="3"/><path d="M9 5V3m6 2V3m-9 9h3m-3 4h6m3-4h3m-3 4h3"/></svg><span>报销身份</span>
+                    </button>
+                    <button id="settingsFundingTab" class="settings-nav-button" type="button" role="tab" data-settings-section="funding" aria-controls="settingsFundingPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="M20 8V6a2 2 0 0 0-2-2H6a3 3 0 0 0 0 6h14v10H6a3 3 0 0 1-3-3V7"/><path d="M20 12h-4a2 2 0 0 0 0 4h4"/></svg><span>常用经费</span>
+                    </button>
+                    <button id="settingsPreferencesTab" class="settings-nav-button" type="button" role="tab" data-settings-section="preferences" aria-controls="settingsPreferencesPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m22 2-7 20-4-9-9-4 20-7ZM11 13l5-5"/></svg><span>差旅偏好</span>
+                    </button>
+                    <button id="settingsTripTab" class="settings-nav-button" type="button" role="tab" data-settings-section="trip" aria-controls="settingsTripPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><rect x="3" y="7" width="18" height="14" rx="3"/><path d="M8 7V5a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2M3 12a25 25 0 0 0 18 0m-9 0v3"/></svg><span>当前出差任务</span>
+                    </button>
+                    <p class="settings-nav-label">账户管理</p>
+                    <button id="settingsAccountTab" class="settings-nav-button" type="button" role="tab" data-settings-section="account" aria-controls="settingsAccountPanel" aria-selected="false" tabindex="-1">
+                        <svg viewBox="0 0 24 24" aria-hidden="true"><path d="m12 3 8 3v6c0 5-8 9-8 9s-8-4-8-9V6l8-3Z"/><path d="m8 12 3 3 5-6"/></svg><span>数据与账户</span>
+                    </button>
+                </nav>
+                <div class="settings-account"><span class="account-avatar" th:text="${#strings.toUpperCase(#strings.substring(userId,0,1))}">{{ user_id[0:1].upper() if user_id else 'U' }}</span><strong id="panelName" th:text="${userId}">{{ user_id }}</strong></div>
+            </aside>
+            <div class="settings-content">
+                <button id="settingsClose" class="icon-button settings-close" type="button" aria-label="关闭设置">
+                    <svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="m6 6 12 12M18 6 6 18"/></svg>
                 </button>
-            </header>
-            <div class="settings-body">
-                <button id="accountRow" class="account-row" type="button"><span class="account-avatar" th:text="${#strings.toUpperCase(#strings.substring(userId,0,1))}">{{ user_id[0:1].upper() if user_id else 'U' }}</span><span class="account-copy"><strong id="panelName" th:text="${userId}">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span></button>
-                <section class="settings-section">
-                    <p class="settings-label">外观</p>
-                    <div class="settings-card">
-                        <div class="setting-row">
-                            <div><div class="setting-title">显示模式</div><div class="setting-note">默认跟随系统</div></div>
-                            <div class="theme-tabs">
-                                <button class="theme-tab active" type="button" data-theme-option="system">自动</button>
-                                <button class="theme-tab" type="button" data-theme-option="light">浅色</button>
-                                <button class="theme-tab" type="button" data-theme-option="dark">深色</button>
-                            </div>
+                <header class="settings-panel-heading"><p id="settingsPanelGroup">偏好设置</p><h2 id="settingsPanelTitle">外观</h2><p id="settingsPanelDescription">让工作界面更合你的习惯。</p></header>
+                <div class="settings-panels">
+                    <section id="settingsAppearancePanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsAppearanceTab">
+                        <h3>显示模式</h3><p class="settings-description">选择浅色、深色，或跟随系统。</p>
+                        <div class="settings-theme-options" role="group" aria-label="显示模式">
+                            <button class="theme-tab settings-theme-card active" type="button" data-theme-option="system" aria-pressed="true"><span class="settings-theme-preview preview-system" aria-hidden="true"><span></span><span><b></b><i></i><i></i></span></span><span class="settings-theme-name">自动<span class="settings-theme-dot" aria-hidden="true"></span></span></button>
+                            <button class="theme-tab settings-theme-card" type="button" data-theme-option="light" aria-pressed="false"><span class="settings-theme-preview preview-light" aria-hidden="true"><span></span><span><b></b><i></i><i></i></span></span><span class="settings-theme-name">浅色<span class="settings-theme-dot" aria-hidden="true"></span></span></button>
+                            <button class="theme-tab settings-theme-card" type="button" data-theme-option="dark" aria-pressed="false"><span class="settings-theme-preview preview-dark" aria-hidden="true"><span></span><span><b></b><i></i><i></i></span></span><span class="settings-theme-name">深色<span class="settings-theme-dot" aria-hidden="true"></span></span></button>
                         </div>
-                        <div class="setting-row">
-                            <div><div class="setting-title">界面动效</div><div class="setting-note">路线和界面过渡</div></div>
-                            <button id="motionToggle" class="toggle on" type="button" role="switch" aria-checked="true"></button>
-                        </div>
-                    </div>
-                </section>
-
-                <section class="settings-section">
-                    <p class="settings-label">个人信息</p>
-                    <div class="settings-card">
-                        <button class="settings-action" type="button" data-profile-step="basic"><span>基本资料</span><span class="profile-entry-copy"><span id="profileBasicSummary">待补充</span><span>›</span></span></button>
-                        <button id="profileIdentityEntry" class="settings-action" type="button" data-profile-step="identity"><span>报销身份</span><span class="profile-entry-copy"><span id="profileIdentitySummary">待补充</span><span>›</span></span></button>
-                        <button class="settings-action" type="button" data-profile-step="funding"><span>常用经费</span><span class="profile-entry-copy"><span id="profileFundingSummary">待补充</span><span>›</span></span></button>
-                        <details class="settings-details">
-                            <summary><span>差旅偏好</span><span>›</span></summary>
-                            <div id="prefList" class="pref-list"><div class="empty-state">正在读取偏好。</div></div>
-                        </details>
-                        <details class="settings-details">
-                            <summary><span>当前出差任务</span><span>›</span></summary>
-                            <div id="activeTrip" class="active-trip"><div class="empty-state">正在读取行程。</div></div>
-                        </details>
-                    </div>
-                </section>
-
-                <section class="settings-section">
-                    <p class="settings-label">数据与账户</p>
-                    <div class="settings-card">
-                        <button id="clearHistoryButton" class="settings-action" type="button"><span>清空聊天记录</span><span>›</span></button>
-                        <a id="adminLink" href="/admin/skills" hidden>Skill 管理</a>
-                        <a class="settings-action danger logout-link" href="/"><span>退出登录</span><span>›</span></a>
-                    </div>
-                </section>
+                        <div class="setting-row settings-motion-row"><div><div class="setting-title">界面动效</div><div class="setting-note">页面切换时使用柔和过渡</div></div><button id="motionToggle" class="toggle on" type="button" role="switch" aria-label="界面动效" aria-checked="true"></button></div>
+                        <div class="settings-type-preview"><p>界面文字预览</p><strong>每一段旅程，都井然有序。</strong><p>基本资料 · 差旅偏好 · 常用经费</p></div>
+                    </section>
+                    <section id="settingsBasicPanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsBasicTab" hidden>
+                        <dl class="settings-summary"><div><dt>姓名</dt><dd id="settingsRealName">待补充</dd></div><div><dt>所在机构</dt><dd id="settingsInstitution">待补充</dd></div><div><dt>身份与单位</dt><dd id="profileBasicSummary">待补充</dd></div></dl>
+                        <button class="settings-edit-button" type="button" data-profile-step="basic">编辑基本资料</button>
+                    </section>
+                    <section id="settingsIdentityPanel" class="settings-panel" role="tabpanel" aria-labelledby="profileIdentityEntry" hidden>
+                        <div class="settings-info-card"><h3>报销身份</h3><p id="profileIdentitySummary">待补充</p></div><button class="settings-edit-button" type="button" data-profile-step="identity">编辑报销身份</button>
+                    </section>
+                    <section id="settingsFundingPanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsFundingTab" hidden>
+                        <div class="settings-info-card"><h3>常用经费项目</h3><p id="profileFundingSummary">待补充</p></div><button class="settings-edit-button" type="button" data-profile-step="funding">管理经费项目</button>
+                    </section>
+                    <section id="settingsPreferencesPanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsPreferencesTab" hidden>
+                        <div id="prefList" class="pref-list"><div class="empty-state">正在读取偏好。</div></div><p class="settings-description settings-panel-help">在对话中告诉 Hommey 你的出发地、交通和住宿偏好。</p>
+                    </section>
+                    <section id="settingsTripPanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsTripTab" hidden>
+                        <div id="activeTrip" class="active-trip"><div class="empty-state">正在读取行程。</div></div>
+                    </section>
+                    <section id="settingsAccountPanel" class="settings-panel" role="tabpanel" aria-labelledby="settingsAccountTab" hidden>
+                        <div class="settings-account-actions"><button id="clearHistoryButton" class="settings-action" type="button"><span><strong>清空聊天记录</strong><small>删除当前账户的历史对话</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></button><a id="adminLink" class="settings-action" href="/admin/skills" hidden>Skill 管理</a><a class="settings-action danger logout-link" href="/"><span><strong>退出登录</strong><small>退出当前账户</small></span><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m9 5 7 7-7 7"/></svg></a></div>
+                    </section>
+                </div>
+                <footer class="settings-footer"><svg viewBox="0 0 24 24" aria-hidden="true"><path d="m5 12 4 4L19 6"/></svg><span>外观偏好自动保存</span></footer>
             </div>
         </div>
     </section>
@@ -530,8 +547,8 @@
     <script src="/static/information-card.js?v=20261003-output"></script>
     <script src="/static/execution-plan.js?v=20260914-plan-disclosure"></script>
     <script src="/static/session-runtime.js?v=20260919-in-page-parallel"></script>
-    <script src="/static/ambient-workspace.js?v=20261003-ambient"></script>
-    <script src="/static/personal-profile.js?v=20261004-funding-1"></script>
-    <script src="/static/app.js?v=20261004-motion-2"></script>
+    <script src="/static/ambient-workspace.js?v=20261004-settings-sidebar"></script>
+    <script src="/static/personal-profile.js?v=20261004-settings-sidebar"></script>
+    <script src="/static/app.js?v=20261004-settings-sidebar"></script>
 </body>
 </html>

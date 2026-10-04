@@ -110,11 +110,7 @@ public class TravelController {
         "role",
         account.role(),
         "initialized",
-        true,
-        "member_level",
-        "白银会员",
-        "member_tag",
-        "差旅常客");
+        true);
   }
 
   @GetMapping("/status")

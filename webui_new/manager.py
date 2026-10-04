@@ -312,8 +312,6 @@ class HommeyWebInstance:
             "user_id": self.user_id,
             "name_display": name_display,
             "preferences": prefs["preferences"],
-            "member_level": "白银会员",
-            "member_tag": "差旅常客",
         }
 
     async def get_active_trip(self, session_id: str) -> dict:

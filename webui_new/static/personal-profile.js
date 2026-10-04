@@ -436,10 +436,10 @@
         summary();
         return stored;
     }
-    function show(onboarding, requestedStep = 'basic') {
+    function show(onboarding, requestedStep = 'basic', source = document.activeElement) {
         form.style.height = '';
         firstRun = onboarding; step = requestedStep; draft = clone(stored.profile);
-        returnFocus = document.activeElement;
+        returnFocus = source;
         fromSettings = document.getElementById('settingsLayer').classList.contains('open');
         document.getElementById('settingsLayer').classList.remove('open');
         title.textContent = onboarding ? '先认识一下你' : '个人信息';
@@ -456,9 +456,10 @@
         form.style.height = `${form.offsetHeight}px`;
         for (const animation of activeMotion.keys()) animation.cancel();
         layer.classList.remove('open'); layer.setAttribute('aria-hidden', 'true');
-        document.getElementById('appShell').inert = false;
+        document.getElementById('appShell').inert = fromSettings;
         if (fromSettings) document.getElementById('settingsLayer').classList.add('open');
-        (returnFocus?.isConnected ? returnFocus : document.getElementById('homeInput'))?.focus();
+        (returnFocus?.isConnected && returnFocus.getClientRects().length ? returnFocus
+            : document.getElementById(fromSettings ? 'settingsClose' : 'homeInput'))?.focus();
     }
     form.addEventListener('transitionend', event => {
         if (event.target === form && event.propertyName === 'opacity' && !layer.classList.contains('open')) form.style.height = '';
@@ -500,7 +501,7 @@
     document.querySelectorAll('[data-profile-step]').forEach(button => button.addEventListener('click', async () => {
         if (!api || busy) return;
         button.disabled = true;
-        try { await load(); show(false, button.dataset.profileStep); }
+        try { await load(); show(false, button.dataset.profileStep, button); }
         catch (err) { api.onError?.(err.message || '暂时无法读取个人资料'); }
         finally { button.disabled = false; }
     }));

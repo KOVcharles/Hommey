@@ -252,7 +252,13 @@ class BackendIntegrationTest {
                 .value())
         .isEqualTo(404);
     String page = http.getForObject("/chat/1", String.class);
-    assertThat(page).contains("data-user-id=\"1\"").doesNotContain("{{ user_id");
+    assertThat(page)
+        .contains(
+            "data-user-id=\"1\"",
+            "class=\"settings-sidebar\"",
+            "id=\"settingsBasicPanel\"",
+            "id=\"settingsFundingTab\"")
+        .doesNotContain("{{ user_id", "id=\"panelLevel\"");
     String landing = http.getForObject("/", String.class);
     assertThat(landing)
         .contains("id=\"authScenery\"", "/static/auth-background.js", "href=\"/login\"")
@@ -266,6 +272,9 @@ class BackendIntegrationTest {
             "/static/auth-background.js",
             "/static/auth-transition.js",
             "/static/auth.css",
+            "/static/settings.css",
+            "/static/fonts/inter-latin.woff2",
+            "/static/fonts/settings-sans.woff2",
             "/static/travel/airport.webp",
             "/static/travel/train.webp",
             "/static/travel/arrival.webp",

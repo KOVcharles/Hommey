@@ -26,7 +26,7 @@
     const sessionPopover = document.getElementById('sessionPopover');
     const renameInput = document.getElementById('renameInput');
     const panelName = document.getElementById('panelName');
-    const panelLevel = document.getElementById('panelLevel');
+    let settingsReturnFocus = null;
     const prefList = document.getElementById('prefList');
     const activeTrip = document.getElementById('activeTrip');
     const toast = document.getElementById('toast');
@@ -482,7 +482,6 @@
         });
         document.getElementById('sidebarToggle').addEventListener('click', event => openSidebar(event.currentTarget));
         document.getElementById('accountButton').addEventListener('click', openSettings);
-        document.getElementById('accountRow').addEventListener('click', openSettings);
         document.getElementById('sidebarClose').addEventListener('click', closeSidebar);
         scrim.addEventListener('click', closeSidebar);
         document.getElementById('homeButton').addEventListener('click', showHome);
@@ -493,6 +492,7 @@
         knowledgeExitButton.addEventListener('click', returnFromKnowledge);
         document.getElementById('settingsButton').addEventListener('click', openSettings);
         document.getElementById('settingsClose').addEventListener('click', closeSettings);
+        bindSettingsNavigation();
         document.getElementById('clearHistoryButton').addEventListener('click', confirmClearHistory);
         document.getElementById('renameSessionButton').addEventListener('click', openRenameDialog);
         document.getElementById('deleteSessionButton').addEventListener('click', confirmDeleteSession);
@@ -711,7 +711,7 @@
 
             showHome();
             window.HommeyPersonalProfile?.initialize({ userId, fetchJson, ready: readyForProfile,
-                onUpdate: profile => { panelName.textContent = profile.basic_info.real_name || userSummaryName; },
+                onUpdate: applySettingsProfile,
                 onSaved: () => { showToast('个人资料已保存'); },
                 onError: message => showToast(message),
             });
@@ -1264,7 +1264,6 @@
             applyKnowledgePermissions(data.role === 'admin');
             userSummaryName = data.name_display || userId;
             panelName.textContent = window.HommeyPersonalProfile?.applyDisplayName(data.name_display || userId) || data.name_display || userId;
-            panelLevel.textContent = data.member_level || '个人账户';
             prefList.replaceChildren();
             const preferences = Array.isArray(data.preferences) ? data.preferences : [];
             if (!preferences.length) {
@@ -2977,16 +2976,114 @@
         sessionPopover.hidden = true;
     }
 
-    function openSettings() {
+    const settingsSections = {
+        appearance: ['偏好设置', '外观', '让工作界面更合你的习惯。'],
+        basic: ['个人信息', '基本资料', '用于完善出差与报销信息。'],
+        identity: ['个人信息', '报销身份', '按实际情况补充适用的报销身份。'],
+        funding: ['个人信息', '常用经费', '管理日常使用的经费项目。'],
+        preferences: ['个人信息', '差旅偏好', '查看已记录的住宿与交通习惯。'],
+        trip: ['个人信息', '当前出差任务', '查看当前对话中的出差安排。'],
+        account: ['账户管理', '数据与账户', '管理聊天记录与登录状态。'],
+    };
+
+    function selectSettingsSection(section) {
+        const selected = settingsLayer.querySelector(`[data-settings-section="${section}"]`);
+        if (!selected || selected.hidden) return;
+        settingsLayer.querySelector('.settings-modal').dataset.section = section;
+        settingsLayer.querySelectorAll('[data-settings-section]').forEach(button => {
+            const active = button === selected;
+            button.classList.toggle('active', active);
+            button.setAttribute('aria-selected', String(active));
+            button.tabIndex = active ? 0 : -1;
+            document.getElementById(button.getAttribute('aria-controls')).hidden = !active;
+        });
+        const [group, title, description] = settingsSections[section];
+        document.getElementById('settingsPanelGroup').textContent = group;
+        document.getElementById('settingsPanelTitle').textContent = title;
+        document.getElementById('settingsPanelDescription').textContent = description;
+        settingsLayer.querySelector('.settings-panels').scrollTop = 0;
+        if (section === 'trip') loadActiveTrip();
+    }
+
+    function applySettingsProfile(profile) {
+        const basic = profile.basic_info;
+        const name = basic.real_name || userSummaryName;
+        panelName.textContent = name;
+        settingsLayer.querySelector('.account-avatar').textContent = Array.from(name)[0]?.toUpperCase() || 'U';
+        document.getElementById('settingsRealName').textContent = basic.real_name || '待补充';
+        document.getElementById('settingsInstitution').textContent = basic.institution || '待补充';
+        if (document.getElementById('profileIdentityEntry').hidden
+            && settingsLayer.querySelector('.settings-modal').dataset.section === 'identity') {
+            selectSettingsSection('basic');
+        }
+    }
+
+    function bindSettingsNavigation() {
+        const navigation = settingsLayer.querySelector('.settings-nav');
+        const compactNavigation = window.matchMedia('(max-width: 440px)');
+        const syncOrientation = () => navigation.setAttribute('aria-orientation', compactNavigation.matches ? 'horizontal' : 'vertical');
+        syncOrientation();
+        compactNavigation.addEventListener('change', syncOrientation);
+        navigation.addEventListener('click', event => {
+            const button = event.target.closest('[data-settings-section]');
+            if (button) selectSettingsSection(button.dataset.settingsSection);
+        });
+        navigation.addEventListener('keydown', event => {
+            const horizontal = compactNavigation.matches;
+            const previous = horizontal ? 'ArrowLeft' : 'ArrowUp';
+            const next = horizontal ? 'ArrowRight' : 'ArrowDown';
+            if (![previous, next, 'Home', 'End'].includes(event.key)) return;
+            const buttons = [...navigation.querySelectorAll('[data-settings-section]')].filter(button => !button.hidden);
+            const index = buttons.indexOf(document.activeElement);
+            if (index < 0) return;
+            event.preventDefault();
+            const target = event.key === 'Home' ? buttons[0] : event.key === 'End' ? buttons.at(-1)
+                : buttons[(index + (event.key === next ? 1 : -1) + buttons.length) % buttons.length];
+            selectSettingsSection(target.dataset.settingsSection);
+            target.focus();
+        });
+        settingsLayer.addEventListener('keydown', event => {
+            if (!settingsLayer.classList.contains('open') || confirmLayer.classList.contains('open')) return;
+            if (event.key === 'Escape') {
+                event.preventDefault();
+                event.stopPropagation();
+                closeSettings();
+            }
+            if (event.key !== 'Tab') return;
+            const controls = [...settingsLayer.querySelectorAll('button:not([tabindex="-1"]), a[href], input, select')]
+                .filter(element => !element.disabled && element.getClientRects().length);
+            const first = controls[0], last = controls.at(-1);
+            if (event.shiftKey && document.activeElement === first) { event.preventDefault(); last?.focus(); }
+            else if (!event.shiftKey && document.activeElement === last) { event.preventDefault(); first?.focus(); }
+        });
+        const sync = () => {
+            const open = settingsLayer.classList.contains('open');
+            settingsLayer.setAttribute('aria-hidden', String(!open));
+            appShell.inert = open || document.getElementById('personalProfileLayer').classList.contains('open');
+        };
+        new MutationObserver(sync).observe(settingsLayer, { attributes: true, attributeFilter: ['class'] });
+    }
+
+    function openSettings(event) {
+        settingsReturnFocus = event?.currentTarget || document.activeElement;
         closeSidebar();
         settingsLayer.classList.add('open');
+        settingsLayer.setAttribute('aria-hidden', 'false');
+        appShell.inert = true;
+        document.getElementById('settingsClose').focus({ preventScroll: true });
     }
 
     function closeSettings() {
         settingsLayer.classList.remove('open');
+        settingsLayer.setAttribute('aria-hidden', 'true');
+        appShell.inert = false;
+        const target = settingsReturnFocus?.getClientRects().length && !settingsReturnFocus.closest('[inert]')
+            ? settingsReturnFocus : document.getElementById('accountButton');
+        target?.focus({ preventScroll: true });
     }
 
     function closeLayer(id) {
+        if (id === 'settingsLayer') { closeSettings(); return; }
         document.getElementById(id)?.classList.remove('open');
         if (id === 'quickTripLayer' && quickTripLayer.classList.contains('is-inline')) {
             quickTripLayer.classList.remove('is-inline');
@@ -3003,6 +3100,7 @@
         else document.documentElement.removeAttribute('data-theme');
         document.querySelectorAll('[data-theme-option]').forEach((button) => {
             button.classList.toggle('active', button.dataset.themeOption === theme);
+            button.setAttribute('aria-pressed', String(button.dataset.themeOption === theme));
         });
 
         const motionEnabled = localStorage.getItem(MOTION_KEY) !== 'off';
@@ -3017,6 +3115,7 @@
         else document.documentElement.removeAttribute('data-theme');
         document.querySelectorAll('[data-theme-option]').forEach((button) => {
             button.classList.toggle('active', button.dataset.themeOption === theme);
+            button.setAttribute('aria-pressed', String(button.dataset.themeOption === theme));
         });
     }
 

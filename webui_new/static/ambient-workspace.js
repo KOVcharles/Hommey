@@ -194,7 +194,7 @@
     document.getElementById('workspaceHistoryButton').addEventListener('click', () => showHistory(false));
     document.getElementById('workspaceBack').addEventListener('click', () => {showOverview();document.getElementById('workspaceHistoryButton').focus();});
     tripButton.addEventListener('click', () => tripSession ? callbacks.openSession?.(tripSession) : callbacks.startTrip?.());
-    document.getElementById('settingsButton').addEventListener('click', () => {document.querySelector('#prefList').closest('details').open = true;});
+    document.getElementById('settingsButton').addEventListener('click', () => document.getElementById('settingsPreferencesTab').click());
     window.addEventListener('pointermove', event => {
         if (!finePointer.matches || isOpen() || shell.dataset.view !== 'home') return;
         proximity.pointerX = event.clientX;
