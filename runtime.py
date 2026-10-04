@@ -70,15 +70,23 @@ def create_agent_runtime(
 
     model = create_model(LLM_CONFIG)
 
-    memory_manager = MemoryManager(
-        user_id=user_id,
-        session_id=session_id,
-    )
+    import os
+    if os.getenv("HOMMEY_BUSINESS_API_URL"):
+        from ai_service.business import RemoteMemoryManager, RemoteBusinessServices, RemoteRunStore
+        memory_manager = RemoteMemoryManager(user_id, session_id)
+    else:
+        memory_manager = MemoryManager(user_id=user_id, session_id=session_id)
 
     pool = getattr(memory_manager.long_term, "pool", None)
     if pool is None:
         raise ValueError("The travel agent requires PostgreSQL memory")
-    supervisor = Supervisor(model, BusinessServices(memory_manager), RunStore(pool), SUPERVISOR_CONFIG)
+    if os.getenv("HOMMEY_BUSINESS_API_URL"):
+        services = RemoteBusinessServices(memory_manager)
+        store = RemoteRunStore(pool, memory_manager.client)
+    else:
+        services = BusinessServices(memory_manager)
+        store = RunStore(pool)
+    supervisor = Supervisor(model, services, store, SUPERVISOR_CONFIG)
 
     return AgentRuntime(
         model=model,

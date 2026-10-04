@@ -5,7 +5,7 @@ env/
 .env/
 
 # Git
-.git/
+.git
 .gitignore
 .gitattributes
 
@@ -61,3 +61,5 @@ tmp/
 .repro/
 .codex-resume-work/
 node_modules/
+.secrets/
+backend/target/

@@ -5,7 +5,9 @@
 <h1 align="center">Hommey</h1>
 
 <p align="center">
-  <img src="https://img.shields.io/badge/Python-3.10-3776AB?logo=python&logoColor=white" alt="Python 3.10">
+  <img src="https://img.shields.io/badge/Java-21-ED8B00?logo=openjdk&logoColor=white" alt="Java 21">
+  <img src="https://img.shields.io/badge/Spring_Boot-3.5-6DB33F?logo=springboot&logoColor=white" alt="Spring Boot 3.5">
+  <img src="https://img.shields.io/badge/Python-3.11-3776AB?logo=python&logoColor=white" alt="Python 3.11">
   <img src="https://img.shields.io/badge/FastAPI-0.115.6-009688?logo=fastapi&logoColor=white" alt="FastAPI 0.115.6">
   <img src="https://img.shields.io/badge/PostgreSQL-16-336791?logo=postgresql&logoColor=white" alt="PostgreSQL 16">
   <img src="https://img.shields.io/badge/Redis-7-DC382D?logo=redis&logoColor=white" alt="Redis 7">
@@ -22,22 +24,27 @@ Hommey 是面向组内报销的专用 Agent，帮助组内成员查询报销制�
 
 ## 简要架构
 
-请求从 Web 界面进入 FastAPI，由主 Agent 管理对话并按需调用专门 Agent 与工具，最终返回回答、信息卡片和制度依据。
+本分支采用 Spring Boot 业务后端与 Python AI 服务。浏览器访问 Spring，用户、权限、资料、会话、偏好和行程由 Spring 管理；Python 接收限定用户/会话/请求的内部执行凭证，运行 Agent、RAG 与 AI 数据处理。详细说明见 [工程化开发、部署与回滚指南](docs/spring-python-engineering.md)。
 
-- **界面与 API**：`webui_new/` 提供聊天、资料管理和知识库入口，支持流式回答。
+- **业务后端**：`backend/` 使用标准 Controller / Service / Repository 分层、Spring Security、Bean Validation、Spring JDBC 和 Flyway。
+- **AI 服务**：`ai_service/` 提供内部能力接口，通过业务 API 提交变更；不能直接写入业务表。
+- **界面**：共享 `webui_new/` 页面和静态资源，由 Spring 提供入口并转发 NDJSON 流式回答。
 - **Agent 运行时**：`agent_runtime/` 管理原生消息上下文、任务编排与工具调用，提示词和业务 Skill 分开维护。
 - **制度检索**：`rag/` 对 CQU 文档切片，结合 pgvector 向量检索与 BM25 关键词检索；源文件位于 `data/documents/cqu/`。
 - **数据存储**：PostgreSQL 保存账号、个人资料、会话记录与检索索引；Redis 维护短期会话状态和并发锁。
 
 ## 启动
 
-复制 `.env.example` 为 `.env`，填写模型、嵌入服务、数据库和鉴权配置。CQU 知识库范围使用 `HOMMEY_RAG_SEARCH_SCOPES=cqu/finance`。
+安装 Python 依赖后生成独立开发配置，填写 `.env.engineering` 中的模型与 embedding key。新部署采用独立数据库和数据卷：
 
 ```powershell
-docker compose --env-file .env -f docker/docker-compose.yml up -d --build
+python scripts/prepare_engineering.py
+docker compose --env-file .env.engineering -f docker/docker-compose.engineering.yml up -d --build
 ```
 
-启动后访问 <http://localhost:8000>。注册需要邀请码，维护者可运行 `docker exec hommey-app python scripts/create_invites.py --count 5` 生成。
+启动后访问 <http://localhost:8088>。注册需要邮件配置和邀请码，VS Code 开发与新库邀请码生成步骤见 [工程化指南](docs/spring-python-engineering.md)。
+
+原 Python 单体入口与 `docker/docker-compose.yml` 保留用于旧版本；不能将旧数据库卷直接接入新栈。
 
 首次部署或更新制度文件后，需要通过管理员知识库页面刷新索引。
 

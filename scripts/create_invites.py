@@ -4,6 +4,7 @@ Run from the project root: python scripts/create_invites.py --count 5
 Requires the same HOMMEY_POSTGRES_DSN as the web service.
 """
 import argparse
+import os
 import sys
 from pathlib import Path
 
@@ -22,7 +23,10 @@ def main() -> None:
 
     codes: list[str] = []
     with get_conn() as conn:
-        apply_migration(conn)
+        # This operator-only bootstrap utility retains its legacy behavior.
+        # Spring/Flyway exclusively owns schema changes in engineering mode.
+        if os.getenv("HOMMEY_SCHEMA_OWNER") != "spring":
+            apply_migration(conn)
         with conn.transaction():
             while len(codes) < args.count:
                 code = generate_invite_code()

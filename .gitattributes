@@ -1,0 +1,5 @@
+backend/**/*.java text eol=lf
+backend/pom.xml text eol=lf
+backend/mvnw text eol=lf
+backend/mvnw.cmd text eol=crlf
+docker/engineering/*.sh text eol=lf

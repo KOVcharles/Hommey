@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import logging
+import os
 import sys
 from pathlib import Path
 
@@ -30,7 +31,8 @@ def main() -> int:
     if config.vector_backend != "postgres" or not config.postgres_dsn:
         logging.getLogger(__name__).error("RAG refresh worker requires PostgreSQL vector backend and DSN")
         return 2
-    apply_all_migrations(config.postgres_dsn)
+    if os.getenv("HOMMEY_SCHEMA_OWNER") != "spring":
+        apply_all_migrations(config.postgres_dsn)
     repository = PostgresRAGRefreshJobRepository(
         config.postgres_dsn,
         config.collection_name,

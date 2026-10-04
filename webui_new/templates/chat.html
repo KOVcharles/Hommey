@@ -1,5 +1,5 @@
 <!doctype html>
-<html lang="zh-CN">
+<html lang="zh-CN" xmlns:th="http://www.thymeleaf.org">
 <head>
     <meta charset="utf-8">
     <meta name="viewport" content="width=device-width, initial-scale=1">
@@ -18,7 +18,7 @@
     <link rel="stylesheet" href="/static/information-card.css?v=20261003-output">
     <link rel="stylesheet" href="/static/ambient-workspace.css?v=20261004-navigation">
 </head>
-<body class="chat-page" data-user-id="{{ user_id }}">
+<body class="chat-page" data-user-id="{{ user_id }}" th:attr="data-user-id=${userId}">
     <div id="initOverlay" class="init-overlay">
         <div class="init-card">
             <span class="mini-logo" aria-hidden="true">
@@ -48,7 +48,7 @@
                     <span>信息中心</span>
                 </button>
                 <button id="newChatButton" class="icon-button workspace-new-chat" type="button" aria-label="新对话"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"><path d="M12 5v14M5 12h14"/></svg></button>
-                <button id="accountButton" class="avatar-button" type="button" aria-label="打开账户设置">
+                <button id="accountButton" class="avatar-button" type="button" aria-label="打开账户设置" th:text="${#strings.toUpperCase(#strings.substring(userId,0,1))}">
                     {{ user_id[0:1].upper() if user_id else 'U' }}
                 </button>
             </div>
@@ -367,7 +367,7 @@
                 </button>
             </header>
             <div class="settings-body">
-                <button id="accountRow" class="account-row" type="button"><span class="account-avatar">{{ user_id[0:1].upper() if user_id else 'U' }}</span><span class="account-copy"><strong id="panelName">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span></button>
+                <button id="accountRow" class="account-row" type="button"><span class="account-avatar" th:text="${#strings.toUpperCase(#strings.substring(userId,0,1))}">{{ user_id[0:1].upper() if user_id else 'U' }}</span><span class="account-copy"><strong id="panelName" th:text="${userId}">{{ user_id }}</strong><span id="panelLevel">个人账户</span></span></button>
                 <section class="settings-section">
                     <p class="settings-label">外观</p>
                     <div class="settings-card">

@@ -1,0 +1,14 @@
+FROM python:3.11-slim
+WORKDIR /app
+RUN apt-get update && apt-get install -y --no-install-recommends curl libpq5 && rm -rf /var/lib/apt/lists/*
+COPY requirements.txt requirements.lock ./
+RUN pip install --no-cache-dir -r requirements.txt -c requirements.lock
+COPY . .
+RUN groupadd --gid 10001 hommey && useradd --uid 10001 --gid hommey --no-create-home hommey \
+    && mkdir -p /app/data/documents /app/data/rag_knowledge /app/data/uploads \
+    && chown -R 10001:10001 /app/data
+USER 10001:10001
+ENV PYTHONUNBUFFERED=1 PYTHONDONTWRITEBYTECODE=1 UVICORN_WORKERS=2
+EXPOSE 8000
+HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 CMD curl -fsS http://127.0.0.1:8000/healthz || exit 1
+CMD ["uvicorn", "ai_service.server:app", "--host", "0.0.0.0", "--port", "8000", "--workers", "2"]
