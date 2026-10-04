@@ -47,6 +47,7 @@ wheels/
 .env
 .env.*
 !.env.example
+!.env.engineering.example
 /config.py
 /config.local.py
 *.session.sql
@@ -108,3 +109,9 @@ tmp/
 .repro/
 .codex-resume-work/
 node_modules/
+backend/target/
+.secrets/
+!.vscode/
+.vscode/*
+!.vscode/extensions.json
+!.vscode/launch.json

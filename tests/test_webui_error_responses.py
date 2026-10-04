@@ -104,6 +104,41 @@ async def test_chat_page_rejects_non_numeric_user_id(client):
 
 
 @pytest.mark.anyio
+@pytest.mark.parametrize("api_key", [None, "", "   "])
+async def test_missing_model_credentials_fail_before_runtime_with_actionable_error(client, monkeypatch, api_key):
+    import webui_new.manager as manager_module
+
+    monkeypatch.setitem(manager_module.LLM_CONFIG, "api_key", api_key)
+
+    def unexpected_runtime(**kwargs):
+        pytest.fail("A missing configured key must not initialize the model SDK")
+
+    monkeypatch.setattr(manager_module, "create_agent_runtime", unexpected_runtime)
+
+    async def process(user_id, message, **kwargs):
+        await HommeyWebInstance(user_id).initialize()
+
+    async def stream(user_id, message, **kwargs):
+        await HommeyWebInstance(user_id).initialize()
+        yield {"type": "done"}
+
+    monkeypatch.setattr(manager, "process_message", process)
+    monkeypatch.setattr(manager, "stream_message", stream)
+    headers = {"X-Request-ID": "rid-missing-model"}
+    response = await client.post("/api/u1/chat", json={"message": "酒水报销怎么做？"}, headers=headers)
+    assert response.status_code == 500
+    assert _error(response.json())["code"] == "LLM_NOT_CONFIGURED"
+    assert _error(response.json())["message"] == "AI 服务配置不完整，请联系管理员"
+    assert "api_key" not in response.text
+
+    response = await client.post("/api/u1/chat/stream", json={"message": "酒水报销怎么做？"}, headers=headers)
+    assert json.loads(response.text) == {
+        "type": "error", "code": "LLM_NOT_CONFIGURED", "message": "AI 服务配置不完整，请联系管理员",
+        "request_id": "rid-missing-model", "retryable": False,
+    }
+
+
+@pytest.mark.anyio
 async def test_login_error_has_code_and_request_id(client):
     response = await client.post("/login", json={"user_id": "  "}, headers={"X-Request-ID": "rid-login"})
 

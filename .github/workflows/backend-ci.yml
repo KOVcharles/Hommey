@@ -1,0 +1,56 @@
+name: Business and AI boundary checks
+
+on:
+  pull_request:
+  push:
+    branches: ["codex/spring-python-backend"]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  spring:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "21"
+          cache: maven
+          cache-dependency-path: backend/pom.xml
+      - name: Test against real PostgreSQL and check formatting
+        working-directory: backend
+        run: bash mvnw --batch-mode verify
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: spring-test-results
+          path: backend/target/surefire-reports
+  python:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+      - run: pip install -r requirements-dev.txt
+      - name: Check new Python service formatting
+        run: >-
+          python -m black --check ai_service scripts/prepare_engineering.py
+          scripts/run_ai_service.py tests/test_business_boundary.py tests/test_spring_agent_integration.py
+      - name: Check boundary and retained agent behavior without model calls
+        run: >-
+          python -m pytest -q tests/test_business_boundary.py
+          tests/test_single_runtime.py tests/test_runtime_thinking.py
+          tests/test_supervisor_runtime.py tests/test_supervisor_control.py
+          tests/test_supervisor_context_bounds.py tests/test_native_context.py
+          tests/test_async_memory.py tests/test_web_async_facade.py
+          tests/test_auth_pages.py tests/test_user_profile_context.py
+          tests/test_trip_intake_experience.py tests/test_information_request.py
+          tests/test_attachment_routes.py tests/test_multimodal_chat.py
+          tests/test_knowledge_base_routes.py tests/test_webui_error_responses.py

@@ -44,6 +44,10 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         });
         const dialog = page.locator('#personalProfileLayer');
         const openSettings = async () => { await page.locator(page.viewportSize().width <= 760 ? '#mobileHandle' : '#sidebarToggle').click(); await page.locator('#settingsButton').click(); };
+        const openProfile = async step => {
+            await page.locator(`[data-settings-section="${step}"]`).click();
+            await page.locator(`[data-profile-step="${step}"]`).click();
+        };
         const tab = key => page.locator(`#personalProfileTabs [data-step="${key}"]`);
         const save = page.locator('#personalProfileSave');
         const project = index => page.locator('.profile-page > .profile-project').nth(index);
@@ -185,7 +189,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         await openSettings();
         await expect(page.locator('#profileIdentityEntry')).toBeHidden();
         await page.screenshot({ path: path.join(output, 'settings-student.png'), animations: 'disabled' });
-        await page.locator('[data-profile-step="basic"]').click();
+        await openProfile('basic');
         await expect(page.locator('#profile-student_number')).toHaveValue('000123');
         await page.locator('#profile-personnel_category').selectOption('staff');
         await expect(page.locator('#profile-employee_number')).toBeVisible();
@@ -199,7 +203,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         await expect(dialog).not.toHaveClass(/open/);
         assert.equal(record.profile.policy_identity.professional_position_grade, 2);
         assert.equal(record.profile.basic_info.employee_number, '000789');
-        await page.locator('[data-profile-step="basic"]').click();
+        await openProfile('basic');
         await page.locator('#profile-personnel_category').selectOption('student');
         await tab('funding').click();
         await expect(page.locator('#project-0-name')).toBeHidden();
@@ -236,7 +240,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         assert(Object.values(record.profile.policy_identity).every(value => value === null));
         assert.equal(record.profile.basic_info.employee_number, null);
         console.log('PASS funding accordion animation/reversal, saved cards collapsed, dependency cleanup and project removal');
-        await page.locator('[data-profile-step="funding"]').click();
+        await openProfile('funding');
         await expandProject(0);
         await page.locator('#project-0-name').fill('失败时保留的草稿');
         failSave = true; await save.click();
@@ -246,14 +250,14 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         failSave = false; record.revision += 1; await save.click();
         await expect(page.locator('#personalProfileError')).toContainText('另一页面');
         await page.locator('#personalProfileClose').click();
-        await page.locator('[data-profile-step="funding"]').click();
+        await openProfile('funding');
         await expect(page.locator('#project-0-name')).toBeHidden();
         await expandProject(0);
         await expect(page.locator('#project-0-name')).toHaveValue('教学经费');
         await page.locator('#personalProfileClose').click();
         console.log('PASS failed save keeps draft; concurrent edit cannot overwrite');
         await page.setViewportSize({ width: 390, height: 844 });
-        await page.locator('[data-profile-step="funding"]').click();
+        await openProfile('funding');
         await expect(dialog).toHaveClass(/open/);
         await finish();
         await expect(page.locator('#project-0-name')).toBeHidden();
@@ -282,7 +286,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         console.log('PASS skip persists across page loads');
         await page.setViewportSize({ width: 390, height: 844 });
         await openSettings();
-        await page.locator('[data-profile-step="basic"]').click();
+        await openProfile('basic');
         await expect(dialog).toHaveClass(/open/);
         await expect(page.locator('#profile-personnel_category')).toBeVisible();
         await page.screenshot({ path: path.join(output, 'mobile-basic.png'), animations: 'disabled' });
@@ -297,7 +301,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         await page.keyboard.press('Escape');
         await expect(dialog).not.toHaveClass(/open/);
         console.log('PASS responsive layout, dark mode and keyboard focus');
-        await page.locator('[data-profile-step="basic"]').click();
+        await openProfile('basic');
         await expect(dialog).toHaveClass(/open/);
         await page.evaluate(() => document.documentElement.dataset.motion = 'off');
         await page.locator('#profile-personnel_category').selectOption('student');

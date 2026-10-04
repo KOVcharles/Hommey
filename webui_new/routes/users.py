@@ -61,8 +61,6 @@ def create_users_router(manager):
                 "user_id": user_id,
                 "name_display": user_id,
                 "preferences": [],
-                "member_level": "",
-                "member_tag": "",
                 "initialized": True,
                 "role": current_user.role,
             }

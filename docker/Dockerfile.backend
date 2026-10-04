@@ -1,0 +1,17 @@
+FROM maven:3.9.11-eclipse-temurin-21 AS build
+WORKDIR /workspace
+COPY backend/pom.xml backend/pom.xml
+COPY backend/src backend/src
+COPY webui_new/templates webui_new/templates
+COPY webui_new/static webui_new/static
+RUN --mount=type=cache,target=/root/.m2 mvn -f backend/pom.xml -B -DskipTests package
+
+FROM eclipse-temurin:21-jre
+RUN groupadd --gid 10001 hommey && useradd --uid 10001 --gid hommey --no-create-home hommey
+WORKDIR /app
+COPY --from=build /workspace/backend/target/hommey-backend-*.jar /app/app.jar
+USER 10001:10001
+EXPOSE 8080
+HEALTHCHECK --interval=10s --timeout=5s --start-period=45s --retries=6 \
+    CMD curl -fsS http://localhost:8080/actuator/health || exit 1
+ENTRYPOINT ["java", "-jar", "/app/app.jar"]

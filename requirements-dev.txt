@@ -1,0 +1,3 @@
+-r requirements.txt
+-c requirements.lock
+black==25.1.0

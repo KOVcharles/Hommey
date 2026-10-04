@@ -1,0 +1,66 @@
+spring:
+  application:
+    name: hommey-backend
+  main:
+    web-application-type: servlet
+  datasource:
+    url: ${HOMMEY_DB_URL:jdbc:postgresql://localhost:${HOMMEY_DB_PORT:15432}/hommey}
+    username: ${HOMMEY_DB_USER:hommey}
+    password: ${PG_PASSWORD}
+    hikari:
+      maximum-pool-size: 10
+      connection-timeout: 5000
+  data:
+    redis:
+      host: ${HOMMEY_REDIS_HOST:localhost}
+      port: ${HOMMEY_REDIS_PORT:56380}
+      password: ${HOMMEY_REDIS_PASSWORD:}
+      timeout: 3s
+  jackson:
+    property-naming-strategy: SNAKE_CASE
+    deserialization:
+      fail-on-unknown-properties: true
+      accept-float-as-int: false
+  mvc:
+    async:
+      request-timeout: 180000
+  servlet:
+    multipart:
+      max-file-size: 25MB
+      max-request-size: 26MB
+  flyway:
+    enabled: true
+    baseline-on-migrate: false
+server:
+  port: ${SERVER_PORT:8080}
+  shutdown: graceful
+  forward-headers-strategy: native
+  error:
+    include-message: never
+    include-stacktrace: never
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health,info
+  endpoint:
+    health:
+      probes:
+        enabled: true
+      show-details: never
+hommey:
+  security:
+    issuer: hommey-backend
+    public-key: ${HOMMEY_JWT_PUBLIC_KEY:file:../.secrets/jwt-public.pem}
+    private-key: ${HOMMEY_JWT_PRIVATE_KEY:file:../.secrets/jwt-private.pem}
+    access-duration: 30m
+    refresh-duration: 7d
+    agent-duration: 5m
+  agent:
+    base-url: ${HOMMEY_AGENT_URL:http://localhost:18001}
+  registration:
+    altcha-secret: ${ALTCHA_HMAC_KEY:}
+    resend-api-key: ${HOMMEY_RESEND_API_KEY:}
+    resend-from: ${HOMMEY_RESEND_FROM:onboarding@resend.dev}
+    resend-url: ${HOMMEY_RESEND_ENDPOINT:https://api.resend.com/emails}
+    admin-emails: ${HOMMEY_ADMIN_EMAILS:}

@@ -1,0 +1,21 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "java",
+      "name": "Spring Boot backend",
+      "request": "launch",
+      "mainClass": "com.hommey.backend.HommeyApplication",
+      "cwd": "${workspaceFolder}/backend",
+      "envFile": "${workspaceFolder}/.env.engineering"
+    },
+    {
+      "type": "debugpy",
+      "name": "Python AI service",
+      "request": "launch",
+      "program": "${workspaceFolder}/scripts/run_ai_service.py",
+      "cwd": "${workspaceFolder}",
+      "envFile": "${workspaceFolder}/.env.engineering"
+    }
+  ]
+}

@@ -1,0 +1,175 @@
+/* The selected sidebar settings design. Font files are served with the app.
+ * Noto Sans SC contains the UI glyphs; other names use the system font fallback.
+ * The OFL licenses are included alongside the font files. */
+@font-face {
+    font-family: "Hommey Inter";
+    src: url("/static/fonts/inter-latin.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400 600;
+    font-display: swap;
+}
+@font-face {
+    font-family: "Hommey Settings Sans";
+    src: url("/static/fonts/settings-sans.woff2") format("woff2");
+    font-style: normal;
+    font-weight: 400 600;
+    font-display: swap;
+}
+.settings-modal, .personal-profile-modal {
+    font-family: "Hommey Inter", "Hommey Settings Sans", "Noto Sans SC", "PingFang SC", "Microsoft YaHei UI", sans-serif;
+}
+#settingsLayer.open { transition: opacity .24s ease, visibility 0s; }
+.settings-modal {
+    display: grid;
+    grid-template-columns: 178px minmax(0, 1fr);
+    width: min(720px, 100%);
+    height: min(660px, calc(100dvh - 40px));
+    max-height: calc(100dvh - 40px);
+    border-radius: 20px;
+    font-size: 15px;
+    line-height: 1.55;
+}
+.settings-modal [hidden] { display: none !important; }
+.settings-sidebar {
+    min-width: 0;
+    min-height: 0;
+    display: flex;
+    flex-direction: column;
+    padding: 24px 12px 18px;
+    border-right: 1px solid var(--line);
+    background: color-mix(in srgb, var(--panel) 96%, var(--ink));
+}
+.settings-sidebar h2 { margin: 0 10px 22px; font-size: 20px; font-weight: 600; letter-spacing: -.03em; }
+.settings-nav { min-height: 0; overflow-y: auto; scrollbar-width: thin; }
+.settings-nav-label { margin: 20px 10px 8px; color: var(--ink-2); font-size: 11px; }
+.settings-nav-label:first-child { margin-top: 0; }
+.settings-nav-button {
+    width: 100%;
+    display: flex;
+    align-items: center;
+    gap: 9px;
+    min-height: 40px;
+    margin: 2px 0;
+    padding: 8px 10px;
+    border-radius: 8px;
+    background: transparent;
+    color: var(--ink-2);
+    font-size: 13px;
+    text-align: left;
+}
+.settings-nav-button:hover { background: var(--soft); color: var(--ink); }
+.settings-nav-button.active { color: var(--sage); background: var(--sage-bg); font-weight: 500; }
+.settings-nav-button svg, .settings-account-actions svg, .settings-footer svg {
+    width: 17px;
+    height: 17px;
+    flex-shrink: 0;
+    fill: none;
+    stroke: currentColor;
+    stroke-width: 1.7;
+    stroke-linecap: round;
+    stroke-linejoin: round;
+}
+.settings-account { display: flex; align-items: center; gap: 10px; margin-top: auto; padding: 20px 7px 0; }
+.settings-account .account-avatar { width: 32px; height: 32px; border-radius: 10px; color: var(--sage); background: var(--sage-bg); font-size: 13px; font-weight: 500; }
+.settings-account strong { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 13px; font-weight: 500; }
+.settings-content { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 0; padding: 34px 28px 20px; }
+.settings-close { position: absolute; top: 14px; right: 14px; width: 34px; height: 34px; border-radius: 9px; }
+.settings-panel-heading { flex-shrink: 0; margin-bottom: 26px; padding-right: 20px; }
+.settings-panel-heading h2 { margin: 5px 0 7px; font-size: 25px; font-weight: 600; letter-spacing: -.03em; }
+.settings-panel-heading p { margin: 0; color: var(--ink-2); font-size: 13px; }
+.settings-panel-heading #settingsPanelGroup { font-size: 12px; }
+.settings-panels { min-height: 0; overflow-y: auto; scrollbar-width: thin; padding: 2px; margin: -2px; flex: 1; }
+.settings-panel h3 { margin: 0; font-size: 15px; font-weight: 500; }
+.settings-description { margin: 6px 0 0; color: var(--ink-2); font-size: 13px; line-height: 1.65; }
+.settings-theme-options { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 11px; margin-top: 16px; padding: 1px; }
+.settings-theme-card {
+    min-width: 0;
+    height: auto;
+    padding: 6px;
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    color: var(--ink);
+    background: var(--panel);
+    font-size: 13px;
+    text-align: left;
+}
+.settings-theme-card:hover { border-color: var(--line-2); }
+.settings-theme-card.active { border-color: var(--sage); box-shadow: 0 0 0 1px var(--sage); background: var(--panel); }
+.settings-theme-preview { display: flex; height: 76px; border: 1px solid var(--line); border-radius: 6px; overflow: hidden; background: var(--preview-paper); }
+.preview-light { --preview-paper: #fff; --preview-sidebar: #eff1f3; --preview-lines: #d5dae0; }
+.preview-dark { --preview-paper: #25282d; --preview-sidebar: #191c20; --preview-lines: #565e69; }
+.preview-system { --preview-paper: var(--panel); --preview-sidebar: var(--soft); --preview-lines: color-mix(in srgb, var(--panel) 80%, var(--ink)); background: linear-gradient(125deg, var(--preview-paper) 50%, var(--preview-sidebar) 50%); }
+.settings-theme-preview > span:first-child { width: 22%; flex-shrink: 0; background: var(--preview-sidebar); border-right: 1px solid #80808020; }
+.settings-theme-preview > span:last-child { display: flex; flex-direction: column; gap: 7px; flex: 1; padding: 16px 10px; }
+.settings-theme-preview b, .settings-theme-preview i { height: 4px; border-radius: 2px; width: 90%; background: var(--preview-lines); }
+.settings-theme-preview b { height: 6px; width: 58%; margin-bottom: 3px; }
+.settings-theme-name { display: flex; align-items: center; justify-content: space-between; gap: 7px; padding: 9px 5px 3px; }
+.settings-theme-dot { width: 11px; height: 11px; flex-shrink: 0; border: 1px solid var(--line-2); border-radius: 50%; }
+.settings-theme-card.active .settings-theme-dot { border: 3px solid var(--sage); }
+.settings-motion-row { min-height: 87px; margin-top: 26px; padding: 18px 0; border-top: 1px solid var(--line); border-bottom: 1px solid var(--line); }
+.settings-motion-row .setting-title { font-size: 15px; font-weight: 500; }
+.settings-motion-row .setting-note { margin-top: 4px; font-size: 13px; color: var(--ink-2); }
+.settings-motion-row .toggle { flex-shrink: 0; }
+.settings-motion-row .toggle::before { content: ""; position: absolute; inset: -10px 0; }
+.settings-type-preview { margin-top: 26px; padding: 19px 20px; border: 1px solid var(--line); border-radius: 11px; background: color-mix(in srgb, var(--panel) 97%, var(--ink)); }
+.settings-type-preview p { margin: 0; color: var(--ink-2); font-size: 12px; }
+.settings-type-preview strong { display: block; margin: 12px 0 7px; font-size: 19px; font-weight: 500; letter-spacing: -.02em; }
+.settings-footer { display: flex; align-items: center; gap: 7px; flex-shrink: 0; padding-top: 21px; color: var(--ink-2); font-size: 11px; }
+.settings-footer svg { width: 14px; height: 14px; color: var(--sage); }
+.settings-modal:not([data-section="appearance"]) .settings-footer { display: none; }
+.settings-summary { margin: 0; }
+.settings-summary > div { display: flex; align-items: baseline; gap: 22px; padding: 17px 0; border-bottom: 1px solid var(--line); }
+.settings-summary dt { min-width: 74px; color: var(--ink-2); font-size: 13px; }
+.settings-summary dd { margin: 0; overflow-wrap: anywhere; font-size: 15px; }
+.settings-edit-button { min-height: 40px; margin-top: 25px; padding: 9px 16px; border-radius: 9px; color: var(--panel); background: var(--sage); font-size: 13px; font-weight: 500; }
+.settings-edit-button:hover { filter: brightness(.93); }
+.settings-info-card { padding: 20px; border: 1px solid var(--line); border-radius: 12px; background: color-mix(in srgb, var(--panel) 97%, var(--ink)); }
+.settings-info-card p { margin: 8px 0 0; color: var(--ink-2); font-size: 14px; overflow-wrap: anywhere; }
+.settings-panel .pref-list, .settings-panel .active-trip { padding: 0; }
+.settings-panel .info-row, .settings-panel .trip-row { padding: 14px 0; font-size: 14px; border-bottom: 1px solid var(--line); }
+.settings-panel .info-row > span, .settings-panel .trip-row > span { min-width: 0; overflow-wrap: anywhere; }
+.settings-panel .info-row > span:last-child, .settings-panel .trip-row > span:last-child { text-align: right; color: var(--ink); }
+.settings-panel .empty-state { font-size: 13px; color: var(--ink-2); }
+.settings-panel-help { margin-top: 22px; }
+.settings-account-actions { overflow: hidden; border: 1px solid var(--line); border-radius: 12px; }
+.settings-account-actions .settings-action { min-height: 78px; padding: 17px; gap: 16px; font-size: 15px; }
+.settings-account-actions .settings-action strong { display: block; font-weight: 500; }
+.settings-account-actions .settings-action small { display: block; margin-top: 4px; color: var(--ink-2); font-size: 12px; }
+.settings-account-actions .settings-action svg { width: 15px; height: 15px; color: var(--ink-2); }
+.settings-nav-button:focus-visible, .settings-theme-card:focus-visible, .settings-edit-button:focus-visible { outline-color: var(--sage); }
+@media (max-width: 620px) {
+    #settingsLayer { padding: 12px; }
+    .settings-modal { grid-template-columns: 142px minmax(0, 1fr); height: min(700px, calc(100dvh - 24px)); max-height: calc(100dvh - 24px); }
+    .settings-sidebar { padding: 22px 8px 16px; }
+    .settings-nav-button { padding: 9px 8px; font-size: 12px; gap: 7px; }
+    .settings-nav-button svg { width: 15px; height: 15px; }
+    .settings-content { padding: 35px 20px 20px; }
+    .settings-theme-options { gap: 7px; }
+    .settings-theme-preview { height: 66px; }
+    .settings-theme-name { padding: 8px 2px 3px; font-size: 12px; }
+    .settings-type-preview { padding: 17px; }
+    .settings-type-preview strong { font-size: 17px; }
+}
+@media (max-width: 440px) {
+    #settingsLayer { padding: 10px; }
+    .settings-modal { display: flex; flex-direction: column; height: min(780px, calc(100dvh - 20px)); max-height: calc(100dvh - 20px); border-radius: 18px; }
+    .settings-sidebar { padding: 18px 16px 12px; border-right: 0; border-bottom: 1px solid var(--line); flex-shrink: 0; }
+    .settings-sidebar h2 { margin: 0 0 12px; font-size: 20px; }
+    .settings-nav { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 3px; overflow: visible; }
+    .settings-nav-label, .settings-nav-button svg, .settings-account { display: none; }
+    .settings-nav-button { justify-content: center; min-height: 40px; margin: 0; padding: 8px 2px; font-size: 12px; }
+    .settings-content { position: static; padding: 23px 20px 18px; flex: 1; }
+    .settings-modal { position: relative; }
+    .settings-close { top: 12px; right: 12px; }
+    .settings-panel-heading { margin-bottom: 22px; }
+    .settings-panel-heading h2 { font-size: 23px; }
+    .settings-theme-preview { height: 68px; }
+    .settings-motion-row { margin-top: 23px; }
+    .settings-type-preview { margin-top: 23px; }
+    .settings-summary > div { gap: 15px; }
+}
+@media (pointer: coarse) {
+    .settings-nav-button { min-height: 44px; }
+    .settings-close { width: 44px; height: 44px; }
+    .settings-edit-button { min-height: 44px; }
+}

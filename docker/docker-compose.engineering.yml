@@ -1,0 +1,161 @@
+name: hommey-engineering
+services:
+  postgres:
+    image: pgvector/pgvector:0.8.6-pg16-bookworm
+    environment:
+      POSTGRES_USER: hommey
+      POSTGRES_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD in .env.engineering}
+      POSTGRES_DB: hommey
+      HOMMEY_AI_DB_PASSWORD: ${HOMMEY_AI_DB_PASSWORD:?Set HOMMEY_AI_DB_PASSWORD}
+    ports:
+      - "127.0.0.1:${HOMMEY_DB_PORT:-15432}:5432"
+    volumes:
+      - engineering_pgdata:/var/lib/postgresql/data
+      - ./engineering/init-database.sh:/docker-entrypoint-initdb.d/10-ai-role.sh:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U hommey -d hommey"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "127.0.0.1:56380:6379"
+    volumes:
+      - engineering_redis:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+    restart: unless-stopped
+
+  backend:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.backend
+    environment:
+      PG_PASSWORD: ${PG_PASSWORD:?Set PG_PASSWORD}
+      HOMMEY_DB_URL: jdbc:postgresql://postgres:5432/hommey
+      HOMMEY_REDIS_HOST: redis
+      HOMMEY_REDIS_PORT: 6379
+      HOMMEY_AGENT_URL: http://agent:8000
+      HOMMEY_JWT_PRIVATE_KEY: file:/run/secrets/jwt_private
+      HOMMEY_JWT_PUBLIC_KEY: file:/run/secrets/jwt_public
+      ALTCHA_HMAC_KEY: ${ALTCHA_HMAC_KEY:-}
+      HOMMEY_RESEND_API_KEY: ${HOMMEY_RESEND_API_KEY:-}
+      HOMMEY_RESEND_FROM: ${HOMMEY_RESEND_FROM:-onboarding@resend.dev}
+      HOMMEY_ADMIN_EMAILS: ${HOMMEY_ADMIN_EMAILS:-}
+    secrets:
+      - jwt_private
+      - jwt_public
+    ports:
+      - "127.0.0.1:8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    restart: unless-stopped
+
+  agent:
+    build:
+      context: ..
+      dockerfile: docker/Dockerfile.ai
+    image: hommey-ai:engineering
+    environment: &ai_environment
+      HOMMEY_SCHEMA_OWNER: spring
+      HOMMEY_BUSINESS_API_URL: http://backend:8080
+      HOMMEY_JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public
+      HOMMEY_LONG_TERM_BACKEND: postgres
+      HOMMEY_POSTGRES_DSN: postgresql://hommey_ai:${HOMMEY_AI_DB_PASSWORD:?Set AI DB password}@postgres:5432/hommey
+      HOMMEY_SHORT_TERM_BACKEND: redis
+      HOMMEY_REDIS_HOST: redis
+      HOMMEY_REDIS_PORT: 6379
+      HOMMEY_RAG_VECTOR_BACKEND: postgres
+      HOMMEY_RAG_REFRESH_BACKEND: postgres
+      HOMMEY_RAG_POSTGRES_DSN: postgresql://hommey_ai:${HOMMEY_AI_DB_PASSWORD:?Set AI DB password}@postgres:5432/hommey
+      HOMMEY_RAG_SOURCE_STORAGE: shared_filesystem
+      HOMMEY_RAG_SEARCH_SCOPES: ${HOMMEY_RAG_SEARCH_SCOPES:-cqu/finance}
+      HOMMEY_RAG_DOCUMENTS_DIR: /app/data/documents
+      HOMMEY_RAG_KNOWLEDGE_BASE_PATH: /app/data/rag_knowledge
+      HOMMEY_UPLOADS_PATH: /app/data/uploads
+      HOMMEY_API_KEY: ${HOMMEY_API_KEY:-}
+      HOMMEY_MODEL_NAME: ${HOMMEY_MODEL_NAME:-deepseek-v3}
+      HOMMEY_BASE_URL: ${HOMMEY_BASE_URL:-https://dashscope.aliyuncs.com/compatible-mode/v1}
+      HOMMEY_RAG_EMBEDDING_BACKEND: ${HOMMEY_RAG_EMBEDDING_BACKEND:-siliconflow}
+      HOMMEY_EMBEDDING_API_KEY: ${HOMMEY_EMBEDDING_API_KEY:-}
+      HOMMEY_EMBEDDING_BASE_URL: ${HOMMEY_EMBEDDING_BASE_URL:-https://api.siliconflow.cn/v1}
+      HOMMEY_EMBEDDING_MODEL: ${HOMMEY_EMBEDDING_MODEL:-BAAI/bge-m3}
+      HOMMEY_EMBEDDING_DIMENSION: ${HOMMEY_EMBEDDING_DIMENSION:-1024}
+      HOMMEY_AMAP_WEB_KEY: ${HOMMEY_AMAP_WEB_KEY:-}
+      HOMMEY_TRAIN_QUERY_BACKEND: ${HOMMEY_TRAIN_QUERY_BACKEND:-12306}
+      HOMMEY_JUHE_TRAIN_KEY: ${HOMMEY_JUHE_TRAIN_KEY:-}
+      HOMMEY_VISION_ENABLED: ${HOMMEY_VISION_ENABLED:-false}
+      HOMMEY_VISION_API_KEY: ${HOMMEY_VISION_API_KEY:-}
+      HOMMEY_VISION_BASE_URL: ${HOMMEY_VISION_BASE_URL:-https://api.siliconflow.cn/v1}
+      HOMMEY_VISION_MODEL: ${HOMMEY_VISION_MODEL:-Qwen/Qwen2.5-VL-72B-Instruct}
+      HOMMEY_ASR_ENABLED: ${HOMMEY_ASR_ENABLED:-false}
+      HOMMEY_ASR_API_KEY: ${HOMMEY_ASR_API_KEY:-}
+      HOMMEY_ASR_BASE_URL: ${HOMMEY_ASR_BASE_URL:-https://api.siliconflow.cn/v1}
+      HOMMEY_ASR_MODEL: ${HOMMEY_ASR_MODEL:-FunAudioLLM/SenseVoiceSmall}
+      HOMMEY_OCR_ENABLED: ${HOMMEY_OCR_ENABLED:-false}
+      HOMMEY_OCR_API_KEY: ${HOMMEY_OCR_API_KEY:-}
+      HOMMEY_OCR_BASE_URL: ${HOMMEY_OCR_BASE_URL:-https://api.siliconflow.cn/v1}
+      HOMMEY_OCR_MODEL: ${HOMMEY_OCR_MODEL:-deepseek-ai/DeepSeek-OCR}
+      HOMMEY_RAG_OCR_ENABLED: ${HOMMEY_RAG_OCR_ENABLED:-false}
+    secrets:
+      - jwt_public
+    volumes:
+      - engineering_documents:/app/data/documents
+      - engineering_rag:/app/data/rag_knowledge
+      - engineering_uploads:/app/data/uploads
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+  rag-worker:
+    image: hommey-ai:engineering
+    command: ["python", "scripts/run_rag_refresh_worker.py"]
+    environment: *ai_environment
+    volumes:
+      - engineering_documents:/app/data/documents
+      - engineering_rag:/app/data/rag_knowledge
+    depends_on:
+      backend:
+        condition: service_healthy
+      agent:
+        condition: service_started
+    healthcheck:
+      disable: true
+    restart: unless-stopped
+
+  nginx:
+    image: nginx:stable-alpine
+    ports:
+      - "127.0.0.1:8088:80"
+    volumes:
+      - ./engineering/nginx.conf:/etc/nginx/nginx.conf:ro
+    depends_on:
+      backend:
+        condition: service_healthy
+    restart: unless-stopped
+
+secrets:
+  jwt_private:
+    file: ../.secrets/jwt-private.pem
+  jwt_public:
+    file: ../.secrets/jwt-public.pem
+volumes:
+  engineering_pgdata:
+  engineering_redis:
+  engineering_documents:
+  engineering_rag:
+  engineering_uploads:
