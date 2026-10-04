@@ -8,12 +8,12 @@ import org.springframework.web.bind.annotation.*;
 public class PageController {
   @GetMapping("/")
   public String index() {
-    return "signin";
+    return "login";
   }
 
   @GetMapping("/login")
   public String login() {
-    return "login";
+    return "signin";
   }
 
   @GetMapping("/signup")

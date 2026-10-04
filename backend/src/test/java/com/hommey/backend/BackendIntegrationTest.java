@@ -253,6 +253,24 @@ class BackendIntegrationTest {
         .isEqualTo(404);
     String page = http.getForObject("/chat/1", String.class);
     assertThat(page).contains("data-user-id=\"1\"").doesNotContain("{{ user_id");
+    String landing = http.getForObject("/", String.class);
+    assertThat(landing)
+        .contains("id=\"authScenery\"", "/static/auth-background.js", "href=\"/login\"")
+        .doesNotContain("id=\"loginForm\"");
+    String signIn = http.getForObject("/login", String.class);
+    assertThat(signIn)
+        .contains("id=\"loginForm\"", "href=\"/\"")
+        .doesNotContain("id=\"authScenery\"");
+    for (String asset :
+        List.of(
+            "/static/auth-background.js",
+            "/static/auth-transition.js",
+            "/static/auth.css",
+            "/static/travel/airport.webp",
+            "/static/travel/train.webp",
+            "/static/travel/arrival.webp",
+            "/static/travel/hotel.webp"))
+      assertThat(http.getForEntity(asset, byte[].class).getStatusCode().value()).isEqualTo(200);
     assertThat(http.getForEntity("/static/app.js", String.class).getStatusCode().value())
         .isEqualTo(200);
   }
