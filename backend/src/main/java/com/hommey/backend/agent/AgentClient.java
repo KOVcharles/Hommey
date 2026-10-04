@@ -4,6 +4,8 @@ import com.hommey.backend.security.TokenService;
 import io.netty.channel.ChannelOption;
 import java.time.Duration;
 import java.util.Map;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.core.ParameterizedTypeReference;
 import org.springframework.http.*;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
@@ -14,6 +16,7 @@ import reactor.netty.http.client.HttpClient;
 
 @Component
 public class AgentClient {
+  private static final Logger LOG = LoggerFactory.getLogger(AgentClient.class);
   private static final ParameterizedTypeReference<Map<String, Object>> OBJECT =
       new ParameterizedTypeReference<>() {};
   private final WebClient client;
@@ -63,7 +66,13 @@ public class AgentClient {
                             "session_id",
                             ((Map<?, ?>) body).get("session_id")))
                     .timeout(Duration.ofSeconds(5))
-                    .subscribe(v -> {}, e -> {}));
+                    .subscribe(
+                        v -> {},
+                        e ->
+                            LOG.warn(
+                                "agent_cancel_failed request_id={} error_type={}",
+                                request,
+                                e.getClass().getSimpleName())));
   }
 
   public Mono<Map<String, Object>> json(

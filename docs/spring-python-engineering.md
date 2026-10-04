@@ -35,15 +35,15 @@ flowchart LR
 
 ## 分支与旧版本
 
-改造分支为 `codex/spring-python-backend`，基于 `d711abb`。原工作目录 `D:\Hommey` 保留在 `codex/restore-readme-badges`，其中原有 README 未提交修改没有带入或覆盖。
+改造分支为 `codex/spring-python-backend`，基于 `d711abb`。旧 Python 版本保留在 Git 历史和 `codex/restore-readme-badges` 分支。当前本机的主要开发目录已切换到新架构：
 
 当前改造目录：
 
 ```text
-C:\Users\Administrator\.codex\worktrees\spring-python-backend\Hommey
+D:\Hommey
 ```
 
-在 VS Code 中打开这个目录进行新架构开发。旧目录和旧 Compose 继续用于原版本。新部署使用项目名 `hommey-engineering` 与独立命名数据卷，不能把旧数据库卷接到新 Compose。
+在 VS Code 中打开这个目录进行新架构开发。切换前的未提交文件和旧 `.env` 保存在 `D:\Hommey-backups` 下的时间戳目录，并有 Git stash 备份；新架构使用 `.env.engineering` 与 `.secrets`。C 盘临时工作树在运行配置迁移后归档。新部署使用项目名 `hommey-engineering` 与独立命名数据卷，不能把旧数据库卷接到新 Compose。详细改动及本机切换记录见 [优化与发布说明](spring-python-release-notes.md)。
 
 ## 一键启动开发部署
 
@@ -135,7 +135,7 @@ Remove-Item Env:HOMMEY_SPLIT_INTEGRATION
 - 新 Compose：Spring、AI、RAG worker、PostgreSQL、Redis、Nginx 均启动；入口与健康检查可访问。
 - 两项跨语言联调：生产 runtime 工厂与 Supervisor 使用测试模型完成行程提交和重复执行；Spring 转发真实 Python 附件上传/解析/下载，消息绑定正确，普通用户不能刷新知识库。
 
-这些验证不代替真实模型、邮件服务与旧数据迁移的正式验收；当前本地 AI key 和邮件配置为空。
+后续完成了模型和 embedding 配置及 2025 版制度 PDF 的新库索引初始化，真实浏览器已完成政策问答。发布前回归更新为 Java 13 项、Python 204 项通过（1 项独立数据库测试跳过），另有两项跨语言联调；详见 [优化与发布说明](spring-python-release-notes.md)。注册邮件与旧用户数据迁移仍需单独验收；本地配置和测试账号不随仓库发布。
 
 架构约定依据 [Spring Boot 项目组织](https://docs.spring.io/spring-boot/3.5/reference/using/structuring-your-code.html)、[Spring Security JWT](https://docs.spring.io/spring-security/reference/servlet/oauth2/resource-server/jwt.html) 和 [WebClient](https://docs.spring.io/spring-framework/reference/web/webflux-webclient.html)。
 

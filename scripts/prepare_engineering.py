@@ -5,6 +5,7 @@ import os
 import secrets
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
+from dotenv import dotenv_values
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -47,8 +48,22 @@ def main():
         environment.write_text(template, encoding="utf-8")
         os.chmod(environment, 0o600)
     print(
-        "Development key pair and .env.engineering are ready; existing files were preserved."
+        "Development database credentials and key pair are ready; existing files were preserved."
     )
+    configuration = {**dotenv_values(environment), **os.environ}
+    missing = []
+    if not str(configuration.get("HOMMEY_API_KEY") or "").strip():
+        missing.append("HOMMEY_API_KEY")
+    if configuration.get(
+        "HOMMEY_RAG_EMBEDDING_BACKEND", "siliconflow"
+    ) != "local" and not (
+        configuration.get("HOMMEY_EMBEDDING_API_KEY")
+        or configuration.get("SILICONFLOW_API_KEY")
+    ):
+        missing.append("HOMMEY_EMBEDDING_API_KEY")
+    if missing:
+        print("AI configuration still requires: " + ", ".join(missing))
+    print("After starting the stack, build the knowledge index and check AI /readyz.")
 
 
 if __name__ == "__main__":
