@@ -2295,6 +2295,8 @@
         setSendLoading(true);
         showProcessingIndicator(runtime, []);
 
+        let streamMessage = null;
+        let turnDone = false;
         try {
             const response = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
                 method: 'POST',
@@ -2319,7 +2321,6 @@
             submissionAccepted = true;
             collapseTripIntakeCards(runtime);
 
-            let streamMessage = null;
             let presentationRendered = false;
             let nextPlaceholder = '';
             let preferencesUpdated = false;
@@ -2354,8 +2355,14 @@
                     if (event.type === 'agents') updateAgentTags(runtime, event.agents);
                     if (event.type === 'interrupted') {
                         turnInterrupted = true;
+                        streamMessage?.row.remove();
+                        streamMessage = null;
                         removeProcessingIndicator(runtime);
                         addMessage(runtime, 'ai', '已停止当前执行。输入“继续”可以从最近一次安全状态接着完成。');
+                    }
+                    if (event.type === 'response_reset') {
+                        streamMessage?.row.remove();
+                        streamMessage = null;
                     }
                     if (event.type === 'answer_document') {
                         removeProcessingIndicator(runtime);
@@ -2377,7 +2384,10 @@
                         renderMessageInto(streamMessage.bubble, streamMessage.text);
                         scrollToBottom(runtime);
                     }
-                    if (event.type === 'done') preferencesUpdated = !!event.preferences_updated;
+                    if (event.type === 'done') {
+                        turnDone = true;
+                        preferencesUpdated = !!event.preferences_updated;
+                    }
                 }
             }
 
@@ -2405,7 +2415,17 @@
                 streamMessage.text += tail.text || '';
                 renderMessageInto(streamMessage.bubble, streamMessage.text);
             }
-            if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
+            if (tail?.type === 'response_reset') {
+                streamMessage?.row.remove();
+                streamMessage = null;
+            }
+            if (tail && tail.type === 'done') {
+                turnDone = true;
+                preferencesUpdated = !!tail.preferences_updated;
+            }
+            if (!turnDone) {
+                throw createApiError({code: 'STREAM_INCOMPLETE', message: '回复未完成，连接已中断，请重试', request_id: runtime.requestId, retryable: true}, '回复未完成，请重试');
+            }
 
             removeProcessingIndicator(runtime);
             if (!streamMessage && !presentationRendered && !turnInterrupted) {
@@ -2420,6 +2440,10 @@
             await loadActiveTrip();
             requestCompleted = true;
         } catch (err) {
+            if (!turnDone) {
+                streamMessage?.row.remove();
+                streamMessage = null;
+            }
             removeProcessingIndicator(runtime);
             window.ExecutionPlan?.connectionLost(runtime.container, runtime.requestId);
             const errorText = formatDisplayError(err, '网络错误，请检查连接后重试。');
@@ -2713,7 +2737,7 @@
         stack.appendChild(bubble);
         runtime.container.appendChild(row);
         scrollToBottom(runtime);
-        return { bubble, stack, text: '' };
+        return { row, bubble, stack, text: '' };
     }
 
     function renderMessageInto(element, text) {

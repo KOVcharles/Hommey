@@ -125,6 +125,12 @@ class Turn:
                 "message_key": keys.get(phase, "task_running"), "task_id": result_id,
                 "intent": role, "display": PROFILES[role].title if role else None})
 
+    async def stream_text(self, delta):
+        await self.progress({"type": "chunk", "text": delta})
+
+    async def reset_text(self):
+        await self.progress({"type": "response_reset"})
+
     async def _read_user_profile(self, context=None):
         """Read this user's small saved profile once when starting a request."""
         try:
@@ -680,7 +686,9 @@ class Turn:
                 try:
                     logger.info("Supervisor model input role=%s round=%s message_chars=%s tool_chars=%s", role or "main", state["round"], encoded_size(messages), encoded_size(round_tools))
                     reply = await call_model(self.runtime.model, messages, round_tools, allow_text=role is None,
-                                             context_capture=self.context_capture(state, role))
+                                             context_capture=self.context_capture(state, role),
+                                             on_text=self.stream_text if role is None and self.progress else None,
+                                             on_reset=self.reset_text if role is None and self.progress else None)
                 except ToolRejected as exc:
                     logger.warning("Native tool response rejected role=%s reason=%s", role or "main", str(exc))
                     state["feedback"] = str(exc) + "；请输出完整有效的原生工具调用。"

@@ -26,6 +26,8 @@ Hommey 是面向组内报销的专用 Agent，帮助组内成员查询报销制�
 
 本分支采用 Spring Boot 业务后端与 Python AI 服务。浏览器访问 Spring，用户、权限、资料、会话、偏好和行程由 Spring 管理；Python 接收限定用户/会话/请求的内部执行凭证，运行 Agent、RAG 与 AI 数据处理。详细说明见 [工程化开发、部署与回滚指南](docs/spring-python-engineering.md)和 [优化与发布说明](docs/spring-python-release-notes.md)。
 
+普通正文现支持模型边生成、页面边显示；结构化卡片继续完整交付。实现、取消处理与回退方式见 [正文流式输出说明](docs/native-answer-streaming.md)。
+
 - **业务后端**：`backend/` 使用标准 Controller / Service / Repository 分层、Spring Security、Bean Validation、Spring JDBC 和 Flyway。
 - **AI 服务**：`ai_service/` 提供内部能力接口，通过业务 API 提交变更；不能直接写入业务表。
 - **界面**：共享 `webui_new/` 页面和静态资源，由 Spring 提供入口并转发 NDJSON 流式回答。
