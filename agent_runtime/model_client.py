@@ -26,14 +26,17 @@ async def call_model(model, messages: list[dict], tools: list[dict], *, allow_te
     # AgentScope accepts a tool name and formats the provider's forced function
     # choice. This matters for the final extraction round: "required" alone
     # was sometimes answered as prose by the configured compatible endpoint.
-    choice = "auto" if allow_text else "required"
+    choice = ("auto" if tools else "none") if allow_text else "required"
     if not allow_text and len(tools) == 1:
         choice = tools[0]["function"]["name"]
     if context_capture:
         context_capture(messages, tools, choice)
     response = await model(messages, tools=tools, tool_choice=choice)
-    # Only main-agent prose can be shown before completion. Native tool arguments
-    # remain buffered until the final snapshot has passed strict validation.
+    # Tool-enabled text can be a preamble whose tool call arrives much later.
+    # Only the explicit, tool-disabled answer phase may publish text deltas.
+    if tools:
+        on_text = None
+    # Native tool arguments remain buffered until strict validation completes.
     visible_text, has_tools = "", False
     stream = response if isinstance(response, AsyncIterable) else None
     try:

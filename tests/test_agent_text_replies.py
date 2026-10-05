@@ -66,7 +66,7 @@ async def test_followup_answers_once_without_reading_or_replaying_report(resume_
 
     async def model(messages, **kwargs):
         calls.append(deepcopy(messages))
-        assert kwargs["tool_choice"] == "auto"
+        assert kwargs["tool_choice"] == "required"
         assert messages[-1]["content"] == services.history[-1]["content"]
         assert "已交付报告 two_cities 的内容：" in messages[-2]["content"]
         assert previous in messages[-2]["content"]
@@ -139,7 +139,7 @@ async def test_child_prose_does_not_replace_structured_report():
         nonlocal child_calls
         names = {t["function"]["name"] for t in tools}
         if "delegate" in names:
-            assert tool_choice == "auto"
+            assert tool_choice == "required"
             if not outputs(messages):
                 return reply(("delegate", {"role": "trip_context", "task": "整理行程"}))
             assert outputs(messages)[-1]["status"] == "needs_input"

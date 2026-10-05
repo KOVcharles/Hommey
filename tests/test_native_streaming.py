@@ -8,7 +8,7 @@ import pytest
 from openai import AsyncOpenAI
 
 from agent_runtime.contracts import ToolRejected
-from agent_runtime.engine import Supervisor
+from agent_runtime.engine import MAIN_TOOLS, Supervisor
 from agent_runtime.model_client import call_model, create_tool_model
 from tests.test_supervisor_runtime import CONFIG, SCOPE, FakeServices, FakeStore, reply
 from webui_new.manager import HommeyWebInstance
@@ -24,6 +24,8 @@ async def test_first_text_arrives_before_model_finishes_without_duplicate_snapsh
     deltas = []
 
     async def model(*args, **kwargs):
+        assert kwargs["tools"] == [] and kwargs["tool_choice"] == "none"
+
         async def stream():
             yield {"content": [{"type": "thinking", "thinking": "private reasoning"}]}
             yield text_snapshot("准备")
@@ -49,7 +51,7 @@ async def test_first_text_arrives_before_model_finishes_without_duplicate_snapsh
 
 
 @pytest.mark.asyncio
-async def test_tool_after_prose_retracts_draft_and_waits_for_complete_raw_arguments():
+async def test_tool_enabled_prose_never_reaches_frontend_before_arguments_complete():
     partial, finish = asyncio.Event(), asyncio.Event()
     events = []
 
@@ -90,14 +92,16 @@ async def test_tool_after_prose_retracts_draft_and_waits_for_complete_raw_argume
         events.append(("reset", None))
 
     task = asyncio.create_task(
-        call_model(model, [], [], allow_text=True, on_text=on_text, on_reset=on_reset)
+        call_model(
+            model, [], MAIN_TOOLS, allow_text=True, on_text=on_text, on_reset=on_reset
+        )
     )
     await asyncio.wait_for(partial.wait(), 1)
-    assert not task.done() and events == [("text", "正在准备回答"), ("reset", None)]
+    assert not task.done() and events == []
     finish.set()
     result = await asyncio.wait_for(task, 1)
     assert result.calls[0]["arguments"] == {"kind": "ask", "question": "何时出发？"}
-    assert len(events) == 2  # No tool JSON or child report is shown as prose.
+    assert events == []  # No preamble, tool JSON or reset reaches the page.
 
 
 @pytest.mark.asyncio
@@ -154,13 +158,31 @@ async def test_cancel_while_handling_delta_closes_provider_generator():
 
 @pytest.mark.asyncio
 async def test_supervisor_streams_prose_then_persists_exact_final_text_and_replays():
+    planning, answer_ready = asyncio.Event(), asyncio.Event()
     received, finish = asyncio.Event(), asyncio.Event()
     events, calls = [], []
 
-    async def model(*args, **kwargs):
-        calls.append(True)
+    async def model(messages, tools, tool_choice):
+        calls.append(tool_choice)
+        if tools:
+            assert tool_choice == "required"
+
+            async def decision():
+                yield text_snapshot("我来查询一下报销规定。")
+                planning.set()
+                await answer_ready.wait()
+                yield reply(("finish", {"kind": "text"}))
+
+            return decision()
+
+        assert tool_choice == "none"
+        assert messages[-2]["tool_calls"][0]["function"]["name"] == "finish"
+        assert messages[-1]["role"] == "tool"
+        assert messages[-1]["tool_call_id"] == messages[-2]["tool_calls"][0]["id"]
+        assert json.loads(messages[-1]["content"])["phase"] == "final_answer"
 
         async def stream():
+            yield {"content": [{"type": "thinking", "thinking": "private reasoning"}]}
             yield text_snapshot("先准备发票，")
             await finish.wait()
             yield text_snapshot("先准备发票，再核对适用制度。")
@@ -178,6 +200,10 @@ async def test_supervisor_streams_prose_then_persists_exact_final_text_and_repla
     task = asyncio.create_task(
         runtime.run(SCOPE, "解释差旅报销材料怎么准备", progress=progress)
     )
+    await asyncio.wait_for(planning.wait(), 2)
+    assert not task.done()
+    assert not any(e["type"] in {"chunk", "response_reset"} for e in events)
+    answer_ready.set()
     await asyncio.wait_for(received.wait(), 2)
     row = store.rows[(SCOPE.user_id, SCOPE.request_id)]
     assert not task.done() and row["response"] is None and store.writes == 0
@@ -187,9 +213,108 @@ async def test_supervisor_streams_prose_then_persists_exact_final_text_and_repla
         e["text"] for e in events if e["type"] == "chunk"
     )
     assert row["response"]["response"] == result["response"]
+    assert not any(e["type"] == "response_reset" for e in events)
+    assert "我来查询" not in result["response"]
     replay = await runtime.run(SCOPE, "解释差旅报销材料怎么准备")
     assert replay["idempotent_replay"] and replay["response"] == result["response"]
-    assert len(calls) == 1
+    assert calls == ["required", "none"]
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_fields",
+    [
+        {"question": "伪装成答案"},
+        {"result_ids": ["old"]},
+        {"reuse_reasons": {"old": "相关"}},
+    ],
+)
+async def test_final_text_gate_rejects_card_fields_before_starting_answer(
+    invalid_fields,
+):
+    calls = []
+
+    async def model(messages, tools, tool_choice):
+        calls.append(tool_choice)
+        if len(calls) == 1:
+            return reply(("finish", {"kind": "text", **invalid_fields}))
+        if tools:
+            assert json.loads(messages[-1]["content"])["error"]
+            return reply(("finish", {"kind": "text"}))
+        return text_snapshot("请按照适用的制度整理报销材料。")
+
+    services = FakeServices()
+    store = FakeStore(services)
+    result = await Supervisor(model, services, store, CONFIG).run(
+        SCOPE, "解释报销材料整理方法"
+    )
+    assert result["response"] == "请按照适用的制度整理报销材料。"
+    assert calls == ["required", "required", "none"] and store.writes == 0
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize(
+    "invalid_answer",
+    [text_snapshot(""), reply(("delegate", {"role": "memory", "task": "查询偏好"}))],
+)
+async def test_tool_disabled_answer_rejects_empty_text_and_unexpected_tools(
+    invalid_answer,
+):
+    calls = []
+
+    async def model(messages, tools, tool_choice):
+        calls.append(tool_choice)
+        if tools:
+            return reply(("finish", {"kind": "text"}))
+        return (
+            invalid_answer
+            if len(calls) == 2
+            else text_snapshot("材料清单需要按适用制度核对。")
+        )
+
+    services = FakeServices()
+    store = FakeStore(services)
+    result = await Supervisor(model, services, store, CONFIG).run(
+        SCOPE, "解释报销材料整理方法"
+    )
+    assert result["response"] == "材料清单需要按适用制度核对。"
+    assert calls == ["required", "none", "required", "none"]
+    assert not services.calls and store.writes == 0
+
+
+@pytest.mark.asyncio
+async def test_cancel_during_final_answer_closes_provider_without_saving_draft():
+    received, closed = asyncio.Event(), asyncio.Event()
+
+    async def model(messages, tools, tool_choice):
+        if tools:
+            return reply(("finish", {"kind": "text"}))
+
+        async def stream():
+            try:
+                yield text_snapshot("先整理")
+                await asyncio.Event().wait()
+            finally:
+                closed.set()
+
+        return stream()
+
+    async def progress(event):
+        if event["type"] == "chunk":
+            received.set()
+
+    services = FakeServices()
+    store = FakeStore(services)
+    runtime = Supervisor(model, services, store, CONFIG)
+    task = asyncio.create_task(
+        runtime.run(SCOPE, "解释报销材料整理方法", progress=progress)
+    )
+    await asyncio.wait_for(received.wait(), 2)
+    assert await runtime.cancel(SCOPE)
+    result = await asyncio.wait_for(task, 2)
+    assert result["interrupted"] and closed.is_set()
+    assert store.rows[(SCOPE.user_id, SCOPE.request_id)]["response"] is None
+    assert store.writes == 0
 
 
 @pytest.mark.asyncio

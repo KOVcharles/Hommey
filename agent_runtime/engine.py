@@ -47,7 +47,7 @@ MAIN_TOOLS = [
     schema("discard_result", "丢弃无效或过时结果，解除其尚未提交的变更；已经提交的写入不会撤销", ReadResult),
     schema("read_skill", "读取允许的差旅 Skill 业务指南", ReadSkill),
     schema("apply_changes", "提交有本轮用户原文依据的行程/偏好变更；只接受专业结果 ID", ApplyChanges),
-    schema("finish", "结束本轮：answer 展示业务报告；help 展示服务介绍＋所选业务报告，仅介绍时无需报告；ask 任务缺资料；clarify 意图不明且不选结果；refuse 明确超范围。编号选项直接写入 question，结合 conversation 理解后续回复", Finish),
+    schema("finish", "结束本轮：text 进入普通文字答复阶段，不填其他字段；answer 展示业务报告；help 展示服务介绍＋所选业务报告，仅介绍时无需报告；ask 任务缺资料；clarify 意图不明且不选结果；refuse 明确超范围。编号选项直接写入 question，结合 conversation 理解后续回复", Finish),
     schema("request_trip_details", "展示当前行程填写表单并等待用户补充。安排出差通常需要出发地、目的地、日期、天数/返程及目的；工作地点用于附近酒店。按本轮需求决定是否展示，不用于单独查询。", Empty),
     schema("request_information", "结束本轮并展示补充信息卡片，等待用户点选或填写；适合人员类别、职称、经费来源等本次必要的未知条件。1 至 5 个字段，支持单选、多选、文本、日期。完整行程仍用 request_trip_details；普通回答不调用本工具。", RequestInformation),
     schema("read_source", "按来源 ID 核查报告未覆盖的条款、具体矛盾或用户要求的原文，支持分页；已有充分证据时不重复读取，过期资料不能作为当前事实", SourceRequest),
@@ -685,10 +685,8 @@ class Turn:
                     raise ExecutionLimitExceeded("SUPERVISOR_CONTEXT_LIMIT", "本次任务资料过多，请缩小问题范围后继续")
                 try:
                     logger.info("Supervisor model input role=%s round=%s message_chars=%s tool_chars=%s", role or "main", state["round"], encoded_size(messages), encoded_size(round_tools))
-                    reply = await call_model(self.runtime.model, messages, round_tools, allow_text=role is None,
-                                             context_capture=self.context_capture(state, role),
-                                             on_text=self.stream_text if role is None and self.progress else None,
-                                             on_reset=self.reset_text if role is None and self.progress else None)
+                    reply = await call_model(self.runtime.model, messages, round_tools,
+                                             context_capture=self.context_capture(state, role))
                 except ToolRejected as exc:
                     logger.warning("Native tool response rejected role=%s reason=%s", role or "main", str(exc))
                     state["feedback"] = str(exc) + "；请输出完整有效的原生工具调用。"
@@ -1080,6 +1078,10 @@ class Turn:
             return {**receipt, **self.update_user_profile(preferences, prefs),
                     "stale_results": [r["result_id"] for r in self.work_index() if r["stale"]]}
         if name == "finish":
+            if request.kind == "text":
+                if request.result_ids or request.reuse_reasons or request.question:
+                    raise ToolRejected("普通文字答复请用 finish(kind=text)，不填写 result_ids、question 或 reuse_reasons")
+                return {"_terminal": await self.final_text(state, call)}
             if request.kind == "clarify":
                 if request.result_ids or request.reuse_reasons or not request.question.strip():
                     raise ToolRejected("意图澄清必须填写问题且不选择业务结果")
@@ -1111,6 +1113,26 @@ class Turn:
                 output["outcome"] = "waiting_input"
             return {"_terminal": output}
         raise ToolRejected("无效操作")
+
+    async def final_text(self, state, call):
+        """Publish only a final answer after the tool loop explicitly yields."""
+        # Pair the pending finish call for the provider, without modifying the
+        # durable transcript before the final answer has completed successfully.
+        messages = model_context([*self.history, *state["messages"],
+            tool_message(call, {"ready": True, "phase": "final_answer"})], [], None,
+            rules=MAIN_RULES, snapshot=state["snapshot"],
+            feedback="已进入最终正文阶段，finish(kind=text) 已获确认，不再调用任何工具。"
+                     "直接回答当前问题，保留结论、条件、来源及未知项；不要描述思考、计划或接下来要查询的步骤。")
+        compact_tool_history(messages)
+        if encoded_size(messages) > 80000:
+            raise ExecutionLimitExceeded("SUPERVISOR_CONTEXT_LIMIT", "本次任务资料过多，请缩小问题范围后继续")
+        reply = await call_model(self.runtime.model, messages, [], allow_text=True,
+            context_capture=self.context_capture(state, "answer"),
+            on_text=self.stream_text if self.progress else None,
+            on_reset=self.reset_text if self.progress else None)
+        if reply.calls or not reply.text.strip():
+            raise ToolRejected("正文阶段必须返回完整文字答复，不能调用工具或返回空白")
+        return {"response": reply.text, "answer_document": None, "presentation_document": None}
 
     def update_user_profile(self, preferences, changes):
         """Publish committed preferences without rewriting the turn's initial snapshot."""

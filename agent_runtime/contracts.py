@@ -26,8 +26,8 @@ class Delegate(StrictModel):
 
 
 class Finish(StrictModel):
-    kind: Literal["answer", "help", "ask", "clarify", "refuse"] = Field(default="answer",
-        description="answer 展示所选业务报告；help 展示服务介绍＋所选业务报告，仅介绍时不需要报告；ask 已确定任务但缺资料；clarify 意图不明，不启动业务；refuse 明确超范围")
+    kind: Literal["text", "answer", "help", "ask", "clarify", "refuse"] = Field(default="answer",
+        description="text 进入普通文字答复阶段，不填 result_ids、question、reuse_reasons；answer 展示所选业务报告；help 展示服务介绍＋所选业务报告，仅介绍时不需要报告；ask 已确定任务但缺资料；clarify 意图不明，不启动业务；refuse 明确超范围")
     result_ids: list[str] = Field(default_factory=list, max_length=16,
         description="需要在本轮完整展示的业务报告，不是参考资料列表。仅介绍助手时留空；用户同时要求业务结论时在此选择报告，读取不会自动展示。")
     question: str = Field(default="", max_length=500)
