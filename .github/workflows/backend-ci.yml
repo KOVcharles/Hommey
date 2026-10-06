@@ -57,7 +57,7 @@ jobs:
         run: >-
           python -m black --check ai_service scripts/prepare_engineering.py
           scripts/run_ai_service.py tests/test_business_boundary.py tests/test_spring_agent_integration.py
-          tests/test_native_streaming.py
+          tests/test_native_streaming.py scripts/load_test.py tests/test_load_test.py
       - name: Check boundary and retained agent behavior without model calls
         run: >-
           python -m pytest -q tests/test_native_streaming.py tests/test_business_boundary.py
@@ -70,4 +70,4 @@ jobs:
           tests/test_auth_pages.py tests/test_user_profile_context.py
           tests/test_trip_intake_experience.py tests/test_information_request.py
           tests/test_attachment_routes.py tests/test_multimodal_chat.py
-          tests/test_knowledge_base_routes.py tests/test_webui_error_responses.py
+          tests/test_knowledge_base_routes.py tests/test_webui_error_responses.py tests/test_load_test.py

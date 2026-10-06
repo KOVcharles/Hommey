@@ -115,6 +115,8 @@ docker compose --env-file .env.engineering -f docker/docker-compose.engineering.
 
 Java 集成测试使用 Testcontainers 的独立 PostgreSQL 和 Redis，验证鉴权、数据归属、参数约束、幂等、事务版本、AI 数据库权限和 NDJSON 首块转发。Python 测试验证执行凭证和上下文隔离，并保留现有 Agent 回归测试。GitHub Actions 在 PR 与改造分支运行这些检查，不部署服务器。
 
+只读业务 API 与真实 AI 对话的小型压测步骤见 [压测指南](small-load-test.md)。`scripts/load_test.py` 使用现有 httpx，分别测量固定到达速率和有限并发，报告写入被 Git 忽略的 `benchmark-results/`。
+
 `requirements.lock` 固定本次 Linux/Python 3.11 验证的依赖版本，镜像与 CI 同时使用 requirements 和约束文件，避免构建时无意升级模型 SDK。升级依赖需重新解析并通过测试。Java 格式由 Spotless / Google Java Format 检查；新 Python 服务使用 Black。开发格式工具通过 `pip install -r requirements-dev.txt` 安装。
 
 新栈启动后还可运行真实 Spring/PostgreSQL 与 Python Supervisor 的联调测试，使用测试模型验证业务提交与重复执行，不调用外部模型：
