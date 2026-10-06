@@ -12,9 +12,9 @@ import java.security.interfaces.RSAPublicKey;
 import java.security.spec.PKCS8EncodedKeySpec;
 import java.security.spec.X509EncodedKeySpec;
 import java.util.Base64;
-import java.util.List;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.core.annotation.Order;
 import org.springframework.security.authorization.AuthorizationDecision;
 import org.springframework.security.config.annotation.web.builders.HttpSecurity;
 import org.springframework.security.config.http.SessionCreationPolicy;
@@ -56,7 +56,7 @@ public class SecurityConfiguration {
     var decoder = NimbusJwtDecoder.withPublicKey(pub).build();
     OAuth2TokenValidator<Jwt> audience =
         jwt ->
-            jwt.getAudience().stream().anyMatch(List.of("hommey-api", "hommey-business")::contains)
+            jwt.getAudience().contains("hommey-business")
                 ? OAuth2TokenValidatorResult.success()
                 : OAuth2TokenValidatorResult.failure(new OAuth2Error("invalid_token"));
     decoder.setJwtValidator(
@@ -71,13 +71,51 @@ public class SecurityConfiguration {
   }
 
   @Bean
-  SecurityFilterChain security(HttpSecurity http, ObjectMapper mapper) throws Exception {
+  @Order(1)
+  SecurityFilterChain internalSecurity(HttpSecurity http, ObjectMapper mapper) throws Exception {
+    return http.securityMatcher("/internal/business/**")
+        .csrf(csrf -> csrf.disable())
+        .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
+        .authorizeHttpRequests(
+            a ->
+                a.anyRequest()
+                    .access(
+                        (authentication, context) ->
+                            new AuthorizationDecision(
+                                authentication.get().getPrincipal() instanceof Jwt jwt
+                                    && "agent".equals(jwt.getClaimAsString("type"))
+                                    && jwt.getAudience().contains("hommey-business"))))
+        .oauth2ResourceServer(
+            o ->
+                o.jwt(j -> {})
+                    .authenticationEntryPoint(
+                        (req, res, ex) ->
+                            ApiErrors.write(mapper, req, res, 401, "UNAUTHORIZED", "请登录后重试")))
+        .exceptionHandling(
+            e ->
+                e.accessDeniedHandler(
+                    (req, res, ex) ->
+                        ApiErrors.write(mapper, req, res, 403, "FORBIDDEN", "无权访问此资源")))
+        .build();
+  }
+
+  // User authentication is enforced by Sa-Token's MVC interceptor. This chain
+  // retains HTTP security headers and denies routes outside the public surface.
+  @Bean
+  @Order(2)
+  SecurityFilterChain publicSecurity(HttpSecurity http, ObjectMapper mapper) throws Exception {
     return http.csrf(csrf -> csrf.disable())
         .sessionManagement(s -> s.sessionCreationPolicy(SessionCreationPolicy.STATELESS))
         .authorizeHttpRequests(
             a ->
                 a.requestMatchers(
-                        "/auth/**",
+                        "/auth/login",
+                        "/auth/register",
+                        "/auth/altcha-challenge",
+                        "/auth/send-verification-code",
+                        "/auth/logout",
+                        "/auth/logout-all",
+                        "/api/**",
                         "/actuator/health/**",
                         "/",
                         "/login",
@@ -86,28 +124,8 @@ public class SecurityConfiguration {
                         "/admin/skills",
                         "/static/**")
                     .permitAll()
-                    .requestMatchers("/internal/business/**")
-                    .access(
-                        (authentication, context) ->
-                            new AuthorizationDecision(
-                                authentication.get().getPrincipal() instanceof Jwt jwt
-                                    && "agent".equals(jwt.getClaimAsString("type"))
-                                    && jwt.getAudience().contains("hommey-business")))
-                    .requestMatchers("/api/**")
-                    .access(
-                        (authentication, context) ->
-                            new AuthorizationDecision(
-                                authentication.get().getPrincipal() instanceof Jwt jwt
-                                    && "access".equals(jwt.getClaimAsString("type"))
-                                    && jwt.getAudience().contains("hommey-api")))
                     .anyRequest()
                     .denyAll())
-        .oauth2ResourceServer(
-            o ->
-                o.jwt(j -> {})
-                    .authenticationEntryPoint(
-                        (req, res, ex) ->
-                            ApiErrors.write(mapper, req, res, 401, "UNAUTHORIZED", "请登录后重试")))
         .exceptionHandling(
             e ->
                 e.accessDeniedHandler(

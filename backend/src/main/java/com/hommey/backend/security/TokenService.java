@@ -10,29 +10,11 @@ import org.springframework.stereotype.Service;
 @Service
 public class TokenService {
   private final JwtEncoder encoder;
-  private final JwtDecoder decoder;
   private final SecurityProperties props;
 
-  public TokenService(JwtEncoder encoder, JwtDecoder decoder, SecurityProperties props) {
+  public TokenService(JwtEncoder encoder, SecurityProperties props) {
     this.encoder = encoder;
-    this.decoder = decoder;
     this.props = props;
-  }
-
-  public String issue(String user, String type) {
-    return sign(
-        JwtClaimsSet.builder()
-            .issuer(props.issuer())
-            .subject(user)
-            .audience(List.of("hommey-api"))
-            .issuedAt(Instant.now())
-            .expiresAt(
-                Instant.now()
-                    .plus(
-                        "refresh".equals(type) ? props.refreshDuration() : props.accessDuration()))
-            .id(UUID.randomUUID().toString())
-            .claim("type", type)
-            .build());
   }
 
   public String agent(String user, String role, String session, String request) {
@@ -57,16 +39,5 @@ public class TokenService {
             JwtEncoderParameters.from(
                 JwsHeader.with(SignatureAlgorithm.RS256).keyId("hommey").build(), claims))
         .getTokenValue();
-  }
-
-  public Jwt refresh(String token) {
-    try {
-      var jwt = decoder.decode(token);
-      if (!"refresh".equals(jwt.getClaimAsString("type")))
-        throw new JwtException("Wrong token type");
-      return jwt;
-    } catch (JwtException ex) {
-      throw new com.hommey.backend.common.ApiException(401, "UNAUTHORIZED", "刷新令牌无效或已过期");
-    }
   }
 }

@@ -5,8 +5,6 @@ import com.hommey.backend.session.SessionService;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.*;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -42,32 +40,26 @@ public class TravelController {
   }
 
   @GetMapping("/onboarding")
-  public Object onboarding(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object onboarding(@PathVariable String user) {
+    access.requireUser(user);
     return travel.onboarding(user);
   }
 
   @PostMapping("/onboarding/preference")
-  public Object preference(
-      @PathVariable String user,
-      @Valid @RequestBody Preference body,
-      @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object preference(@PathVariable String user, @Valid @RequestBody Preference body) {
+    access.requireUser(user);
     return travel.answer(user, body.key(), body.value());
   }
 
   @GetMapping("/is-new")
-  public Object isNew(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object isNew(@PathVariable String user) {
+    access.requireUser(user);
     return Map.of("is_new", travel.onboarding(user).get("is_new"));
   }
 
   @GetMapping("/trip/active")
-  public Object trip(
-      @PathVariable String user,
-      @RequestParam("session_id") String session,
-      @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object trip(@PathVariable String user, @RequestParam("session_id") String session) {
+    access.requireUser(user);
     sessions.require(user, session);
     var result = new LinkedHashMap<String, Object>();
     var trip = travel.trip(user, session);
@@ -76,8 +68,8 @@ public class TravelController {
   }
 
   @GetMapping("/summary")
-  public Object summary(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    var account = access.requireUser(jwt, user);
+  public Object summary(@PathVariable String user) {
+    var account = access.requireUser(user);
     var preferences = travel.preferences(user);
     var display =
         preferences.entrySet().stream()
@@ -114,8 +106,8 @@ public class TravelController {
   }
 
   @GetMapping("/status")
-  public Object status(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object status(@PathVariable String user) {
+    access.requireUser(user);
     var result = new LinkedHashMap<String, Object>();
     result.put("initialized", true);
     result.put("error", null);
@@ -123,8 +115,8 @@ public class TravelController {
   }
 
   @PostMapping("/init")
-  public Object init(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object init(@PathVariable String user) {
+    access.requireUser(user);
     return Map.of("success", true, "initialized", true);
   }
 }

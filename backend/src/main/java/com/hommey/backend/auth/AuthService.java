@@ -1,7 +1,8 @@
 package com.hommey.backend.auth;
 
+import cn.dev33.satoken.stp.StpUtil;
+import cn.dev33.satoken.stp.parameter.SaLoginParameter;
 import com.hommey.backend.common.ApiException;
-import com.hommey.backend.security.TokenService;
 import java.nio.charset.StandardCharsets;
 import java.util.Map;
 import org.springframework.dao.DataIntegrityViolationException;
@@ -13,18 +14,13 @@ import org.springframework.transaction.annotation.Transactional;
 public class AuthService {
   private final UserRepository users;
   private final PasswordEncoder passwords;
-  private final TokenService tokens;
   private final RegistrationService registration;
   private final String dummy;
 
   public AuthService(
-      UserRepository users,
-      PasswordEncoder passwords,
-      TokenService tokens,
-      RegistrationService registration) {
+      UserRepository users, PasswordEncoder passwords, RegistrationService registration) {
     this.users = users;
     this.passwords = passwords;
-    this.tokens = tokens;
     this.registration = registration;
     this.dummy = passwords.encode("constant-time-dummy");
   }
@@ -33,20 +29,14 @@ public class AuthService {
     var user = users.byEmail(body.email().strip()).orElse(null);
     boolean valid = passwords.matches(body.password(), user == null ? dummy : user.passwordHash());
     if (!valid || user == null) throw new ApiException(401, "UNAUTHORIZED", "邮箱或密码错误");
-    return pair(Long.toString(user.id()));
-  }
-
-  public Object refresh(String token) {
-    var jwt = tokens.refresh(token);
-    if (users.byId(jwt.getSubject()).isEmpty())
-      throw new ApiException(401, "UNAUTHORIZED", "用户不存在");
+    StpUtil.login(
+        Long.toString(user.id()),
+        new SaLoginParameter().setDeviceType(body.device() == null ? "web" : body.device()));
     return Map.of(
-        "access_token",
-        tokens.issue(jwt.getSubject(), "access"),
-        "refresh_token",
-        token,
-        "token_type",
-        "bearer");
+        "access_token", StpUtil.getTokenValue(),
+        "token_type", "bearer",
+        "expires_in", StpUtil.getTokenTimeout(),
+        "user", Map.of("id", user.id(), "email", user.email(), "role", user.role()));
   }
 
   @Transactional
@@ -65,15 +55,5 @@ public class AuthService {
     } catch (DataIntegrityViolationException ex) {
       throw new ApiException(409, "EMAIL_ALREADY_EXISTS", "该邮箱已注册");
     }
-  }
-
-  private Map<String, Object> pair(String user) {
-    return Map.of(
-        "access_token",
-        tokens.issue(user, "access"),
-        "refresh_token",
-        tokens.issue(user, "refresh"),
-        "token_type",
-        "bearer");
   }
 }

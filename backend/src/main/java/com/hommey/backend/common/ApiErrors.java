@@ -1,5 +1,8 @@
 package com.hommey.backend.common;
 
+import cn.dev33.satoken.exception.NotLoginException;
+import cn.dev33.satoken.exception.NotPermissionException;
+import cn.dev33.satoken.exception.NotRoleException;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
@@ -51,12 +54,28 @@ public class ApiErrors {
     return ResponseEntity.status(ex.status()).body(body(ex.code(), ex.getMessage(), req));
   }
 
+  @ExceptionHandler(NotLoginException.class)
+  ResponseEntity<?> notLoggedIn(NotLoginException ex, HttpServletRequest req) {
+    return ResponseEntity.status(401).body(body("UNAUTHORIZED", "登录已失效，请重新登录", req));
+  }
+
+  @ExceptionHandler({NotRoleException.class, NotPermissionException.class})
+  ResponseEntity<?> forbidden(Exception ex, HttpServletRequest req) {
+    return ResponseEntity.status(403).body(body("FORBIDDEN", "无权访问此资源", req));
+  }
+
+  @ExceptionHandler(org.springframework.data.redis.RedisConnectionFailureException.class)
+  ResponseEntity<?> authUnavailable(Exception ex, HttpServletRequest req) {
+    return ResponseEntity.status(503).body(body("AUTH_UNAVAILABLE", "认证服务暂不可用，请稍后重试", req));
+  }
+
   @ExceptionHandler({
     MethodArgumentNotValidException.class,
     HttpMessageNotReadableException.class,
     IllegalArgumentException.class,
     org.springframework.web.bind.MissingServletRequestParameterException.class,
-    org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class
+    org.springframework.web.method.annotation.MethodArgumentTypeMismatchException.class,
+    org.springframework.web.method.annotation.HandlerMethodValidationException.class
   })
   ResponseEntity<?> invalid(Exception ex, HttpServletRequest req) {
     return ResponseEntity.badRequest().body(body("BAD_REQUEST", "请求参数无效", req));

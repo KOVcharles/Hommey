@@ -155,7 +155,7 @@ async function fixture(page, data = question) {
         const requests = [];
         let history = [{role: 'assistant', request_id: 'question-1', content: '补充信息', presentation_document: question}];
         await integration.addInitScript(() => {
-            localStorage.setItem('hommey.access_token', 'test.' + btoa(JSON.stringify({sub: 'demo', exp: 9999999999})) + '.test');
+            localStorage.setItem('hommey.token', 'qa-opaque-session');
         });
         await integration.route('**/*', async route => {
             const request = route.request(); const url = new URL(request.url());
@@ -175,6 +175,7 @@ async function fixture(page, data = question) {
                     {type: 'chunk', text: text.slice(0, 16)}, {type: 'chunk', text: text.slice(16)}, {type: 'done'}].map(e => JSON.stringify(e)).join('\n')});
             }
             let body = {};
+            if (url.pathname === '/api/me') body = {id: 'demo', role: 'user'};
             if (url.pathname.endsWith('/status')) body = {initialized: true};
             if (url.pathname.endsWith('/sessions')) body = {sessions: [{session_id: 'session-demo', title: '差旅条件示例'}]};
             if (url.pathname.endsWith('/activate')) body = {session_id: 'session-demo', messages: history};

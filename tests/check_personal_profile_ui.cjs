@@ -16,7 +16,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
         let record = { profile: blank(), revision: 0, onboarding_status: 'pending' }, writes = [], failSave = false;
         const errors = [];
         page.on('pageerror', err => errors.push(err.message));
-        await page.addInitScript(() => { localStorage.setItem('hommey.access_token', 'test.' + btoa(JSON.stringify({ sub: 'qa', exp: 9999999999 })) + '.test'); localStorage.setItem('hommey.theme', 'light'); });
+        await page.addInitScript(() => { localStorage.setItem('hommey.token', 'qa-opaque-session'); localStorage.setItem('hommey.theme', 'light'); });
         await page.route('**/*', async route => {
             const req = route.request(), pathname = new URL(req.url()).pathname;
             if (pathname.startsWith('/static/')) {
@@ -36,6 +36,7 @@ const blank = () => ({ schema_version: 1, basic_info: { real_name: null, institu
                 return route.fulfill({ json: record });
             }
             let body = {};
+            if (pathname === '/api/me') body = {id: 'qa', role: 'user'};
             if (pathname.endsWith('/status')) body = { initialized: true };
             if (pathname.endsWith('/sessions')) body = { sessions: [] };
             if (pathname.endsWith('/summary')) body = { name_display: 'qa', role: 'user', preferences: [] };

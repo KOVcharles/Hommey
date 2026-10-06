@@ -21,6 +21,8 @@ jobs:
       - name: Check incremental chat rendering and incomplete streams
         run: |
           node --check webui_new/static/trip-choices.js
+          node --check webui_new/static/auth-session.js
+          node --test tests/test_auth_session.cjs
           node --test tests/test_chat_stream_delivery.cjs
   spring:
     runs-on: ubuntu-latest
@@ -33,7 +35,7 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: backend/pom.xml
-      - name: Test against real PostgreSQL and check formatting
+      - name: Test against real PostgreSQL and Redis and check formatting
         working-directory: backend
         run: bash mvnw --batch-mode verify
       - uses: actions/upload-artifact@v4

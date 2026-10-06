@@ -4,8 +4,6 @@ import com.hommey.backend.security.AccessPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.Map;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -22,52 +20,46 @@ public class SessionController {
   }
 
   @GetMapping("/sessions")
-  public Object list(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object list(@PathVariable String user) {
+    access.requireUser(user);
     return sessions.list(user);
   }
 
   @PostMapping("/sessions")
-  public Object create(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object create(@PathVariable String user) {
+    access.requireUser(user);
     return sessions.create(user);
   }
 
   @GetMapping("/sessions/{session}")
-  public Object get(
-      @PathVariable String user, @PathVariable String session, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object get(@PathVariable String user, @PathVariable String session) {
+    access.requireUser(user);
     return sessions.get(user, session);
   }
 
   @PostMapping("/sessions/{session}/activate")
-  public Object activate(
-      @PathVariable String user, @PathVariable String session, @AuthenticationPrincipal Jwt jwt) {
-    return get(user, session, jwt);
+  public Object activate(@PathVariable String user, @PathVariable String session) {
+    return get(user, session);
   }
 
   @PatchMapping("/sessions/{session}")
   public Object rename(
-      @PathVariable String user,
-      @PathVariable String session,
-      @Valid @RequestBody Rename body,
-      @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+      @PathVariable String user, @PathVariable String session, @Valid @RequestBody Rename body) {
+    access.requireUser(user);
     sessions.rename(user, session, body.title());
     return Map.of("session_id", session, "title", body.title());
   }
 
   @DeleteMapping("/sessions/{session}")
-  public Object delete(
-      @PathVariable String user, @PathVariable String session, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object delete(@PathVariable String user, @PathVariable String session) {
+    access.requireUser(user);
     sessions.delete(user, session);
     return Map.of("session_id", session, "deleted", true);
   }
 
   @DeleteMapping("/history")
-  public Object clear(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object clear(@PathVariable String user) {
+    access.requireUser(user);
     sessions.clear(user);
     return Map.of("cleared", true);
   }
