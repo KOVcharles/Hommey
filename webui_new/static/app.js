@@ -56,9 +56,6 @@
     const quickTripPlaceStatus = document.getElementById('quickTripPlaceStatus');
     const retrievalModeControls = Array.from(document.querySelectorAll('[data-retrieval-mode-control]'));
 
-    const ACCESS_TOKEN_KEY = 'hommey.access_token';
-    const REFRESH_TOKEN_KEY = 'hommey.refresh_token';
-    const USER_ID_KEY = 'hommey.user_id';
     const THEME_KEY = 'hommey.theme';
     const MOTION_KEY = 'hommey.motion';
     const RETRIEVAL_MODE_KEY_PREFIX = 'hommey.retrieval_mode';
@@ -521,7 +518,7 @@
             });
         });
         document.querySelectorAll('.logout-link').forEach((link) => {
-            link.addEventListener('click', clearAuth);
+            link.addEventListener('click', handleLogout);
         });
         document.querySelectorAll('[data-theme-option]').forEach((button) => {
             button.addEventListener('click', () => setTheme(button.dataset.themeOption));
@@ -693,8 +690,8 @@
     }
 
     async function initialize() {
-        if (!ensureAuthenticatedPath()) return;
         try {
+            if (!await ensureAuthenticatedPath()) return;
             const status = await fetchJson(`/api/${encodeURIComponent(userId)}/status`);
             if (!status.initialized) {
                 const initData = await fetchJson(`/api/${encodeURIComponent(userId)}/init`, { method: 'POST' });
@@ -1253,7 +1250,7 @@
             const link = document.createElement('a');
             link.href = '/';
             link.textContent = '重新登录';
-            link.addEventListener('click', clearAuth);
+            link.addEventListener('click', handleLogout);
             sub.appendChild(link);
         }
     }
@@ -1773,12 +1770,8 @@
             }
             xhr.onload = async () => {
                 if (xhr.status === 401) {
-                    const refreshed = await refreshAccessToken();
-                    if (!refreshed) {
-                        reject(new Error('登录已过期，请重新登录'));
-                        return;
-                    }
-                    try { resolve(await uploadAttachment(file, onProgress)); } catch (e) { reject(e); }
+                    window.HommeyAuth.expired();
+                    reject(new Error('登录已过期，请重新登录'));
                     return;
                 }
                 let body = null;
@@ -2295,6 +2288,8 @@
         setSendLoading(true);
         showProcessingIndicator(runtime, []);
 
+        let streamMessage = null;
+        let turnDone = false;
         try {
             const response = await authFetch(`/api/${encodeURIComponent(userId)}/chat/stream`, {
                 method: 'POST',
@@ -2319,7 +2314,6 @@
             submissionAccepted = true;
             collapseTripIntakeCards(runtime);
 
-            let streamMessage = null;
             let presentationRendered = false;
             let nextPlaceholder = '';
             let preferencesUpdated = false;
@@ -2354,8 +2348,14 @@
                     if (event.type === 'agents') updateAgentTags(runtime, event.agents);
                     if (event.type === 'interrupted') {
                         turnInterrupted = true;
+                        streamMessage?.row.remove();
+                        streamMessage = null;
                         removeProcessingIndicator(runtime);
                         addMessage(runtime, 'ai', '已停止当前执行。输入“继续”可以从最近一次安全状态接着完成。');
+                    }
+                    if (event.type === 'response_reset') {
+                        streamMessage?.row.remove();
+                        streamMessage = null;
                     }
                     if (event.type === 'answer_document') {
                         removeProcessingIndicator(runtime);
@@ -2377,7 +2377,10 @@
                         renderMessageInto(streamMessage.bubble, streamMessage.text);
                         scrollToBottom(runtime);
                     }
-                    if (event.type === 'done') preferencesUpdated = !!event.preferences_updated;
+                    if (event.type === 'done') {
+                        turnDone = true;
+                        preferencesUpdated = !!event.preferences_updated;
+                    }
                 }
             }
 
@@ -2405,7 +2408,17 @@
                 streamMessage.text += tail.text || '';
                 renderMessageInto(streamMessage.bubble, streamMessage.text);
             }
-            if (tail && tail.type === 'done') preferencesUpdated = !!tail.preferences_updated;
+            if (tail?.type === 'response_reset') {
+                streamMessage?.row.remove();
+                streamMessage = null;
+            }
+            if (tail && tail.type === 'done') {
+                turnDone = true;
+                preferencesUpdated = !!tail.preferences_updated;
+            }
+            if (!turnDone) {
+                throw createApiError({code: 'STREAM_INCOMPLETE', message: '回复未完成，连接已中断，请重试', request_id: runtime.requestId, retryable: true}, '回复未完成，请重试');
+            }
 
             removeProcessingIndicator(runtime);
             if (!streamMessage && !presentationRendered && !turnInterrupted) {
@@ -2420,6 +2433,10 @@
             await loadActiveTrip();
             requestCompleted = true;
         } catch (err) {
+            if (!turnDone) {
+                streamMessage?.row.remove();
+                streamMessage = null;
+            }
             removeProcessingIndicator(runtime);
             window.ExecutionPlan?.connectionLost(runtime.container, runtime.requestId);
             const errorText = formatDisplayError(err, '网络错误，请检查连接后重试。');
@@ -2713,7 +2730,7 @@
         stack.appendChild(bubble);
         runtime.container.appendChild(row);
         scrollToBottom(runtime);
-        return { bubble, stack, text: '' };
+        return { row, bubble, stack, text: '' };
     }
 
     function renderMessageInto(element, text) {
@@ -3183,91 +3200,30 @@
     }
 
     function getAccessToken() {
-        return localStorage.getItem(ACCESS_TOKEN_KEY) || '';
+        return window.HommeyAuth.token();
     }
 
-    function getRefreshToken() {
-        return localStorage.getItem(REFRESH_TOKEN_KEY) || '';
-    }
-
-    function clearAuth() {
-        localStorage.removeItem(ACCESS_TOKEN_KEY);
-        localStorage.removeItem(REFRESH_TOKEN_KEY);
-        localStorage.removeItem(USER_ID_KEY);
-    }
-
-    function decodeJwtPayload(token) {
-        const part = String(token || '').split('.')[1];
-        if (!part) return null;
-        const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-        const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
+    async function handleLogout(event) {
+        event.preventDefault();
         try {
-            return JSON.parse(decodeURIComponent(escape(atob(padded))));
+            await window.HommeyAuth.logout();
         } catch (err) {
-            return null;
+            showToast(err.message || '退出失败，请稍后重试');
         }
     }
 
-    function ensureAuthenticatedPath() {
-        const token = getAccessToken();
-        if (!token) {
-            showInitError('请先登录');
-            return false;
-        }
-        const payload = decodeJwtPayload(token);
-        const tokenUserId = payload && payload.sub;
-        if (!tokenUserId) {
-            clearAuth();
-            showInitError('登录信息无效');
-            return false;
-        }
-        localStorage.setItem(USER_ID_KEY, String(tokenUserId));
-        if (String(tokenUserId) !== userId) {
-            window.location.replace(`/chat/${encodeURIComponent(tokenUserId)}`);
+    async function ensureAuthenticatedPath() {
+        const account = await window.HommeyAuth.currentUser();
+        if (!account) return false;
+        if (String(account.id) !== userId) {
+            window.location.replace(`/chat/${encodeURIComponent(account.id)}`);
             return false;
         }
         return true;
     }
 
-    async function authFetch(url, options) {
-        const first = await fetchWithAccessToken(url, options);
-        if (first.status !== 401) return first;
-        const refreshed = await refreshAccessToken();
-        if (!refreshed) {
-            clearAuth();
-            window.location.replace('/');
-            return first;
-        }
-        return fetchWithAccessToken(url, options);
-    }
-
-    async function fetchWithAccessToken(url, options) {
-        const headers = new Headers((options && options.headers) || {});
-        const token = getAccessToken();
-        if (token) headers.set('Authorization', `Bearer ${token}`);
-        return fetch(url, { ...(options || {}), headers });
-    }
-
-    async function refreshAccessToken() {
-        const refreshToken = getRefreshToken();
-        if (!refreshToken) return false;
-        try {
-            const response = await fetch('/auth/refresh', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({ refresh_token: refreshToken }),
-            });
-            if (!response.ok) return false;
-            const data = await response.json();
-            const payload = decodeJwtPayload(data.access_token);
-            if (!payload || String(payload.sub) !== userId) return false;
-            localStorage.setItem(ACCESS_TOKEN_KEY, data.access_token);
-            localStorage.setItem(REFRESH_TOKEN_KEY, data.refresh_token);
-            localStorage.setItem(USER_ID_KEY, String(payload.sub));
-            return true;
-        } catch (err) {
-            return false;
-        }
+    function authFetch(url, options) {
+        return window.HommeyAuth.fetch(url, options);
     }
 
     class ApiError extends Error {

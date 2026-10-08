@@ -154,7 +154,7 @@ def test_policy_wire_schema_is_inline_and_server_bounds_still_apply():
 
 
 @pytest.mark.asyncio
-async def test_buffered_adapter_keeps_raw_arguments_and_rejects_repaired_json(monkeypatch):
+async def test_adapter_keeps_raw_arguments_and_rejects_repaired_json(monkeypatch):
     from types import SimpleNamespace
     import agentscope.model
     from agent_runtime.model_client import create_tool_model, call_model
@@ -167,7 +167,8 @@ async def test_buffered_adapter_keeps_raw_arguments_and_rejects_repaired_json(mo
 
     monkeypatch.setattr(agentscope.model, "OpenAIChatModel", Base)
     adapter = create_tool_model({"model_name": "test", "api_key": "test", "base_url": "https://example.invalid"}, {})
-    assert adapter.options["stream"] is False
+    assert adapter.options["stream"] is True
+    assert adapter.options["stream_tool_parsing"] is False
     assert adapter.options["client_kwargs"]["max_retries"] == 0
     response = SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(tool_calls=[
         SimpleNamespace(id="c", function=SimpleNamespace(arguments='{"summary":"incomplete"'))]))])

@@ -3,8 +3,6 @@ package com.hommey.backend.profile;
 import com.hommey.backend.security.AccessPolicy;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
@@ -23,22 +21,20 @@ public class ProfileController {
   }
 
   @GetMapping
-  public Object get(@PathVariable String user, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object get(@PathVariable String user) {
+    access.requireUser(user);
     return profiles.get(user);
   }
 
   @PutMapping
-  public Object save(
-      @PathVariable String user, @Valid @RequestBody Save body, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object save(@PathVariable String user, @Valid @RequestBody Save body) {
+    access.requireUser(user);
     return profiles.save(user, body.profile(), body.revision());
   }
 
   @PostMapping("/skip")
-  public Object skip(
-      @PathVariable String user, @Valid @RequestBody Skip body, @AuthenticationPrincipal Jwt jwt) {
-    access.requireUser(jwt, user);
+  public Object skip(@PathVariable String user, @Valid @RequestBody Skip body) {
+    access.requireUser(user);
     return profiles.skip(user, body.revision());
   }
 }

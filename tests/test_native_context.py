@@ -151,7 +151,7 @@ async def test_native_followup_keeps_original_tool_pair_without_inheriting_execu
     assert len(previews) == 3
     last = next(json.loads(p.read_text(encoding="utf-8")) for p in previews
                 if any(m.get("content") == "继续解释" for m in json.loads(p.read_text(encoding="utf-8"))["messages"]))
-    assert last["tool_choice"] == "auto"
+    assert last["tool_choice"] == "required"
     assert last["messages"] == captured[-1]
 
 

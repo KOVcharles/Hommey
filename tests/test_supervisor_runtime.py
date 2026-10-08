@@ -123,7 +123,7 @@ class JourneyModel:
 
     async def __call__(self, messages, tools, tool_choice):
         names = {t["function"]["name"] for t in tools}
-        assert tool_choice == ("auto" if "delegate" in names else next(iter(names)) if len(names) == 1 else "required")
+        assert tool_choice == (next(iter(names)) if len(names) == 1 else "required")
         out = outputs(messages)
         if "delegate" in names:
             self.main_round += 1

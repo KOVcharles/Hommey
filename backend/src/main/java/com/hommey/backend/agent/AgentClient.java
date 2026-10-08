@@ -11,6 +11,7 @@ import org.springframework.http.*;
 import org.springframework.http.client.reactive.ReactorClientHttpConnector;
 import org.springframework.stereotype.Component;
 import org.springframework.web.reactive.function.client.WebClient;
+import org.springframework.web.util.DefaultUriBuilderFactory;
 import reactor.core.publisher.*;
 import reactor.netty.http.client.HttpClient;
 
@@ -20,9 +21,14 @@ public class AgentClient {
   private static final ParameterizedTypeReference<Map<String, Object>> OBJECT =
       new ParameterizedTypeReference<>() {};
   private final WebClient client;
+  private final DefaultUriBuilderFactory capabilityUris;
   private final TokenService tokens;
 
   public AgentClient(WebClient.Builder builder, AgentProperties props, TokenService tokens) {
+    this.capabilityUris = new DefaultUriBuilderFactory(props.baseUrl());
+    // CapabilityController supplies the servlet's already encoded path/query.
+    // Preserve them when passing a URI to WebClient instead of encoding twice.
+    this.capabilityUris.setEncodingMode(DefaultUriBuilderFactory.EncodingMode.NONE);
     var http =
         HttpClient.create()
             .option(ChannelOption.CONNECT_TIMEOUT_MILLIS, 5000)
@@ -83,7 +89,11 @@ public class AgentClient {
 
   public Mono<ResponseEntity<byte[]>> forward(
       HttpMethod method, String path, String credential, MediaType contentType, Object body) {
-    var request = client.method(method).uri(path).headers(h -> h.setBearerAuth(credential));
+    var request =
+        client
+            .method(method)
+            .uri(capabilityUris.uriString(path).build())
+            .headers(h -> h.setBearerAuth(credential));
     if (contentType != null) request.contentType(contentType);
     return (body == null ? request : request.bodyValue(body)).retrieve().toEntity(byte[].class);
   }
@@ -95,7 +105,7 @@ public class AgentClient {
       org.springframework.util.MultiValueMap<String, org.springframework.http.HttpEntity<?>> body) {
     return client
         .method(method)
-        .uri(path)
+        .uri(capabilityUris.uriString(path).build())
         .headers(h -> h.setBearerAuth(credential))
         .body(org.springframework.web.reactive.function.BodyInserters.fromMultipartData(body))
         .retrieve()

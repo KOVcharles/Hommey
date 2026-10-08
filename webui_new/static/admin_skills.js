@@ -1,6 +1,5 @@
 (function () {
     'use strict';
-    const token = localStorage.getItem('hommey.access_token');
     const app = document.getElementById('app');
     const error = document.getElementById('error');
     let state = { skills: [] };
@@ -8,9 +7,9 @@
     document.addEventListener('DOMContentLoaded', load);
 
     async function api(path, options = {}) {
-        const response = await fetch(path, {
+        const response = await window.HommeyAuth.fetch(path, {
             ...options,
-            headers: { 'Authorization': `Bearer ${token || ''}`, 'Content-Type': 'application/json', ...(options.headers || {}) },
+            headers: { 'Content-Type': 'application/json', ...(options.headers || {}) },
         });
         const data = await response.json();
         if (!response.ok) throw new Error(data.error?.message || '请求失败');
@@ -18,7 +17,7 @@
     }
 
     async function load() {
-        if (!token) return fail('请先以管理员身份登录。');
+        if (!window.HommeyAuth.token()) return window.HommeyAuth.expired();
         try {
             state = await api('/api/admin/skills');
             app.hidden = false;

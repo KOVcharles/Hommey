@@ -40,19 +40,6 @@
         return !firstInvalid;
     }
 
-    // Keep token decoding and the successful-login destination from the previous page.
-    function decodeJwtPayload(token) {
-        const part = String(token || '').split('.')[1];
-        if (!part) return null;
-        const normalized = part.replace(/-/g, '+').replace(/_/g, '/');
-        const padded = normalized + '='.repeat((4 - normalized.length % 4) % 4);
-        try {
-            return JSON.parse(decodeURIComponent(escape(atob(padded))));
-        } catch (err) {
-            return null;
-        }
-    }
-
     async function readError(response, fallback) {
         try {
             const body = await response.json();
@@ -103,15 +90,11 @@
                 return;
             }
             const data = await response.json();
-            const payload = decodeJwtPayload(data.access_token);
-            const userId = payload && payload.sub;
+            const userId = window.HommeyAuth.save(data);
             if (!userId) {
                 errorMsg.textContent = '登录成功，但无法读取用户身份';
                 return;
             }
-            localStorage.setItem('hommey.access_token', data.access_token);
-            localStorage.setItem('hommey.refresh_token', data.refresh_token);
-            localStorage.setItem('hommey.user_id', String(userId));
             window.location.href = `/chat/${encodeURIComponent(userId)}`;
         } catch (err) {
             errorMsg.textContent = '网络错误，请检查连接后重试';

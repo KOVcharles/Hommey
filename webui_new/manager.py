@@ -561,11 +561,16 @@ class HommeyWebInstance:
 
         yield {"type": "status", "phase": "analyzing", "message_key": "request_analyzing"}
         request_task = asyncio.create_task(run_request())
+        streamed_text = ""
         try:
             while True:
                 event = await queue.get()
                 if event is None:
                     break
+                if event.get("type") == "chunk":
+                    streamed_text += event.get("text") or ""
+                elif event.get("type") == "response_reset":
+                    streamed_text = ""
                 yield event
         finally:
             # 生成器被关闭/取消（前端断连、外层取消）时，取消内层 request_task，
@@ -600,6 +605,13 @@ class HommeyWebInstance:
             yield {"type": "agents", "agents": agents}
 
         answer_document = result.get("answer_document")
+        presentation_document = result.get("presentation_document")
+        response = result.get("response") or ""
+        if streamed_text and (answer_document or presentation_document or streamed_text != response):
+            # Replace provisional prose with the validated final result, without
+            # leaving a stale draft next to a card or a degraded response.
+            yield {"type": "response_reset"}
+            streamed_text = ""
         if answer_document:
             yield {"type": "answer_document", "document": answer_document}
             yield {
@@ -609,7 +621,6 @@ class HommeyWebInstance:
             }
             return
 
-        presentation_document = result.get("presentation_document")
         if presentation_document:
             yield {"type": "presentation_document", "document": presentation_document}
             yield {
@@ -619,10 +630,10 @@ class HommeyWebInstance:
             }
             return
 
-        response = result.get("response") or ""
-        for chunk in self._chunk_text(response):
-            yield {"type": "chunk", "text": chunk}
-            await asyncio.sleep(0.01)
+        if response and response != streamed_text:
+            # Static replies and idempotent replays already exist in full. Only
+            # provider-generated text is incremental; never simulate tokens.
+            yield {"type": "chunk", "text": response}
 
         yield {
             "type": "done", **completion,
@@ -631,12 +642,6 @@ class HommeyWebInstance:
             "sources": result.get("sources", []),
             "warnings": result.get("warnings", []),
         }
-
-    @staticmethod
-    def _chunk_text(text: str, size: int = 18):
-        for idx in range(0, len(text), size):
-            yield text[idx:idx + size]
-
 
 class WebHommeyManager:
     """管理所有用户的 Hommey 实例"""

@@ -4,8 +4,6 @@ import com.hommey.backend.security.AccessPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import org.springframework.http.*;
 import org.springframework.http.client.MultipartBodyBuilder;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartHttpServletRequest;
 import reactor.core.publisher.Mono;
@@ -30,10 +28,9 @@ public class CapabilityController {
         "/api/{user}/asr/transcribe"
       },
       method = {RequestMethod.GET, RequestMethod.POST, RequestMethod.DELETE})
-  public Mono<ResponseEntity<byte[]>> user(
-      @PathVariable String user, @AuthenticationPrincipal Jwt jwt, HttpServletRequest request)
+  public Mono<ResponseEntity<byte[]>> user(@PathVariable String user, HttpServletRequest request)
       throws Exception {
-    var account = access.requireUser(jwt, user);
+    var account = access.requireUser(user);
     return forward(
         request,
         agent.credential(
@@ -51,18 +48,17 @@ public class CapabilityController {
         "/api/knowledge/refresh/status"
       },
       method = {RequestMethod.GET, RequestMethod.POST})
-  public Mono<ResponseEntity<byte[]>> catalog(
-      @AuthenticationPrincipal Jwt jwt, HttpServletRequest request) throws Exception {
-    var account = access.requireUser(jwt, jwt.getSubject());
+  public Mono<ResponseEntity<byte[]>> catalog(HttpServletRequest request) throws Exception {
+    var account = access.currentUser();
     String path = request.getRequestURI();
     if (path.startsWith("/api/admin/")
         || path.startsWith("/api/knowledge/refresh")
         || (path.startsWith("/api/knowledge/") && !"GET".equals(request.getMethod())))
-      access.requireAdmin(jwt);
+      access.requireAdmin();
     return forward(
         request,
         agent.credential(
-            jwt.getSubject(),
+            Long.toString(account.id()),
             account.role(),
             null,
             String.valueOf(request.getAttribute("requestId"))));

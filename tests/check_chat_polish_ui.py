@@ -34,7 +34,11 @@ def route_request(route):
             route.fulfill(status=404)
         return
     if path == '/chat/qa':
-        html = Template((ROOT / 'webui_new/templates/chat.html').read_text(encoding='utf-8')).render(user_id='qa')
+        # Thymeleaf's ${#...} expressions are not Jinja comments.
+        html = Template(
+            (ROOT / 'webui_new/templates/chat.html').read_text(encoding='utf-8'),
+            comment_start_string='{##', comment_end_string='##}',
+        ).render(user_id='qa')
         route.fulfill(body=html, content_type='text/html')
         return
     if path.endswith('/chat/stream'):
@@ -52,7 +56,8 @@ def route_request(route):
                       content_type='application/x-ndjson')
         return
     data = {}
-    if path.endswith('/status'): data = {'initialized': True}
+    if path == '/api/me': data = {'id': 'qa', 'role': 'user'}
+    elif path.endswith('/status'): data = {'initialized': True}
     elif path.endswith('/is-new'): data = {'is_new': False}
     elif path.endswith('/sessions'): data = {'active_session_id': 'session', 'sessions': [{'session_id': 'session', 'title': '重庆出差'}]}
     elif path.endswith('/activate'): data = {'messages': history}
@@ -69,7 +74,7 @@ def open_history(page):
 with sync_playwright() as p:
     browser = p.chromium.launch(channel='msedge', headless=True, args=['--disable-gpu'])
     context = browser.new_context(viewport={'width': 1180, 'height': 950})
-    context.add_init_script("localStorage.setItem('hommey.access_token', 'e30.' + btoa(JSON.stringify({sub:'qa'})) + '.qa'); localStorage.setItem('hommey.theme','light');")
+    context.add_init_script("localStorage.setItem('hommey.token', 'qa-opaque-session'); localStorage.setItem('hommey.theme','light');")
     context.route('**/*', route_request)
     page = context.new_page()
     errors = []

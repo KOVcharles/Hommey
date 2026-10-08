@@ -3,13 +3,27 @@ name: Business and AI boundary checks
 on:
   pull_request:
   push:
-    branches: ["codex/spring-python-backend"]
+    branches: ["main", "codex/**"]
   workflow_dispatch:
 
 permissions:
   contents: read
 
 jobs:
+  frontend:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: "24"
+      - name: Check incremental chat rendering and incomplete streams
+        run: |
+          node --check webui_new/static/trip-choices.js
+          node --check webui_new/static/auth-session.js
+          node --test tests/test_auth_session.cjs
+          node --test tests/test_chat_stream_delivery.cjs
   spring:
     runs-on: ubuntu-latest
     timeout-minutes: 15
@@ -21,7 +35,7 @@ jobs:
           java-version: "21"
           cache: maven
           cache-dependency-path: backend/pom.xml
-      - name: Test against real PostgreSQL and check formatting
+      - name: Test against real PostgreSQL and Redis and check formatting
         working-directory: backend
         run: bash mvnw --batch-mode verify
       - uses: actions/upload-artifact@v4
@@ -43,9 +57,12 @@ jobs:
         run: >-
           python -m black --check ai_service scripts/prepare_engineering.py
           scripts/run_ai_service.py tests/test_business_boundary.py tests/test_spring_agent_integration.py
+          tests/test_native_streaming.py scripts/load_test.py tests/test_load_test.py
       - name: Check boundary and retained agent behavior without model calls
         run: >-
-          python -m pytest -q tests/test_business_boundary.py
+          python -m pytest -q tests/test_native_streaming.py tests/test_business_boundary.py
+          tests/test_agent_text_replies.py
+          tests/test_place_information.py tests/test_journey_map_integration.py tests/test_trip_choices.py
           tests/test_single_runtime.py tests/test_runtime_thinking.py
           tests/test_supervisor_runtime.py tests/test_supervisor_control.py
           tests/test_supervisor_context_bounds.py tests/test_native_context.py
@@ -53,4 +70,4 @@ jobs:
           tests/test_auth_pages.py tests/test_user_profile_context.py
           tests/test_trip_intake_experience.py tests/test_information_request.py
           tests/test_attachment_routes.py tests/test_multimodal_chat.py
-          tests/test_knowledge_base_routes.py tests/test_webui_error_responses.py
+          tests/test_knowledge_base_routes.py tests/test_webui_error_responses.py tests/test_load_test.py

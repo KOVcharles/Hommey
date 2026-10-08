@@ -25,7 +25,7 @@ function pass(name) {passed.push(name);console.log('PASS',name);}
         let failTrip=false;
         page.on('pageerror',e=>errors.push(e.message));
         await page.addInitScript(()=>{
-            localStorage.setItem('hommey.access_token','test.'+btoa(JSON.stringify({sub:'ambient',exp:9999999999}))+'.test');
+            localStorage.setItem('hommey.token', 'qa-opaque-session');
             localStorage.setItem('hommey.theme','light');
             sessionStorage.setItem('hommey.session.ambient','trip');
         });
@@ -39,6 +39,7 @@ function pass(name) {passed.push(name);console.log('PASS',name);}
             }
             if(p==='/chat/ambient')return route.fulfill({contentType:'text/html; charset=utf-8',body:fs.readFileSync(path.join(root,'webui_new/templates/chat.html'),'utf8').replaceAll('{{ user_id }}','ambient').replaceAll("{{ user_id[0:1].upper() if user_id else 'U' }}",'A')});
             let body={};
+            if (p === '/api/me') body={id:'ambient',role:'user'};
             if(p.endsWith('/status'))body={initialized:true};
             if(p.endsWith('/summary'))body={name_display:'测试账户',preferences:[],role:'user'};
             if(p.endsWith('/sessions'))body=req.method()==='POST'?{session_id:'new'}:{sessions};

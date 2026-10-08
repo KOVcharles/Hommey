@@ -20,7 +20,8 @@ flowchart LR
 
 | 能力 | 负责服务 |
 | --- | --- |
-| 登录、注册、验证码、邀请码、用户权限 | Spring Security + Spring 业务服务 |
+| 登录、注销、多设备会话、用户权限 | Sa-Token + Redis + Spring 业务服务 |
+| 注册、验证码、邀请码 | Spring 业务服务 |
 | 个人资料、会话、消息、附件绑定、偏好、行程 | Spring Service / Repository |
 | 数据库结构版本 | Flyway，只有 Spring 启动执行 |
 | Agent 编排、模型调用、执行检查点和取消 | Python `agent_runtime` |
@@ -29,7 +30,7 @@ flowchart LR
 
 采用按业务分包的 `Controller → Service → Repository`。Spring MVC 处理业务 HTTP，WebClient 访问内部 AI 服务；没有引入注册中心、配置中心、消息队列或自研框架。当前采用一个 PostgreSQL 实例、分表归属和独立账号，保留检查点与业务提交之间的取消栅栏；它不是完全拆库的微服务体系。
 
-浏览器 access token 的 audience 是 `hommey-api`。Spring 验证用户和会话后签发短期 RS256 执行凭证，限定 `user / session / request`，audience 是 `hommey-agent` 与 `hommey-business`。只有 Spring 持有私钥。Python 不接收公开登录 token，模型输入不包含执行凭证；回调 Spring 时仍检查用户归属。
+浏览器使用 Sa-Token 的随机令牌，通过 `Authorization: Bearer <token>` 提交；登录态保存在 Redis，支持服务端注销、全部设备退出及管理员强制下线。用户身份通过 `/api/me` 获取，不解析令牌。配置与迁移步骤见 [Sa-Token 指南](sa-token-auth.md)。Spring 验证用户和会话后签发短期 RS256 执行凭证，限定 `user / session / request`，audience 是 `hommey-agent` 与 `hommey-business`。只有 Spring 持有私钥。Python 不接收公开登录 token，模型输入不包含执行凭证；回调 Spring 时仍检查用户归属。
 
 业务变更在 Spring 的单个数据库事务内完成：执行状态/owner 检查、当前行程版本校验、行程和偏好写入、幂等回执写入。网络丢失后重试相同操作不会重复写入；输入改变会得到冲突。Python 使用 `hommey_ai` 账号，不能修改用户、资料、会话、消息、偏好、行程和业务回执；仅能读取检查点/评估需要的会话与消息，写入 AI 归属表。共享数据库账号不是多租户数据库隔离，租户归属由服务 API 与查询条件控制。
 
@@ -112,7 +113,9 @@ python -m pytest -q tests/test_business_boundary.py
 docker compose --env-file .env.engineering -f docker/docker-compose.engineering.yml logs --tail 100 backend agent rag-worker
 ```
 
-Java 集成测试使用 Testcontainers 的独立 PostgreSQL，验证鉴权、数据归属、参数约束、幂等、事务版本、AI 数据库权限和 NDJSON 首块转发。Python 测试验证执行凭证和上下文隔离，并保留现有 Agent 回归测试。GitHub Actions 在 PR 与改造分支运行这些检查，不部署服务器。
+Java 集成测试使用 Testcontainers 的独立 PostgreSQL 和 Redis，验证鉴权、数据归属、参数约束、幂等、事务版本、AI 数据库权限和 NDJSON 首块转发。Python 测试验证执行凭证和上下文隔离，并保留现有 Agent 回归测试。GitHub Actions 在 PR 与改造分支运行这些检查，不部署服务器。
+
+只读业务 API 与真实 AI 对话的小型压测步骤见 [压测指南](small-load-test.md)。`scripts/load_test.py` 使用现有 httpx，分别测量固定到达速率和有限并发，报告写入被 Git 忽略的 `benchmark-results/`。
 
 `requirements.lock` 固定本次 Linux/Python 3.11 验证的依赖版本，镜像与 CI 同时使用 requirements 和约束文件，避免构建时无意升级模型 SDK。升级依赖需重新解析并通过测试。Java 格式由 Spotless / Google Java Format 检查；新 Python 服务使用 Black。开发格式工具通过 `pip install -r requirements-dev.txt` 安装。
 
@@ -130,7 +133,7 @@ Remove-Item Env:HOMMEY_SPLIT_INTEGRATION
 
 ## 本次验证记录
 
-- Linux / Java 21：`mvn spotless:apply verify` 通过，13 项集成测试，真实 PostgreSQL 与 Redis。注册链路使用本地邮件替身，未发送真实邮件。
+- Linux / Java 21：`mvn verify` 通过，18 项集成测试与 2 项 Agent 客户端测试，真实 PostgreSQL 与 Redis，Spotless 格式检查通过。注册链路使用本地邮件替身，未发送真实邮件。
 - Linux / Python 3.11：201 项保留的 Agent、前端契约与服务边界测试通过，1 项需单独数据库环境的测试跳过。Windows 符号链接测试的环境限制已在 Linux 核验。
 - 新 Compose：Spring、AI、RAG worker、PostgreSQL、Redis、Nginx 均启动；入口与健康检查可访问。
 - 两项跨语言联调：生产 runtime 工厂与 Supervisor 使用测试模型完成行程提交和重复执行；Spring 转发真实 Python 附件上传/解析/下载，消息绑定正确，普通用户不能刷新知识库。

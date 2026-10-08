@@ -6,8 +6,6 @@ import com.hommey.backend.session.SessionService;
 import jakarta.servlet.http.HttpServletRequest;
 import java.util.*;
 import org.springframework.http.*;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 import reactor.core.publisher.*;
 
@@ -40,11 +38,8 @@ public class ChatController {
 
   @PostMapping(value = "/chat/stream", produces = "application/x-ndjson")
   public Flux<Map<String, Object>> stream(
-      @PathVariable String user,
-      @RequestBody Map<String, Object> body,
-      @AuthenticationPrincipal Jwt jwt,
-      HttpServletRequest req) {
-    var account = access.requireUser(jwt, user);
+      @PathVariable String user, @RequestBody Map<String, Object> body, HttpServletRequest req) {
+    var account = access.requireUser(user);
     String session = session(body), id = request(body, req);
     sessions.require(user, session);
     return agent.stream(
@@ -70,11 +65,8 @@ public class ChatController {
 
   @PostMapping("/chat")
   public Mono<?> chat(
-      @PathVariable String user,
-      @RequestBody Map<String, Object> body,
-      @AuthenticationPrincipal Jwt jwt,
-      HttpServletRequest req) {
-    var account = access.requireUser(jwt, user);
+      @PathVariable String user, @RequestBody Map<String, Object> body, HttpServletRequest req) {
+    var account = access.requireUser(user);
     String session = session(body), id = request(body, req);
     sessions.require(user, session);
     return agent.json(
@@ -85,11 +77,8 @@ public class ChatController {
   }
 
   @PostMapping("/orchestration/interrupt")
-  public Mono<?> interrupt(
-      @PathVariable String user,
-      @RequestBody Map<String, Object> body,
-      @AuthenticationPrincipal Jwt jwt) {
-    var account = access.requireUser(jwt, user);
+  public Mono<?> interrupt(@PathVariable String user, @RequestBody Map<String, Object> body) {
+    var account = access.requireUser(user);
     String session = session(body);
     sessions.require(user, session);
     Object request = body.get("client_request_id");
@@ -103,9 +92,8 @@ public class ChatController {
   }
 
   @GetMapping("/sessions/{session}/execution-plans")
-  public Mono<?> plans(
-      @PathVariable String user, @PathVariable String session, @AuthenticationPrincipal Jwt jwt) {
-    var account = access.requireUser(jwt, user);
+  public Mono<?> plans(@PathVariable String user, @PathVariable String session) {
+    var account = access.requireUser(user);
     sessions.require(user, session);
     return agent.json(
         HttpMethod.GET,

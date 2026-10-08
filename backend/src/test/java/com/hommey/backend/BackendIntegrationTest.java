@@ -2,6 +2,10 @@ package com.hommey.backend;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
+import cn.dev33.satoken.dao.SaTokenDao;
+import cn.dev33.satoken.dao.SaTokenDaoForRedisTemplate;
+import cn.dev33.satoken.stp.StpUtil;
+import cn.dev33.satoken.stp.parameter.SaLoginParameter;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.hommey.backend.agent.TripVersion;
 import com.hommey.backend.auth.RegistrationService;
@@ -138,6 +142,8 @@ class BackendIntegrationTest {
   @Autowired TestRestTemplate http;
   @Autowired JdbcClient jdbc;
   @Autowired TokenService tokens;
+  @Autowired SaTokenDao tokenDao;
+  @Autowired org.springframework.security.oauth2.jwt.JwtEncoder jwtEncoder;
   @Autowired PasswordEncoder passwords;
   @Autowired TripVersion versions;
   @Autowired ObjectMapper mapper;
@@ -168,15 +174,49 @@ class BackendIntegrationTest {
     return http.exchange(path, method, new HttpEntity<>(body, headers), Map.class);
   }
 
+  String userToken(String user) {
+    return StpUtil.getStpLogic()
+        .createLoginSession(user, new SaLoginParameter().setDeviceType("web"));
+  }
+
+  String login(String device) {
+    return (String)
+        call(
+                HttpMethod.POST,
+                "/auth/login",
+                null,
+                Map.of("email", "one@example.com", "password", "password123", "device", device))
+            .getBody()
+            .get("access_token");
+  }
+
+  String legacyToken(String type) {
+    var claims =
+        org.springframework.security.oauth2.jwt.JwtClaimsSet.builder()
+            .issuer("hommey-backend")
+            .subject("1")
+            .audience(List.of("hommey-api"))
+            .issuedAt(java.time.Instant.now())
+            .expiresAt(java.time.Instant.now().plusSeconds(300))
+            .claim("type", type)
+            .build();
+    return jwtEncoder
+        .encode(
+            org.springframework.security.oauth2.jwt.JwtEncoderParameters.from(
+                org.springframework.security.oauth2.jwt.JwsHeader.with(
+                        org.springframework.security.oauth2.jose.jws.SignatureAlgorithm.RS256)
+                    .build(),
+                claims))
+        .getTokenValue();
+  }
+
   String session() {
     return (String)
-        call(HttpMethod.POST, "/api/1/sessions", tokens.issue("1", "access"), null)
-            .getBody()
-            .get("session_id");
+        call(HttpMethod.POST, "/api/1/sessions", userToken("1"), null).getBody().get("session_id");
   }
 
   @Test
-  void loginAndAuthorizationUseRealSignedTokens() {
+  void loginUsesRedisSessionsAndIsolatesInternalCredentials() {
     var result =
         call(
             HttpMethod.POST,
@@ -185,26 +225,159 @@ class BackendIntegrationTest {
             Map.of("email", "one@example.com", "password", "password123"));
     assertThat(result.getStatusCode().value()).isEqualTo(200);
     String access = (String) result.getBody().get("access_token");
+    assertThat(access).doesNotContain(".").hasSize(64);
+    assertThat(result.getBody()).doesNotContainKey("refresh_token");
+    assertThat(((Map<?, ?>) result.getBody().get("user")).get("id")).isEqualTo(1);
+    assertThat(tokenDao).isInstanceOf(SaTokenDaoForRedisTemplate.class);
+    assertThat(redis.keys("hommey:auth:session:*token:*")).isNotEmpty();
+    assertThat(call(HttpMethod.GET, "/api/me", access, null).getBody().get("id")).isEqualTo(1);
     assertThat(call(HttpMethod.GET, "/api/1/profile", access, null).getStatusCode().value())
         .isEqualTo(200);
     assertThat(call(HttpMethod.GET, "/api/2/profile", access, null).getStatusCode().value())
         .isEqualTo(403);
     assertThat(
-            call(HttpMethod.GET, "/api/1/profile", tokens.issue("1", "refresh"), null)
+            call(HttpMethod.GET, "/api/1/profile", legacyToken("refresh"), null)
                 .getStatusCode()
                 .value())
-        .isEqualTo(403);
+        .isEqualTo(401);
     assertThat(
             call(HttpMethod.GET, "/internal/business/users/1/preferences", access, null)
                 .getStatusCode()
                 .value())
-        .isEqualTo(403);
+        .isEqualTo(401);
     assertThat(
             call(HttpMethod.GET, "/api/1/profile", tokens.agent("1", "user", null, null), null)
                 .getStatusCode()
                 .value())
-        .isEqualTo(403);
+        .isEqualTo(401);
     assertThat(call(HttpMethod.GET, "/api/1/profile", null, null).getStatusCode().value())
+        .isEqualTo(401);
+  }
+
+  @Test
+  void logoutRevokesOnlyTheCurrentTokenAndLogoutAllRevokesAllDevices() {
+    String web = login("web"), mobile = login("mobile");
+    assertThat(web).isNotEqualTo(mobile);
+    assertThat(call(HttpMethod.POST, "/auth/logout", web, null).getStatusCode().value())
+        .isEqualTo(200);
+    assertThat(call(HttpMethod.GET, "/api/me", web, null).getStatusCode().value()).isEqualTo(401);
+    assertThat(call(HttpMethod.GET, "/api/me", mobile, null).getStatusCode().value())
+        .isEqualTo(200);
+    String another = login("web");
+    assertThat(call(HttpMethod.POST, "/auth/logout-all", mobile, null).getStatusCode().value())
+        .isEqualTo(200);
+    for (String token : List.of(mobile, another))
+      assertThat(call(HttpMethod.GET, "/api/me", token, null).getStatusCode().value())
+          .isEqualTo(401);
+  }
+
+  @Test
+  void adminKickoutUsesCurrentDatabaseRoleAndCannotBeCalledByUsersOrAgents() {
+    String admin = userToken("1"), victim = userToken("2");
+    assertThat(
+            call(HttpMethod.POST, "/api/admin/users/2/kickout", admin, null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(403);
+    jdbc.sql("UPDATE users SET role='admin' WHERE id=1").update();
+    assertThat(
+            call(HttpMethod.POST, "/api/admin/users/not-a-user/kickout", admin, null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(400);
+    assertThat(
+            call(HttpMethod.POST, "/api/admin/users/2/kickout", admin, null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(200);
+    assertThat(call(HttpMethod.GET, "/api/me", victim, null).getStatusCode().value())
+        .isEqualTo(401);
+    jdbc.sql("UPDATE users SET role='user' WHERE id=1").update();
+    assertThat(
+            call(HttpMethod.POST, "/api/admin/users/2/kickout", admin, null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(403);
+    assertThat(
+            call(
+                    HttpMethod.POST,
+                    "/api/admin/users/2/kickout",
+                    tokens.agent("1", "admin", null, null),
+                    null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(401);
+  }
+
+  @Test
+  void expiredAndIdleTokensAreRejectedWhileActiveRequestsRenewActivity() {
+    String expired = userToken("1");
+    redis.expire(
+        "hommey:auth:session:" + StpUtil.getStpLogic().splicingKeyTokenValue(expired),
+        java.time.Duration.ZERO);
+    assertThat(call(HttpMethod.GET, "/api/me", expired, null).getStatusCode().value())
+        .isEqualTo(401);
+    String idle = userToken("1");
+    String idleKey = StpUtil.getStpLogic().splicingKeyLastActiveTime(idle);
+    tokenDao.update(idleKey, Long.toString(System.currentTimeMillis() - 1900_000));
+    assertThat(call(HttpMethod.GET, "/api/me", idle, null).getStatusCode().value()).isEqualTo(401);
+    String active = userToken("1");
+    String activeKey = StpUtil.getStpLogic().splicingKeyLastActiveTime(active);
+    long previous = System.currentTimeMillis() - 60_000;
+    tokenDao.update(activeKey, Long.toString(previous));
+    assertThat(call(HttpMethod.GET, "/api/me", active, null).getStatusCode().value())
+        .isEqualTo(200);
+    assertThat(Long.parseLong(tokenDao.get(activeKey).split(",")[0])).isGreaterThan(previous);
+  }
+
+  @Test
+  void loginLimitRejectsOldestSessionAndDeletedUsersCannotUseLiveTokens() {
+    var logins = new ArrayList<String>();
+    for (int n = 0; n < 6; n++) logins.add(login("web"));
+    assertThat(call(HttpMethod.GET, "/api/me", logins.getFirst(), null).getStatusCode().value())
+        .isEqualTo(401);
+    assertThat(call(HttpMethod.GET, "/api/me", logins.getLast(), null).getStatusCode().value())
+        .isEqualTo(200);
+    jdbc.sql("DELETE FROM users WHERE id=1").update();
+    assertThat(call(HttpMethod.GET, "/api/me", logins.getLast(), null).getStatusCode().value())
+        .isEqualTo(401);
+  }
+
+  @Test
+  void legacyJwtRefreshAndCookieOrQueryAuthenticationAreNotAccepted() {
+    for (String type : List.of("access", "refresh"))
+      assertThat(call(HttpMethod.GET, "/api/me", legacyToken(type), null).getStatusCode().value())
+          .isEqualTo(401);
+    assertThat(
+            call(
+                    HttpMethod.POST,
+                    "/auth/refresh",
+                    null,
+                    Map.of("refresh_token", legacyToken("refresh")))
+                .getStatusCode()
+                .value())
+        .isEqualTo(403);
+    String token = userToken("1");
+    var headers = new HttpHeaders();
+    headers.add("Cookie", "Authorization=" + token);
+    assertThat(
+            http.exchange("/api/me", HttpMethod.GET, new HttpEntity<>(headers), Map.class)
+                .getStatusCode()
+                .value())
+        .isEqualTo(401);
+    assertThat(
+            call(HttpMethod.GET, "/api/me?Authorization=Bearer%20" + token, null, null)
+                .getStatusCode()
+                .value())
+        .isEqualTo(401);
+    assertThat(
+            call(
+                    HttpMethod.POST,
+                    "/auth/login",
+                    null,
+                    Map.of("email", "one@example.com", "password", "wrong-password"))
+                .getStatusCode()
+                .value())
         .isEqualTo(401);
   }
 
@@ -216,7 +389,7 @@ class BackendIntegrationTest {
             Map.of("basic_info", Map.of("personnel_category", "student")),
             "revision",
             0);
-    var token = tokens.issue("1", "access");
+    var token = userToken("1");
     assertThat(call(HttpMethod.PUT, "/api/1/profile", token, valid).getStatusCode().value())
         .isEqualTo(200);
     assertThat(call(HttpMethod.PUT, "/api/1/profile", token, valid).getStatusCode().value())
@@ -242,12 +415,12 @@ class BackendIntegrationTest {
   void sessionOwnershipAndPageCompatibility() {
     String session = session();
     assertThat(
-            call(HttpMethod.GET, "/api/1/sessions/" + session, tokens.issue("1", "access"), null)
+            call(HttpMethod.GET, "/api/1/sessions/" + session, userToken("1"), null)
                 .getStatusCode()
                 .value())
         .isEqualTo(200);
     assertThat(
-            call(HttpMethod.GET, "/api/2/sessions/" + session, tokens.issue("2", "access"), null)
+            call(HttpMethod.GET, "/api/2/sessions/" + session, userToken("2"), null)
                 .getStatusCode()
                 .value())
         .isEqualTo(404);
@@ -434,7 +607,7 @@ class BackendIntegrationTest {
 
   @Test
   void onboardingKeepsExistingSensitiveValueRestrictions() {
-    String token = tokens.issue("1", "access");
+    String token = userToken("1");
     for (String value : List.of("13800138000", "api_key=sk-test-secret-value"))
       assertThat(
               call(
@@ -451,7 +624,7 @@ class BackendIntegrationTest {
 
   @Test
   void profileRejectsMissingRevisionsAndScalarCoercion() {
-    String token = tokens.issue("1", "access");
+    String token = userToken("1");
     for (var body :
         List.of(
             Map.of("profile", Map.of()),
@@ -508,8 +681,7 @@ class BackendIntegrationTest {
             "form_submission",
             "attachment_ids",
             List.of()));
-    var response =
-        call(HttpMethod.GET, "/api/1/sessions/" + sid, tokens.issue("1", "access"), null);
+    var response = call(HttpMethod.GET, "/api/1/sessions/" + sid, userToken("1"), null);
     var rows = (List<Map<String, Object>>) response.getBody().get("messages");
     assertThat(rows).hasSize(2);
     assertThat(rows.getFirst().get("timestamp").toString()).endsWith("Z");
@@ -522,9 +694,7 @@ class BackendIntegrationTest {
           .param("id", UUID.randomUUID())
           .update();
     assertThat(
-            call(HttpMethod.DELETE, "/api/1/history", tokens.issue("1", "access"), null)
-                .getStatusCode()
-                .value())
+            call(HttpMethod.DELETE, "/api/1/history", userToken("1"), null).getStatusCode().value())
         .isEqualTo(200);
     assertThat(
             jdbc.sql(
@@ -560,7 +730,7 @@ class BackendIntegrationTest {
     String session = session();
     var request =
         HttpRequest.newBuilder(URI.create("http://localhost:" + port + "/api/1/chat/stream"))
-            .header("Authorization", "Bearer " + tokens.issue("1", "access"))
+            .header("Authorization", "Bearer " + userToken("1"))
             .header("Content-Type", "application/json")
             .header("X-Request-ID", "stream-1")
             .POST(

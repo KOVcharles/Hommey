@@ -1,14 +1,15 @@
 # Hommey 业务后端
 
-Java 21、Spring Boot 3.5、Spring MVC、Spring Security、Bean Validation、Spring JDBC、Flyway、PostgreSQL、Redis。
+Java 21、Spring Boot 3.5、Spring MVC、Sa-Token、Bean Validation、Spring JDBC、Flyway、PostgreSQL、Redis。内部执行凭证由 Spring Security 验证。
 
 完整的开发、部署和回滚步骤见 [工程化指南](../docs/spring-python-engineering.md)。
+用户登录、Redis 和多设备策略的配置见 [Sa-Token 配置与迁移指南](../docs/sa-token-auth.md)。
 
 按业务能力组织包，包内采用 `Controller → Service → Repository`：
 
 | 包 | 职责 |
 | --- | --- |
-| auth / security | 注册、登录、刷新、用户归属、管理员权限、内部执行凭证 |
+| auth / security | 注册、登录、注销、多设备会话、用户归属、管理员权限、内部执行凭证 |
 | profile | 个人资料校验、版本控制 |
 | session | 会话、消息、附件绑定、删除与清空 |
 | travel | 偏好、当前行程、行程记录 |
@@ -26,6 +27,6 @@ Web 应用运行在 MVC/Tomcat；`WebClient` 仅负责访问 Python 和转发 ND
 .\mvnw.cmd spotless:apply
 ```
 
-Linux / CI 使用 `bash mvnw verify`。测试通过 Testcontainers 启动独立 PostgreSQL，不复用应用数据库。
+Linux / CI 使用 `bash mvnw verify`。测试通过 Testcontainers 启动独立 PostgreSQL 和 Redis，不复用应用数据库。
 
 `db/migration/V1__legacy_schema.sql` 是既有 26 个迁移的**空库基线**。`V2` 增加业务回执和 AI 账号权限。已存在业务数据的数据库不能直接套用 V1；迁移前必须在备份副本演练。后续修改新增 V3、V4，不能修改已发布的迁移文件。

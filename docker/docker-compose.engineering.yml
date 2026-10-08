@@ -21,12 +21,18 @@ services:
 
   redis:
     image: redis:7-alpine
+    environment:
+      REDIS_PASSWORD: ${HOMMEY_REDIS_PASSWORD:-}
+    command:
+      - sh
+      - -c
+      - 'if [ -n "$$REDIS_PASSWORD" ]; then exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"; else exec redis-server --appendonly yes; fi'
     ports:
-      - "127.0.0.1:56380:6379"
+      - "127.0.0.1:${HOMMEY_REDIS_PORT:-56380}:6379"
     volumes:
       - engineering_redis:/data
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD-SHELL", 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
       interval: 5s
       timeout: 3s
       retries: 10
@@ -41,6 +47,14 @@ services:
       HOMMEY_DB_URL: jdbc:postgresql://postgres:5432/hommey
       HOMMEY_REDIS_HOST: redis
       HOMMEY_REDIS_PORT: 6379
+      HOMMEY_REDIS_DB: ${HOMMEY_REDIS_DB:-0}
+      HOMMEY_REDIS_PASSWORD: ${HOMMEY_REDIS_PASSWORD:-}
+      HOMMEY_AUTH_TIMEOUT_SECONDS: ${HOMMEY_AUTH_TIMEOUT_SECONDS:-604800}
+      HOMMEY_AUTH_ACTIVE_TIMEOUT_SECONDS: ${HOMMEY_AUTH_ACTIVE_TIMEOUT_SECONDS:-1800}
+      HOMMEY_AUTH_ALLOW_CONCURRENT: ${HOMMEY_AUTH_ALLOW_CONCURRENT:-true}
+      HOMMEY_AUTH_MAX_LOGIN_COUNT: ${HOMMEY_AUTH_MAX_LOGIN_COUNT:-5}
+      HOMMEY_JWT_ISSUER: ${HOMMEY_JWT_ISSUER:-hommey-backend}
+      HOMMEY_AGENT_TOKEN_DURATION: ${HOMMEY_AGENT_TOKEN_DURATION:-5m}
       HOMMEY_AGENT_URL: http://agent:8000
       HOMMEY_JWT_PRIVATE_KEY: file:/run/secrets/jwt_private
       HOMMEY_JWT_PUBLIC_KEY: file:/run/secrets/jwt_public
@@ -69,11 +83,14 @@ services:
       HOMMEY_SCHEMA_OWNER: spring
       HOMMEY_BUSINESS_API_URL: http://backend:8080
       HOMMEY_JWT_PUBLIC_KEY_PATH: /run/secrets/jwt_public
+      HOMMEY_JWT_ISSUER: ${HOMMEY_JWT_ISSUER:-hommey-backend}
       HOMMEY_LONG_TERM_BACKEND: postgres
       HOMMEY_POSTGRES_DSN: postgresql://hommey_ai:${HOMMEY_AI_DB_PASSWORD:?Set AI DB password}@postgres:5432/hommey
       HOMMEY_SHORT_TERM_BACKEND: redis
       HOMMEY_REDIS_HOST: redis
       HOMMEY_REDIS_PORT: 6379
+      HOMMEY_REDIS_DB: ${HOMMEY_REDIS_DB:-0}
+      HOMMEY_REDIS_PASSWORD: ${HOMMEY_REDIS_PASSWORD:-}
       HOMMEY_RAG_VECTOR_BACKEND: postgres
       HOMMEY_RAG_REFRESH_BACKEND: postgres
       HOMMEY_RAG_POSTGRES_DSN: postgresql://hommey_ai:${HOMMEY_AI_DB_PASSWORD:?Set AI DB password}@postgres:5432/hommey

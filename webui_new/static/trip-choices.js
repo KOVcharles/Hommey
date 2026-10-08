@@ -50,7 +50,7 @@
                 list.hidden = !items.length; input.setAttribute('aria-expanded', String(!!items.length));
             } catch (error) {
                 if (version !== revision || error.name === 'AbortError') return;
-                close(); status.textContent = '地点查询暂时不可用，请修改关键词重试。';
+                close(); status.textContent = error.code && error.message ? error.message : '地点查询暂时不可用，请稍后重试。';
             }
         }
         input.addEventListener('input', () => {

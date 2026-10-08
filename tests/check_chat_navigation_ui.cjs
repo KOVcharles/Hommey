@@ -21,7 +21,7 @@ function pass(name) { passed.push(name); console.log('PASS', name); }
         const errors = [];
         page.on('pageerror', error => errors.push(error.message));
         await page.addInitScript(() => {
-            localStorage.setItem('hommey.access_token', 'test.' + btoa(JSON.stringify({ sub: 'qa', exp: 9999999999 })) + '.test');
+            localStorage.setItem('hommey.token', 'qa-opaque-session');
             localStorage.setItem('hommey.theme', 'light');
             // Real ReadableStreams let replies arrive after navigation, independently.
             window.__streams = [];
@@ -53,6 +53,7 @@ function pass(name) { passed.push(name); console.log('PASS', name); }
             }
             if (pathname === '/chat/qa') return route.fulfill({ contentType: 'text/html; charset=utf-8', body: fs.readFileSync(path.join(root, 'webui_new/templates/chat.html'), 'utf8').replaceAll('{{ user_id }}', 'qa').replaceAll("{{ user_id[0:1].upper() if user_id else 'U' }}", 'Q') });
             let body = {};
+            if (pathname === '/api/me') body = {id: 'qa', role: 'user'};
             if (pathname.endsWith('/status')) body = { initialized: true };
             if (pathname.endsWith('/summary')) body = { name_display: '界面验证', role: 'user', preferences: [] };
             if (pathname.endsWith('/sessions')) {

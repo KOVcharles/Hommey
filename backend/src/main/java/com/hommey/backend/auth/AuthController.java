@@ -1,19 +1,20 @@
 package com.hommey.backend.auth;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.hommey.backend.security.AccessPolicy;
 import jakarta.servlet.http.HttpServletRequest;
 import jakarta.validation.Valid;
 import jakarta.validation.constraints.*;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
-import org.springframework.security.core.annotation.AuthenticationPrincipal;
-import org.springframework.security.oauth2.jwt.Jwt;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 public class AuthController {
   public record Login(
-      @NotBlank @Email @Size(max = 254) String email, @NotBlank @Size(max = 72) String password) {}
+      @NotBlank @Email @Size(max = 254) String email,
+      @NotBlank @Size(max = 72) String password,
+      @Pattern(regexp = "[A-Za-z0-9_-]{1,32}") String device) {}
 
   public record Register(
       @NotBlank @Email @Size(max = 254) String email,
@@ -25,8 +26,6 @@ public class AuthController {
       @NotBlank @Email @Size(max = 254) String email,
       @NotBlank @Size(max = 128) String inviteCode,
       @NotBlank @Size(max = 10000) String altcha) {}
-
-  public record Refresh(@NotBlank @Size(max = 8192) String refreshToken) {}
 
   private final AuthService auth;
   private final RegistrationService registration;
@@ -43,9 +42,24 @@ public class AuthController {
     return auth.login(body);
   }
 
-  @PostMapping("/auth/refresh")
-  public Object refresh(@Valid @RequestBody Refresh body) {
-    return auth.refresh(body.refreshToken());
+  @PostMapping("/auth/logout")
+  public Object logout() {
+    StpUtil.logout();
+    return Map.of("logged_out", true);
+  }
+
+  @PostMapping("/auth/logout-all")
+  public Object logoutAll() {
+    var user = access.currentUser();
+    StpUtil.logout(Long.toString(user.id()));
+    return Map.of("logged_out", true);
+  }
+
+  @PostMapping("/api/admin/users/{user}/kickout")
+  public Object kickout(@PathVariable @Pattern(regexp = "[0-9]+") String user) {
+    access.requireAdmin();
+    StpUtil.kickout(user);
+    return Map.of("kicked_out", true);
   }
 
   @GetMapping("/auth/altcha-challenge")
@@ -66,8 +80,8 @@ public class AuthController {
   }
 
   @GetMapping("/api/me")
-  public Object me(@AuthenticationPrincipal Jwt jwt) {
-    var user = access.requireUser(jwt, jwt.getSubject());
+  public Object me() {
+    var user = access.currentUser();
     return Map.of("id", user.id(), "email", user.email(), "role", user.role());
   }
 }

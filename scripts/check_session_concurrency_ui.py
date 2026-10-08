@@ -51,8 +51,14 @@ class Backend:
             file = ROOT / "webui_new" / path.lstrip("/")
             await route.fulfill(body=file.read_bytes(), content_type=mimetypes.guess_type(str(file))[0] or "application/octet-stream")
         elif path == "/chat/qa":
-            html = Template((ROOT / "webui_new/templates/chat.html").read_text(encoding="utf-8")).render(user_id="qa")
+            # Thymeleaf's ${#...} expressions are not Jinja comments.
+            html = Template(
+                (ROOT / "webui_new/templates/chat.html").read_text(encoding="utf-8"),
+                comment_start_string="{##", comment_end_string="##}",
+            ).render(user_id="qa")
             await route.fulfill(body=html, content_type="text/html")
+        elif path == "/api/me":
+            await route.fulfill(json={"id": "qa", "role": "user"})
         elif path.endswith("/sessions"):
             if method == "POST":
                 sid = "session-" + str(len(self.sessions))
@@ -236,7 +242,7 @@ async def main():
     async with async_playwright() as playwright:
         browser = await playwright.chromium.launch(channel="msedge", headless=True)
         context = await browser.new_context(viewport={"width": 1180, "height": 950})
-        await context.add_init_script("localStorage.setItem('hommey.access_token', 'e30.' + btoa(JSON.stringify({sub:'qa'})) + '.qa');")
+        await context.add_init_script("localStorage.setItem('hommey.token', 'qa-opaque-session');")
         await context.route("**/*", backend.route)
         try:
             await run_two_tabs(context, backend, errors)

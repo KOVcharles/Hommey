@@ -1,5 +1,6 @@
 package com.hommey.backend.security;
 
+import cn.dev33.satoken.stp.StpUtil;
 import com.hommey.backend.auth.UserRepository;
 import com.hommey.backend.common.ApiException;
 import org.springframework.security.oauth2.jwt.Jwt;
@@ -21,9 +22,21 @@ public class AccessPolicy {
         .orElseThrow(() -> new ApiException(401, "UNAUTHORIZED", "用户不存在，请重新登录"));
   }
 
-  public void requireAdmin(Jwt jwt) {
-    if (!"admin".equals(requireUser(jwt, jwt.getSubject()).role()))
-      throw new ApiException(403, "FORBIDDEN", "仅管理员可以使用此功能");
+  public UserRepository.User currentUser() {
+    return requireUser(StpUtil.getLoginIdAsString());
+  }
+
+  public UserRepository.User requireUser(String userId) {
+    if (!userId.equals(StpUtil.getLoginIdAsString()))
+      throw new ApiException(403, "FORBIDDEN", "无权访问该用户的数据");
+    return users
+        .byId(userId)
+        .orElseThrow(() -> new ApiException(401, "UNAUTHORIZED", "用户不存在，请重新登录"));
+  }
+
+  public void requireAdmin() {
+    currentUser();
+    StpUtil.checkRole("admin");
   }
 
   public void requireSession(Jwt jwt, String sessionId) {

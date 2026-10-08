@@ -15,6 +15,7 @@ spring:
       host: ${HOMMEY_REDIS_HOST:localhost}
       port: ${HOMMEY_REDIS_PORT:56380}
       password: ${HOMMEY_REDIS_PASSWORD:}
+      database: ${HOMMEY_REDIS_DB:0}
       timeout: 3s
   jackson:
     property-naming-strategy: SNAKE_CASE
@@ -48,14 +49,28 @@ management:
       probes:
         enabled: true
       show-details: never
+sa-token:
+  token-name: Authorization
+  token-prefix: Bearer
+  token-style: random-64
+  timeout: ${HOMMEY_AUTH_TIMEOUT_SECONDS:604800}
+  active-timeout: ${HOMMEY_AUTH_ACTIVE_TIMEOUT_SECONDS:1800}
+  auto-renew: true
+  is-concurrent: ${HOMMEY_AUTH_ALLOW_CONCURRENT:true}
+  is-share: false
+  max-login-count: ${HOMMEY_AUTH_MAX_LOGIN_COUNT:5}
+  is-read-header: true
+  is-read-cookie: false
+  is-read-body: false
+  is-write-header: false
+  is-print: false
+  is-log: false
 hommey:
   security:
-    issuer: hommey-backend
+    issuer: ${HOMMEY_JWT_ISSUER:hommey-backend}
     public-key: ${HOMMEY_JWT_PUBLIC_KEY:file:../.secrets/jwt-public.pem}
     private-key: ${HOMMEY_JWT_PRIVATE_KEY:file:../.secrets/jwt-private.pem}
-    access-duration: 30m
-    refresh-duration: 7d
-    agent-duration: 5m
+    agent-duration: ${HOMMEY_AGENT_TOKEN_DURATION:5m}
   agent:
     base-url: ${HOMMEY_AGENT_URL:http://localhost:18001}
   registration:

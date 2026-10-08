@@ -26,12 +26,16 @@ Hommey 是面向组内报销的专用 Agent，帮助组内成员查询报销制�
 
 本分支采用 Spring Boot 业务后端与 Python AI 服务。浏览器访问 Spring，用户、权限、资料、会话、偏好和行程由 Spring 管理；Python 接收限定用户/会话/请求的内部执行凭证，运行 Agent、RAG 与 AI 数据处理。详细说明见 [工程化开发、部署与回滚指南](docs/spring-python-engineering.md)和 [优化与发布说明](docs/spring-python-release-notes.md)。
 
-- **业务后端**：`backend/` 使用标准 Controller / Service / Repository 分层、Spring Security、Bean Validation、Spring JDBC 和 Flyway。
+普通正文现支持模型边生成、页面边显示；结构化卡片继续完整交付。实现、取消处理与回退方式见 [正文流式输出说明](docs/native-answer-streaming.md)。
+
+地点搜索与地图预览需配置 `HOMMEY_AMAP_WEB_KEY`；配置、转发修复与验证记录见 [地点查询恢复说明](docs/place-service-recovery.md)。
+
+- **业务后端**：`backend/` 使用标准 Controller / Service / Repository 分层、Sa-Token、Bean Validation、Spring JDBC 和 Flyway；Spring Security 验证内部执行凭证。登录策略和迁移步骤见 [Sa-Token 指南](docs/sa-token-auth.md)。
 - **AI 服务**：`ai_service/` 提供内部能力接口，通过业务 API 提交变更；不能直接写入业务表。
 - **界面**：共享 `webui_new/` 页面和静态资源，由 Spring 提供入口并转发 NDJSON 流式回答。
 - **Agent 运行时**：`agent_runtime/` 管理原生消息上下文、任务编排与工具调用，提示词和业务 Skill 分开维护。
 - **制度检索**：`rag/` 对 CQU 文档切片，结合 pgvector 向量检索与 BM25 关键词检索；源文件位于 `data/documents/cqu/`。
-- **数据存储**：PostgreSQL 保存账号、个人资料、会话记录与检索索引；Redis 维护短期会话状态和并发锁。
+- **数据存储**：PostgreSQL 保存账号、个人资料、会话记录与检索索引；Redis 维护登录会话、短期会话状态和并发锁。
 
 ## 启动
 

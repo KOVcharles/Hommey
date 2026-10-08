@@ -6,9 +6,4 @@ import org.springframework.core.io.Resource;
 
 @ConfigurationProperties("hommey.security")
 public record SecurityProperties(
-    String issuer,
-    Resource publicKey,
-    Resource privateKey,
-    Duration accessDuration,
-    Duration refreshDuration,
-    Duration agentDuration) {}
+    String issuer, Resource publicKey, Resource privateKey, Duration agentDuration) {}

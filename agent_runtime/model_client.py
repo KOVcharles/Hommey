@@ -21,23 +21,57 @@ def _blocks(response: Any) -> list[dict]:
     return [block for block in (content or []) if isinstance(block, dict)]
 
 
-async def call_model(model, messages: list[dict], tools: list[dict], *, allow_text=False, context_capture=None) -> ModelReply:
+async def call_model(model, messages: list[dict], tools: list[dict], *, allow_text=False, context_capture=None,
+                     on_text=None, on_reset=None) -> ModelReply:
     # AgentScope accepts a tool name and formats the provider's forced function
     # choice. This matters for the final extraction round: "required" alone
     # was sometimes answered as prose by the configured compatible endpoint.
-    choice = "auto" if allow_text else "required"
+    choice = ("auto" if tools else "none") if allow_text else "required"
     if not allow_text and len(tools) == 1:
         choice = tools[0]["function"]["name"]
     if context_capture:
         context_capture(messages, tools, choice)
     response = await model(messages, tools=tools, tool_choice=choice)
-    # AgentScope streaming ChatResponse contains cumulative tool blocks. Consume
-    # the complete final snapshot before validating or running any operation.
-    if isinstance(response, AsyncIterable):
-        last = None
-        async for chunk in response:
-            last = chunk
-        response = last
+    # Tool-enabled text can be a preamble whose tool call arrives much later.
+    # Only the explicit, tool-disabled answer phase may publish text deltas.
+    if tools:
+        on_text = None
+    # Native tool arguments remain buffered until strict validation completes.
+    visible_text, has_tools = "", False
+    stream = response if isinstance(response, AsyncIterable) else None
+    try:
+        if stream is not None:
+            last = None
+            async for chunk in stream:
+                last = chunk
+                blocks = _blocks(chunk)
+                if any(block.get("type") == "tool_use" for block in blocks):
+                    has_tools = True
+                    if visible_text and on_reset:
+                        await on_reset()
+                    visible_text = ""
+                if allow_text and on_text and not has_tools:
+                    text = "".join(str(block.get("text") or "") for block in blocks if block.get("type") == "text")
+                    if not text.startswith(visible_text):
+                        raise ToolRejected("模型正文流不连续，请重新生成完整回复")
+                    delta = text[len(visible_text):]
+                    if delta:
+                        await on_text(delta)
+                    visible_text = text
+            response = last
+        return await _parse_reply(response, allow_text, on_text, visible_text)
+    except Exception:
+        if visible_text and on_reset:
+            await on_reset()
+        raise
+    finally:
+        # Cancelling a turn must close the provider connection, including when
+        # cancellation happens while the consumer is handling a text delta.
+        if stream is not None and getattr(stream, "aclose", None):
+            await stream.aclose()
+
+
+async def _parse_reply(response, allow_text, on_text, visible_text):
     calls, text = [], []
     for block in _blocks(response):
         if block.get("type") == "tool_use":
@@ -56,17 +90,14 @@ async def call_model(model, messages: list[dict], tools: list[dict], *, allow_te
             text.append(str(block.get("text") or ""))
     if any(not c["id"] or not c["name"] for c in calls) or len({c["id"] for c in calls}) != len(calls):
         raise ToolRejected("工具调用 ID 缺失或重复")
-    return ModelReply(calls, "".join(text))
+    answer = "".join(text)
+    if allow_text and on_text and not calls and answer and not visible_text:
+        await on_text(answer)
+    return ModelReply(calls, answer)
 
 
 def create_tool_model(config, generate_kwargs, timeout=60):
-    """Buffer native tool responses and retain unmodified arguments for validation.
-
-    The UI streams task progress, not partial tool arguments. AgentScope's
-    default nonstream parser repairs JSON and drops raw_input; restore the
-    original provider arguments so repaired/truncated calls cannot authorize
-    mutations. Avoid reparsing every token delta for large extraction reports.
-    """
+    """Stream prose while retaining raw, unparsed tool arguments for validation."""
     from agentscope.model import OpenAIChatModel
 
     class StrictToolModel(OpenAIChatModel):
@@ -78,7 +109,8 @@ def create_tool_model(config, generate_kwargs, timeout=60):
                     block["raw_input"] = raw_calls[block["id"]]
             return parsed
 
-    return StrictToolModel(model_name=config["model_name"], api_key=config["api_key"], stream=False,
+    return StrictToolModel(model_name=config["model_name"], api_key=config["api_key"], stream=True,
+        stream_tool_parsing=False,
         client_kwargs={"base_url": config["base_url"], "timeout": float(timeout), "max_retries": 0},
         generate_kwargs=generate_kwargs)
 
